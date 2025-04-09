@@ -33,6 +33,20 @@ const App: FC = () => {
   const [balanceEquivalent, setBalanceEquivalent] = useState<string>('0');
   const [inputBalance, setInputBalance] = useState<string>('0');
   const [marginRatio, setMarginRatio] = useState<string>('0.00'); // 証拠金維持率のstate追加
+  const [isLoading, setIsLoading] = useState<boolean>(false); // APIロード中の状態
+  const [errorMessage, setErrorMessage] = useState<string>(''); // エラーメッセージ
+
+  // 通貨価格データをステートとして管理
+  const [currencyPrices, setCurrencyPrices] = useState<Record<CurrencyCode, string>>({
+    'JPY': '1.0000',
+    'USD': '147.52', // デフォルト値（API取得前）
+    'EUR': '159.83',
+    'GBP': '186.45',
+    'AUD': '96.38',
+    'NZD': '89.72',
+    'CAD': '108.34',
+    'CHF': '163.91'
+  });
 
   // 基軸通貨データ
   const currencyData = [
@@ -69,16 +83,92 @@ const App: FC = () => {
   ];
 
   // 各通貨の仮想価格データ（実際のアプリでは、APIから取得するなど）
-  const currencyPrices: Record<CurrencyCode, string> = {
-    'JPY': '1.0000',
-    'USD': '147.52',
-    'EUR': '159.83',
-    'GBP': '186.45',
-    'AUD': '96.38',
-    'NZD': '89.72',
-    'CAD': '108.34',
-    'CHF': '163.91'
+  // const currencyPrices: Record<CurrencyCode, string> = {
+  //   'JPY': '1.0000',
+  //   'USD': '147.52',
+  //   'EUR': '159.83',
+  //   'GBP': '186.45',
+  //   'AUD': '96.38',
+  //   'NZD': '89.72',
+  //   'CAD': '108.34',
+  //   'CHF': '163.91'
+  // };
+
+  // Alpha Vantage APIからレートを取得する関数
+  const fetchCurrencyRates = async () => {
+    setIsLoading(true);
+    setErrorMessage('');
+    
+    try {
+      // Alpha Vantage APIキー（実際の使用時はご自身のAPIキーに置き換えてください）
+      const apiKey = 'K2WIB2APK0DHR9KS';
+      
+      // JPY以外の通貨のレートを取得
+      const currencies: CurrencyCode[] = ['USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
+      const newRates: Partial<Record<CurrencyCode, string>> = { 'JPY': '1.0000' };
+      
+      for (const curr of currencies) {
+        // 例: USD/JPYの場合、from_currency=USD, to_currency=JPY
+        const response = await fetch(`https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${curr}&to_currency=JPY&apikey=${apiKey}`);
+        const data = await response.json();
+        
+        // レスポンスからレート情報を取得
+        if (data['Realtime Currency Exchange Rate']) {
+          const rate = data['Realtime Currency Exchange Rate']['5. Exchange Rate'];
+          newRates[curr] = parseFloat(rate).toFixed(2);
+        } else if (data['Note']) {
+          // API制限エラーの場合
+          throw new Error('API制限に達しました。しばらく経ってからお試しください。');
+        } else {
+          throw new Error(`${curr}のレート取得に失敗しました。`);
+        }
+        
+        // Alpha Vantageの無料プランは1分あたり5リクエストまでの制限があるため少し待機
+        await new Promise(resolve => setTimeout(resolve, 12000));
+      }
+      
+      // 取得したレートをステートに保存
+      setCurrencyPrices(newRates as Record<CurrencyCode, string>);
+      
+      // 現在の日時を取得して更新時間とする
+      const now = new Date();
+      const formattedDate = now.toLocaleDateString('ja-JP');
+      const formattedTime = now.toLocaleTimeString('ja-JP', { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      });
+      setLastUpdated(`${formattedDate} ${formattedTime} (API更新)`);
+      
+      // 選択されている通貨の価格を更新
+      setCurrencyPrice(newRates[currency] || '-');
+      
+    } catch (error) {
+      console.error('通貨レート取得エラー:', error);
+      setErrorMessage(error instanceof Error ? error.message : '通貨レートの取得に失敗しました。');
+    } finally {
+      setIsLoading(false);
+    }
   };
+
+  // コンポーネントマウント時に通貨レートを取得
+  useEffect(() => {
+    // fetchCurrencyRates(); // 実際に使用する場合はコメントを解除
+    
+    // 現在の日時を取得して更新時間とする（デフォルト値用）
+    const now = new Date();
+    const formattedDate = now.toLocaleDateString('ja-JP');
+    const formattedTime = now.toLocaleTimeString('ja-JP', { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+    setLastUpdated(`${formattedDate} ${formattedTime} (デフォルト値)`);
+  }, []);
+
+  // 通貨が変更されたときに価格を更新
+  useEffect(() => {
+    setCurrencyPrice(currencyPrices[currency] || '-');
+  }, [currency, currencyPrices]);
+
 
   // 数値を3桁カンマ区切りにフォーマットする関数
   const formatNumberWithCommas = (num: string): string => {
@@ -503,17 +593,61 @@ const App: FC = () => {
     // ポジションサイズ（通貨単位）：1ロット = 100,000通貨単位
     const positionSize = lotSize * 100000;
     
-    // 必要証拠金 = ポジションサイズ × レート × 証拠金率(1/レバレッジ)
-    const requiredMargin = positionSize * rate * (1 / leverage);
+    let requiredMargin = 0;
+    
+    // 証拠金通貨がUSDの場合
+    if (balanceCurrency === 'USD') {
+      if (currency === 'USD') {
+        // USD/JPYなどUSDが基軸の場合：必要証拠金 = ポジションサイズ × (1/レバレッジ)
+        requiredMargin = positionSize * (1 / leverage);
+      } else {
+        // EUR/JPY など、USDが基軸でない場合
+        // USD建ての必要証拠金 = (ポジションサイズ × レート) × (1/レバレッジ) ÷ USD/JPYレート
+        const usdRate = parseFloat(currencyPrices['USD']);
+        requiredMargin = (positionSize * rate * (1 / leverage)) / usdRate;
+      }
+    } 
+    // 証拠金通貨がJPYの場合
+    else {
+      // 必要証拠金 = ポジションサイズ × レート × (1/レバレッジ)
+      requiredMargin = positionSize * rate * (1 / leverage);
+    }
     
     // 証拠金維持率(%) = (有効証拠金 ÷ 必要証拠金) × 100
-    // 未決済ポジションがないため、有効証拠金 = 口座残高
     const ratio = (balance / requiredMargin) * 100;
     
     // 小数点以下2桁で表示
     return ratio.toFixed(2);
   };
-  
+
+  const UpdateRatesButton = () => (
+    <button
+      onClick={fetchCurrencyRates}
+      disabled={isLoading}
+      className={`mt-2 px-3 py-2 rounded-full ${
+        isLoading ? 'bg-gray-300' : 'bg-blue-500 hover:bg-blue-600'
+      } text-white text-sm flex items-center justify-center`}
+    >
+      {isLoading ? (
+        <>
+          <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+          更新中...
+        </>
+      ) : (
+        <>
+          <svg className="mr-1 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+          </svg>
+          レート更新
+        </>
+      )}
+    </button>
+  );
+
+
   return (
     <Page>
       <div className='lg:w-150 lg:mx-auto pb-3'>
@@ -531,6 +665,13 @@ const App: FC = () => {
           ?
         </button>
       </div>
+
+      {/* エラーメッセージ表示 */}
+      {errorMessage && (
+        <div className="mx-3 my-2 p-2 bg-red-100 border border-red-300 text-red-700 text-sm rounded">
+          {errorMessage}
+        </div>
+      )}
 
       <div className='flex justify-center'>
 
@@ -654,6 +795,7 @@ const App: FC = () => {
             <div className='text-center'>
               <p className='font-bold'>価格更新日時</p>
               <p className="text-xs text-gray-500 p-2">{lastUpdated}</p>
+              <UpdateRatesButton />
             </div>
           </div>
         </div>
