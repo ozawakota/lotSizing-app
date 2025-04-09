@@ -66,6 +66,8 @@ const HelpModal: FC<HelpModalProps> = ({ isOpen, onClose }) => {
           <p className="text-white mt-2">
             最大取引可能ロット = (証拠金 × レバレッジ) ÷ (通貨価格 × 10000)
           </p>
+
+          
         </div>
         
         <h4 className="font-bold mt-4 mb-2">注意事項:</h4>
