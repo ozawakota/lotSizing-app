@@ -1,0 +1,111 @@
+# workflow名
+name: Deploy prod
+# workflowの実行をトリガするイベントを記述する
+on:
+  # 「v0.1.0」のようなリリースタグ作成にトリガーして、workflowを実行
+  push:
+    tags:
+      - v*
+  # 手動実行
+  workflow_dispatch:
+    # NOTE: inputsのデフォルト値を変更した場合はenvのデフォルト値も変更すること
+    inputs:
+      DRY_RUN:
+        type: boolean
+        description: "dry run"
+        required: true
+        default: true
+
+env:
+  # actionsで公開リポジトリにpushする際に使用するBOTの名前とメールアドレス
+  BOT_GITHUB_NAME: github-actions[bot]
+  BOT_GITHUB_MAIL: 41898282+github-actions[bot]@users.noreply.github.com
+  # 開発用リポジトリ (github_user は github アカウント名)
+  REMOTE_DEV_REPOSITORY: github_user/portfolio-dev
+  # 本番用リポジトリ (github_user は github アカウント名)
+  REMOTE_PROD_REPOSITORY: github_user/portfolio-prod
+  # 開発用リポジトリのローカルでのディレクトリ名
+  LOCAL_DEV_REPOSITORY: dev
+  # 本番用リポジトリのローカルでのディレクトリ名
+  LOCAL_PROD_REPOSITORY: prod
+  # 作成したPERSONAL_ACCESS_TOKENの格納場所
+  ## Settings -> Screts and variavbles -> Actions -> Repository secrets -> New repository secret
+  PAT: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+  # NOTE: envのデフォルト値を変更した場合はinputsのデフォルト値も変更すること
+  DRY_RUN: ${{ inputs.DRY_RUN || false }}
+
+jobs:
+  # Job id
+  deploy-prod:
+    # Job名
+    name: deploy-prod
+    # jobを実行するOS
+    ## NOTE: ubuntu-latestと指定することもできるが、OSバージョンが上がった際に、jobが動かなくなるリスクがあるので非推奨
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout ${{ env.LOCAL_DEV_REPOSITORY }} repository
+        run: |
+          set -x
+          git -v
+          git clone -b main --single-branch --depth=1 https://${{ env.PAT }}@github.com/${{ env.REMOTE_DEV_REPOSITORY }}.git ${{ env.LOCAL_DEV_REPOSITORY }}
+      - name: Checkout ${{ env.LOCAL_PROD_REPOSITORY}} repository
+        run: |
+          set -x
+          git -v
+          git clone -b main --single-branch https://${{ env.PAT }}@github.com/${{ env.REMOTE_PROD_REPOSITORY }}.git ${{ env.LOCAL_PROD_REPOSITORY }}
+          cd ${{ env.LOCAL_PROD_REPOSITORY }}
+          git clean -fdx && test $(git ls-files | wc -l) -eq 0 || ls | grep -v "README.md" | xargs git rm -rf
+      - name: Delete default node and npm
+        run: |
+          set -x
+          node -v
+          npm -v
+          rm -f $(which node)
+          rm -f $(which npm)
+      - name: Install node with volta
+        run: |
+          set -x
+          curl -V
+          jq -V
+          curl https://get.volta.sh | bash
+          ${HOME}/.volta/bin/volta -v
+          cd ${{ env.LOCAL_DEV_REPOSITORY }}
+          pwd && ls -la
+          test ! -e package.json && echo "Error: package.json does not exist." && exit 1
+          ${HOME}/.volta/bin/volta install node@$(jq -r .volta.node package.json)
+          test ! -e package-lock.json && echo "Error: package-lock.json does not exist." && exit 1
+          ${HOME}/.volta/bin/volta which node
+          ${HOME}/.volta/bin/volta which npm
+      - name: Install node modules
+        run: |
+          set -x
+          cd ${{ env.LOCAL_DEV_REPOSITORY }}
+          ${HOME}/.volta/bin/volta -v
+          ${HOME}/.volta/bin/volta run --bundled-npm npm ci
+      - name: Build react
+        run: |
+          set -x
+          cd ${{ env.LOCAL_DEV_REPOSITORY }}
+          ${HOME}/.volta/bin/volta -v
+          ${HOME}/.volta/bin/volta run --bundled-npm npm run build
+      - name: Copy build artifacts
+        run: |
+          set -x
+          cp -pr ${{ env.LOCAL_DEV_REPOSITORY }}/dist/* ${{ env.LOCAL_PROD_REPOSITORY }}/
+          cd ${{ env.LOCAL_PROD_REPOSITORY }}
+          pwd && ls -la
+      - name: Commit and push to ${{ env.LOCAL_PROD_REPOSITORY }} repository
+        run: |
+          set -x
+          cd ${{ env.LOCAL_PROD_REPOSITORY }}
+          git -v
+          git config --local user.name "${{ env.BOT_GITHUB_NAME }}"
+          git config --local user.email "${{ env.BOT_GITHUB_MAIL }}"
+          git add .
+          git commit -m "generated"
+          if [ ${{env.DRY_RUN}} = 'false' ]; then
+            git push -u origin main
+          else
+            echo '===== dry run ====='
+            git push -n -u origin main
+          fi

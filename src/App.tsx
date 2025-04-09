@@ -1,6 +1,6 @@
 // App.tsx
 import '@mobiscroll/react/dist/css/mobiscroll.min.css';
-import { Select, Page, setOptions, localeJa, Input, Popup } from '@mobiscroll/react';
+import { Select, Page, setOptions, localeJa, Input, Popup, Switch } from '@mobiscroll/react';
 import { FC, useState, useEffect } from 'react';
 import HelpModal from './HelpModal'; // 前提：別ファイルに作成済み
 
@@ -12,12 +12,14 @@ setOptions({
 
 // 通貨コード型を定義
 type CurrencyCode = 'JPY' | 'USD' | 'EUR' | 'GBP' | 'AUD' | 'NZD' | 'CAD' | 'CHF';
+// 証拠金通貨単位
+type BalanceCurrency = 'JPY' | 'USD';
 
 const App: FC = () => {
   const [currency, setCurrency] = useState<CurrencyCode>('JPY');
   const [riskPercentage, setRiskPercentage] = useState<number>(2.5); // デフォルト2.5%
   const [stopLossPips, setStopLossPips] = useState<string>('25'); // デフォルト25pips
-  const [accountBalance, setAccountBalance] = useState<string>('0'); // デフォルト100,000円
+  const [accountBalance, setAccountBalance] = useState<string>('0'); // デフォルト証拠金
   const [formattedBalance, setFormattedBalance] = useState<string>('0'); // 表示用フォーマット済み証拠金
   const [leverage, setLeverage] = useState<number>(500); // デフォルトレバレッジ500倍
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false); // モーダルの表示状態
@@ -26,6 +28,8 @@ const App: FC = () => {
   const [lastUpdated, setLastUpdated] = useState<string>(''); // 価格更新日時
   const [calculatedLot, setCalculatedLot] = useState<string>('0.00'); // 計算されたロットサイズ
   const [riskAmount, setRiskAmount] = useState<string>('0'); // 計算されたリスク金額
+  const [balanceCurrency, setBalanceCurrency] = useState<BalanceCurrency>('JPY'); // 証拠金通貨
+  const [riskAmountUSD, setRiskAmountUSD] = useState<string>('0'); // USD表示のリスク金額
 
   // 基軸通貨データ
   const currencyData = [
@@ -37,6 +41,12 @@ const App: FC = () => {
     { text: 'NZD', value: 'NZD' },
     { text: 'CAD', value: 'CAD' },
     { text: 'CHF', value: 'CHF' }
+  ];
+
+  // 証拠金通貨データ
+  const balanceCurrencyData = [
+    { text: '日本円', value: 'JPY' },
+    { text: '米ドル', value: 'USD' }
   ];
 
   // レバレッジデータ
@@ -106,13 +116,31 @@ const App: FC = () => {
       const balance = parseFloat(accountBalance);
       const risk = parseFloat((riskPercentage / 100).toFixed(4)); // 小数点を固定
       const riskAmt = Math.round(balance * risk); // 端数を丸める
-      setRiskAmount(formatNumberWithCommas(riskAmt.toString()));
+      
+      if (balanceCurrency === 'JPY') {
+        setRiskAmount(formatNumberWithCommas(riskAmt.toString()));
+        // USDでのリスク金額も計算（参考表示用）
+        const usdRate = parseFloat(currencyPrices['USD']);
+        if (!isNaN(usdRate) && usdRate > 0) {
+          const riskAmtUSD = riskAmt / usdRate;
+          setRiskAmountUSD(riskAmtUSD.toFixed(2));
+        }
+      } else {
+        setRiskAmount(riskAmt.toFixed(2));
+        // JPYでのリスク金額も計算（参考表示用）
+        const usdRate = parseFloat(currencyPrices['USD']);
+        if (!isNaN(usdRate) && usdRate > 0) {
+          const riskAmtJPY = riskAmt * usdRate;
+          setRiskAmountUSD(formatNumberWithCommas(Math.round(riskAmtJPY).toString()));
+        }
+      }
     } else {
       // 必要な値が揃っていない場合はリセット
       setCalculatedLot('0.00');
       setRiskAmount('0');
+      setRiskAmountUSD('0');
     }
-  }, [accountBalance, riskPercentage, stopLossPips, currency, currencyPrice]);
+  }, [accountBalance, riskPercentage, stopLossPips, currency, currencyPrice, balanceCurrency]);
 
   // リスク許容度のデータ（0.5%単位、0.5%から30%まで）
   const riskData = Array.from({ length: 60 }, (_, i) => {
@@ -124,6 +152,50 @@ const App: FC = () => {
   const handleCurrencyChange = (event: any) => {
     setCurrency(event.value as CurrencyCode);
   };
+
+  // 証拠金通貨が変更されたときのハンドラ
+  const handleBalanceCurrencyChange = (event: any) => {
+    const newCurrency = event.value as BalanceCurrency;
+    const oldCurrency = balanceCurrency;
+    
+    // 通貨が実際に変更された場合のみ処理
+    if (newCurrency !== oldCurrency) {
+      // 現在の証拠金額を取得
+      const currentBalance = parseFloat(accountBalance) || 0;
+      
+      // 証拠金額が0より大きい場合のみ変換
+      if (currentBalance > 0) {
+        let newBalance: number;
+        const usdRate = parseFloat(currencyPrices['USD']);
+        
+        // JPY → USD の変換
+        if (oldCurrency === 'JPY' && newCurrency === 'USD') {
+          newBalance = currentBalance / usdRate;
+          // 小数点第2位までに丸める
+          newBalance = Math.round(newBalance * 100) / 100;
+        } 
+        // USD → JPY の変換
+        else if (oldCurrency === 'USD' && newCurrency === 'JPY') {
+          newBalance = currentBalance * usdRate;
+          // 整数に丸める
+          newBalance = Math.round(newBalance);
+        }
+        else {
+          newBalance = currentBalance;
+        }
+        
+        // 新しい証拠金額をセット
+        setAccountBalance(newBalance.toString());
+      }
+    }
+    
+    // 状態を更新
+    setBalanceCurrency(newCurrency);
+    
+    // 次の更新サイクルで適正ロットが自動的に再計算されるよう、依存配列に
+    // balanceCurrencyを含めているuseEffectがトリガーされる
+  };
+
 
   // リスク許容度が変更されたときのハンドラ
   const handleRiskChange = (event: any) => {
@@ -160,15 +232,54 @@ const App: FC = () => {
     const stopLoss = parseInt(stopLossPips);
     const riskAmount = balance * risk;
     
-    // 簡略化した計算（実際にはより複雑な計算が必要かもしれません）
-    let pipValue = 1000; // 1lot当たりのpip価値（円）
-    if (currency !== 'JPY') {
-      // 外貨の場合は為替レートを考慮
-      pipValue = 1000 * parseFloat(currencyPrice) / 100;
+    // 証拠金がUSDの場合
+    if (balanceCurrency === 'USD') {
+      // USD建ての場合、1標準ロット(100,000通貨単位)のpip価値を計算
+      // 基本的に、USD/通貨ペアの場合、1pipあたり10ドル（1標準ロット）
+      const basePipValueUSD = 10; // 基本の1pipあたりの価値（USD）
+      
+      // 通貨ペアに応じた調整
+      let adjustedPipValueUSD = basePipValueUSD;
+      
+      if (currency === 'JPY') {
+        // USD/JPYは特殊なケース: 1 pip = 0.01円 = 0.01円 ÷ USD/JPYレート
+        // 例: USD/JPY=147.52の場合、0.01円 ÷ 147.52 = 約 $0.0000678（1通貨あたり）
+        // 標準ロット(100,000通貨)では: 0.0000678 × 100,000 = 約 $6.78
+        adjustedPipValueUSD = 100000 * 0.01 / parseFloat(currencyPrices['USD']);
+      } else if (currency === 'USD') {
+        // USD自体を取引する場合は特別な計算が必要
+        adjustedPipValueUSD = 10; // 簡略化
+      } else {
+        // 他の通貨ペア（EUR/USD, GBP/USDなど）は基本の10ドル/pipを使用
+        adjustedPipValueUSD = basePipValueUSD;
+      }
+      
+      // リスク額 ÷ (ストップロス幅 × pip価値) = ロットサイズ
+      const lotSize = riskAmount / (stopLoss * adjustedPipValueUSD);
+      return lotSize.toFixed(2);
+    } 
+    // 証拠金がJPYの場合
+    else {
+      // 円建ての場合の計算
+      let pipValue = 1000; // 1標準ロット当たりのpip価値（円）- 基本値
+      
+      if (currency !== 'JPY') {
+        // 外貨/円ペアの場合: 1pip = 0.01円 × 100,000通貨 = 1,000円
+        // ただし通貨レートによって調整が必要
+        pipValue = 1000; // 基本的には1標準ロットで1,000円/pip
+        
+        // USD/JPYは1標準ロットで1,000円/pip
+        // EUR/JPYなどの場合も基本は同じだが、必要に応じて調整可能
+      } else {
+        // JPYが基軸の場合（JPY/USD等）- 理論上は可能だが実務ではあまり使わない
+        // この場合は別途計算が必要だが、ここでは簡略化
+        pipValue = 1000;
+      }
+      
+      // リスク額 ÷ (ストップロス幅 × pip価値) = ロットサイズ
+      const lotSize = riskAmount / (stopLoss * pipValue);
+      return lotSize.toFixed(2);
     }
-    
-    const lotSize = riskAmount / (stopLoss * pipValue);
-    return lotSize.toFixed(2);
   };
 
   // 最大ロットサイズを計算（レバレッジ考慮）
@@ -176,12 +287,22 @@ const App: FC = () => {
     if (currency === 'JPY') return '0.00'; // JPYの場合は計算不要
     
     const balance = parseFloat(accountBalance);
-    const rate = parseFloat(currencyPrice);
     
-    // 簡略化した計算
-    // 最大ロット = (証拠金 × レバレッジ) ÷ (通貨価格 × 10000)
-    const maxLotSize = (balance * leverage) / (rate * 10000);
-    return maxLotSize.toFixed(2);
+    // 証拠金がUSDの場合
+    if (balanceCurrency === 'USD') {
+      // USD建ての計算
+      // 最大ロット = (証拠金 × レバレッジ) ÷ 100000
+      const maxLotSize = (balance * leverage) / 100000;
+      return maxLotSize.toFixed(2);
+    } 
+    // 証拠金がJPYの場合
+    else {
+      const rate = parseFloat(currencyPrice);
+      // 簡略化した計算
+      // 最大ロット = (証拠金 × レバレッジ) ÷ (通貨価格 × 10000)
+      const maxLotSize = (balance * leverage) / (rate * 10000);
+      return maxLotSize.toFixed(2);
+    }
   };
 
   // モーダルを開く
@@ -206,6 +327,8 @@ const App: FC = () => {
 
   return (
     <Page>
+      <div className='lg:w-150 lg:mx-auto pb-3'>
+
       {/* ヘッダー部分 */}
       <div className="relative">
         <h1 className='text-center text-2xl lh-base'>FX</h1>
@@ -219,19 +342,41 @@ const App: FC = () => {
           ?
         </button>
       </div>
-      
+
+      <div className='flex'>
+
       {/* 計算結果表示 - 常に表示 */}
-      <div className="mt-3 bg-blue-50 rounded-md p-3 border border-blue-200 mx-3">
-        <div className="flex justify-between items-center">
+      <div className="mt-3 bg-blue-50 rounded-md p-3 border border-blue-200 mx-3 w-55">
+        <div className="">
           <div>
             <p className="text-sm text-gray-600">適正ロット:</p>
             <p className="text-xl font-bold text-blue-700">{calculatedLot} Lots</p>
           </div>
           <div>
             <p className="text-sm text-gray-600">損失許容額:</p>
-            <p className="text-xl font-bold text-red-600">{riskAmount}円</p>
+            <p className="text-xl font-bold text-red-600">
+              {balanceCurrency === 'JPY' ? `${riskAmount}円` : `$${riskAmount}`}
+            </p>
+            <p className="text-xs text-gray-500">
+              {balanceCurrency === 'JPY' ? `(約$${riskAmountUSD})` : `(約${riskAmountUSD}円)`}
+            </p>
           </div>
         </div>
+      </div>
+
+      {/* 証拠金通貨選択 */}
+      <div className='px-1 mb-4 w-45'>
+        <p className='text-center mb-2'>証拠金通貨</p>
+        <Select
+          data={balanceCurrencyData}
+          value={balanceCurrency}
+          onChange={handleBalanceCurrencyChange}
+          display="inline"
+          touchUi={true}
+          label="証拠金通貨"
+          labelStyle="stacked"
+        />
+      </div>
       </div>
 
       <div className='flex gap-2 px-3 mb-4 justify-center'>
@@ -265,7 +410,9 @@ const App: FC = () => {
 
       {/* 証拠金入力フィールド */}
       <div className='px-3 mb-4'>
-        <p className='text-center mb-2'>証拠金額 (円)</p>
+        <p className='text-center mb-2'>
+          証拠金額 ({balanceCurrency === 'JPY' ? '円' : 'USD'})
+        </p>
         <Input
           type="text"
           value={formattedBalance}
@@ -277,15 +424,11 @@ const App: FC = () => {
         <p className='text-xs text-gray-500 text-center mt-1'>
           取引に使用可能な資金額を入力してください
         </p>
-        
       </div>
-
       
       {/* 基軸通貨選択と価格表示 */}
       <div className='px-3'>
         <div className="flex flex-col items-center">
-          
-          
           {/* 通貨価格表示と更新日時 */}
           <div className="flex items-center gap-20 mb-2">
             <div className="bg-gray-100 rounded-full text-center">
@@ -302,7 +445,6 @@ const App: FC = () => {
             </div>
           </div>
         </div>
-        
       </div>
 
       <div className='flex gap-2 px-3 mb-4 justify-center'>
@@ -338,7 +480,6 @@ const App: FC = () => {
         </div>
       </div>
       
-      
       {/* 設定確認ボタン - おしゃれなデザイン */}
       <div className='px-3 mt-6'>
         <button 
@@ -367,7 +508,12 @@ const App: FC = () => {
         ]}
       >
         <div className="p-4">
-          <p className="mb-3">証拠金額: <strong>{formattedBalance}円</strong></p>
+          <p className="mb-3">証拠金額: <strong>
+            {balanceCurrency === 'JPY' 
+              ? `${formattedBalance}円` 
+              : `$${formattedBalance}`}
+          </strong></p>
+          <p className="mb-3">証拠金通貨: <strong>{balanceCurrency}</strong></p>
           <p className="mb-3">基軸通貨: <strong>{currency}</strong> {currency !== 'JPY' && `(${currencyPrice}円)`}</p>
           <p className="mb-3">リスク％: <strong>{riskPercentage.toFixed(1)}%</strong></p>
           <p className="mb-3">損切り幅: <strong>{stopLossPips} pips</strong></p>
@@ -379,7 +525,11 @@ const App: FC = () => {
               推奨ロットサイズ: <span className="font-bold text-xl">{calculatedLot}</span> Lots
             </p>
             <p className="text-center text-sm text-gray-600 mt-1">
-              リスク金額: {riskAmount}円
+              リスク金額: {balanceCurrency === 'JPY' ? `${riskAmount}円` : `$${riskAmount}`}
+              <br />
+              <span className="text-xs">
+                {balanceCurrency === 'JPY' ? `(約$${riskAmountUSD})` : `(約${riskAmountUSD}円)`}
+              </span>
             </p>
             {currency !== 'JPY' && (
               <p className="text-center text-sm text-gray-600 mt-1">
@@ -401,6 +551,7 @@ const App: FC = () => {
         isOpen={isHelpModalOpen} 
         onClose={closeHelpModal} 
       />
+      </div>
     </Page>
   );
 };
