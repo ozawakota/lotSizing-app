@@ -346,7 +346,7 @@ const App: FC = () => {
       <div className='flex'>
 
       {/* 計算結果表示 - 常に表示 */}
-      <div className="mt-3 bg-blue-50 rounded-md p-3 border border-blue-200 mx-3 w-55">
+      <div className=" bg-blue-50 rounded-md p-3 border border-blue-200 mx-3 w-55">
         <div className="">
           <div>
             <p className="text-sm text-gray-600">適正ロット:</p>
@@ -366,7 +366,6 @@ const App: FC = () => {
 
       {/* 証拠金通貨選択 */}
       <div className='px-1 mb-4 w-45'>
-        <p className='text-center mb-2'>証拠金通貨</p>
         <Select
           data={balanceCurrencyData}
           value={balanceCurrency}
@@ -375,6 +374,7 @@ const App: FC = () => {
           touchUi={true}
           label="証拠金通貨"
           labelStyle="stacked"
+          placeholder='証拠金通貨'
         />
       </div>
       </div>
