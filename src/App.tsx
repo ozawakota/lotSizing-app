@@ -20,7 +20,6 @@ const App: FC = () => {
   const [riskPercentage, setRiskPercentage] = useState<number>(2.5); // デフォルト2.5%
   const [stopLossPips, setStopLossPips] = useState<string>('25'); // デフォルト25pips
   const [accountBalance, setAccountBalance] = useState<string>('0'); // デフォルト証拠金
-  const [formattedBalance, setFormattedBalance] = useState<string>('0'); // 表示用フォーマット済み証拠金
   const [leverage, setLeverage] = useState<number>(500); // デフォルトレバレッジ500倍
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false); // モーダルの表示状態
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false); // ヘルプモーダルの表示状態
@@ -31,7 +30,7 @@ const App: FC = () => {
   const [balanceCurrency, setBalanceCurrency] = useState<BalanceCurrency>('JPY'); // 証拠金通貨
   const [riskAmountUSD, setRiskAmountUSD] = useState<string>('0'); // USD表示のリスク金額
   const [balanceEquivalent, setBalanceEquivalent] = useState<string>('0');
-  const [inputBalance, setInputBalance] = useState<string>('0');
+  const [inputBalance, setInputBalance] = useState<string>('0'); // 入力中の値を保持
   const [marginRatio, setMarginRatio] = useState<string>('0.00'); // 証拠金維持率のstate追加
   const [isLoading, setIsLoading] = useState<boolean>(false); // APIロード中の状態
   const [errorMessage, setErrorMessage] = useState<string>(''); // エラーメッセージ
@@ -81,18 +80,6 @@ const App: FC = () => {
     { text: '888倍', value: 888 },
     { text: '1000倍', value: 1000 }
   ];
-
-  // 各通貨の仮想価格データ（実際のアプリでは、APIから取得するなど）
-  // const currencyPrices: Record<CurrencyCode, string> = {
-  //   'JPY': '1.0000',
-  //   'USD': '147.52',
-  //   'EUR': '159.83',
-  //   'GBP': '186.45',
-  //   'AUD': '96.38',
-  //   'NZD': '89.72',
-  //   'CAD': '108.34',
-  //   'CHF': '163.91'
-  // };
 
   // Alpha Vantage APIからレートを取得する関数
   const fetchCurrencyRates = async () => {
@@ -169,7 +156,6 @@ const App: FC = () => {
     setCurrencyPrice(currencyPrices[currency] || '-');
   }, [currency, currencyPrices]);
 
-
   // 数値を3桁カンマ区切りにフォーマットする関数
   const formatNumberWithCommas = (num: string): string => {
     // 数字以外の文字を除去
@@ -192,58 +178,28 @@ const App: FC = () => {
     setLastUpdated(`${formattedDate} ${formattedTime}`);
   }, [currency]);
 
-  // 証拠金額が変更されたときにフォーマット済み表示を更新
-
-  // 入力値が変更されるたびにリアルタイムで計算結果を更新
-  useEffect(() => {
-    // 必要な値がすべて揃っているか確認
-    if (accountBalance && stopLossPips && parseInt(stopLossPips) > 0) {
-      // ロットサイズを計算
-      const lotSize = calculateLotSize();
-      setCalculatedLot(lotSize);
+  // 数値をフォーマットする関数を通貨に合わせて変更
+  const formatBalance = (num: string, currency: BalanceCurrency): string => {
+    if (currency === 'USD') {
+      // USDの場合、小数点を許可した数値処理
+      // 数字と小数点以外を除去
+      const numericValue = num.replace(/[^\d.]/g, '');
       
-      // リスク金額を計算
-      const balance = parseFloat(accountBalance);
-      const risk = parseFloat((riskPercentage / 100).toFixed(4)); // 小数点を固定
-      const riskAmt = Math.round(balance * risk); // 端数を丸める
+      // 小数点が複数ある場合は最初のみ保持
+      const parts = numericValue.split('.');
+      const cleanValue = parts[0] + (parts.length > 1 ? '.' + parts[1] : '');
       
-      if (balanceCurrency === 'JPY') {
-        setRiskAmount(formatNumberWithCommas(riskAmt.toString()));
-        // USDでのリスク金額も計算（参考表示用）
-        const usdRate = parseFloat(currencyPrices['USD']);
-        if (!isNaN(usdRate) && usdRate > 0) {
-          const riskAmtUSD = riskAmt / usdRate;
-          setRiskAmountUSD(riskAmtUSD.toFixed(2));
-        }
-      } else {
-        setRiskAmount(riskAmt.toFixed(2));
-        // JPYでのリスク金額も計算（参考表示用）
-        const usdRate = parseFloat(currencyPrices['USD']);
-        if (!isNaN(usdRate) && usdRate > 0) {
-          const riskAmtJPY = riskAmt * usdRate;
-          setRiskAmountUSD(formatNumberWithCommas(Math.round(riskAmtJPY).toString()));
-        }
-      }
+      // 数値に変換して小数点2桁で表示
+      const value = parseFloat(cleanValue) || 0;
+      return value.toFixed(2);
     } else {
-      // 必要な値が揃っていない場合はリセット
-      setCalculatedLot('0.00');
-      setRiskAmount('0');
-      setRiskAmountUSD('0');
+      // JPYの場合は3桁カンマ区切り（従来通り）
+      const numericValue = num.replace(/[^\d]/g, '');
+      return numericValue.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     }
-  }, [accountBalance, riskPercentage, stopLossPips, currency, currencyPrice, balanceCurrency]);
-
-  // リスク許容度のデータ（0.5%単位、0.5%から30%まで）
-  const riskData = Array.from({ length: 60 }, (_, i) => {
-    const value = (i + 1) * 0.5; // 0.5, 1.0, 1.5, ..., 29.5, 30.0
-    return { text: `${value.toFixed(1)}%`, value: value };
-  });
-
-  // 通貨が変更されたときのハンドラ
-  const handleCurrencyChange = (event: any) => {
-    setCurrency(event.value as CurrencyCode);
   };
 
-  // 通貨変更時の処理も修正
+  // 通貨変更時の処理
   const handleBalanceCurrencyChange = (event: any) => {
     const newCurrency = event.value as BalanceCurrency;
     const oldCurrency = balanceCurrency;
@@ -251,7 +207,7 @@ const App: FC = () => {
     // 通貨が実際に変更された場合のみ処理
     if (newCurrency !== oldCurrency) {
       // 現在の証拠金額を取得
-      const currentBalance = parseFloat(accountBalance) || 0;
+      const currentBalance = parseFloat(accountBalance.replace(/,/g, '')) || 0;
       
       // 証拠金額が0より大きい場合のみ変換
       if (currentBalance > 0) {
@@ -279,9 +235,10 @@ const App: FC = () => {
         
         // 入力値も更新
         if (newCurrency === 'USD') {
-          setInputBalance(newBalance.toFixed(2));
+          const formattedValue = newBalance.toFixed(2);
+          setInputBalance(formattedValue);
         } else {
-          setInputBalance(newBalance.toString());
+          setInputBalance(formatNumberWithCommas(newBalance.toString()));
         }
       }
     }
@@ -307,27 +264,6 @@ const App: FC = () => {
     setStopLossPips(value);
   };
 
-  // 数値をフォーマットする関数を通貨に合わせて変更
-  const formatBalance = (num: string, currency: BalanceCurrency): string => {
-    if (currency === 'USD') {
-      // USDの場合、小数点を許可した数値処理
-      // 数字と小数点以外を除去
-      const numericValue = num.replace(/[^\d.]/g, '');
-      
-      // 小数点が複数ある場合は最初のみ保持
-      const parts = numericValue.split('.');
-      const cleanValue = parts[0] + (parts.length > 1 ? '.' + parts[1] : '');
-      
-      // 数値に変換して小数点2桁で表示
-      const value = parseFloat(cleanValue) || 0;
-      return value.toFixed(2);
-    } else {
-      // JPYの場合は3桁カンマ区切り（従来通り）
-      const numericValue = num.replace(/[^\d]/g, '');
-      return numericValue.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    }
-  };
-
   // 証拠金額が変更されたときのハンドラを修正
   const handleAccountBalanceChange = (event: any) => {
     const inputValue = event.target.value;
@@ -338,39 +274,24 @@ const App: FC = () => {
     // 次に処理済みの値を内部状態として保存
     if (balanceCurrency === 'USD') {
       // USDの場合、小数点は許可
-      const numericValue = inputValue.replace(/[^\d.]/g, '');
+      // カンマを削除し、小数点と数字のみ許可
+      const numericValue = inputValue.replace(/,/g, '').replace(/[^\d.]/g, '');
+      
       // 小数点が2つ以上ある場合は最初の小数点のみ保持
       const parts = numericValue.split('.');
       const formattedValue = parts[0] + (parts.length > 1 ? '.' + parts[1] : '');
+      
       setAccountBalance(formattedValue);
     } else {
       // JPYの場合、整数のみ
-      const numericValue = inputValue.replace(/[^\d]/g, '');
+      // カンマを削除し、数字のみ許可
+      const numericValue = inputValue.replace(/,/g, '').replace(/[^\d]/g, '');
       setAccountBalance(numericValue);
     }
   };
 
-  // 証拠金額が変更されたときにフォーマット済み表示を更新するuseEffectを修正
+  // 入力値のフォーマットと計算
   useEffect(() => {
-    // 入力値のフォーマット処理
-    if (balanceCurrency === 'USD') {
-      // 入力中の場合は入力値をそのまま使用
-      if (document.activeElement && document.activeElement.id === 'balance-input') {
-        setFormattedBalance(inputBalance);
-      } else {
-        // 非入力時は整形された表示用の値を使用
-        const value = parseFloat(accountBalance) || 0;
-        setFormattedBalance(value.toFixed(2));
-        // 入力値も同期させる
-        setInputBalance(value.toFixed(2));
-      }
-    } else {
-      // JPYの場合は3桁カンマ区切り（従来通りだがformatBalanceを使用）
-      setFormattedBalance(formatBalance(accountBalance, 'JPY'));
-      // 入力値も同期させる
-      setInputBalance(formatBalance(accountBalance, 'JPY'));
-    }
-  
     // 必要な値がすべて揃っているか確認
     if (accountBalance && stopLossPips && parseInt(stopLossPips) > 0) {
       // ロットサイズを計算
@@ -378,12 +299,12 @@ const App: FC = () => {
       setCalculatedLot(lotSize);
       
       // リスク金額を計算
-      const balance = parseFloat(accountBalance);
+      const balance = parseFloat(accountBalance.replace(/,/g, ''));
       const risk = parseFloat((riskPercentage / 100).toFixed(4)); // 小数点を固定
       const riskAmt = Math.round(balance * risk); // 端数を丸める
       
       if (balanceCurrency === 'JPY') {
-        setRiskAmount(formatBalance(riskAmt.toString(), 'JPY')); // formatBalanceを使用
+        setRiskAmount(formatNumberWithCommas(riskAmt.toString()));
         // USDでのリスク金額も計算（参考表示用）
         const usdRate = parseFloat(currencyPrices['USD']);
         if (!isNaN(usdRate) && usdRate > 0) {
@@ -391,12 +312,12 @@ const App: FC = () => {
           setRiskAmountUSD(riskAmtUSD.toFixed(2));
         }
       } else {
-        setRiskAmount(formatBalance(riskAmt.toString(), 'USD')); // formatBalanceを使用
+        setRiskAmount(riskAmt.toFixed(2));
         // JPYでのリスク金額も計算（参考表示用）
         const usdRate = parseFloat(currencyPrices['USD']);
         if (!isNaN(usdRate) && usdRate > 0) {
           const riskAmtJPY = riskAmt * usdRate;
-          setRiskAmountUSD(formatBalance(Math.round(riskAmtJPY).toString(), 'JPY')); // formatBalanceを使用
+          setRiskAmountUSD(formatNumberWithCommas(Math.round(riskAmtJPY).toString()));
         }
       }
       
@@ -414,14 +335,24 @@ const App: FC = () => {
       setBalanceEquivalent('0');
       setMarginRatio('0.00');
     }
-  }, [accountBalance, riskPercentage, stopLossPips, currency, currencyPrice, balanceCurrency, leverage, inputBalance]);
-  
+  }, [accountBalance, riskPercentage, stopLossPips, currency, currencyPrice, balanceCurrency, leverage]);
+
+  // リスク許容度のデータ（0.5%単位、0.5%から30%まで）
+  const riskData = Array.from({ length: 60 }, (_, i) => {
+    const value = (i + 1) * 0.5; // 0.5, 1.0, 1.5, ..., 29.5, 30.0
+    return { text: `${value.toFixed(1)}%`, value: value };
+  });
+
+  // 通貨が変更されたときのハンドラ
+  const handleCurrencyChange = (event: any) => {
+    setCurrency(event.value as CurrencyCode);
+  };
 
   // ロットサイズを計算
   const calculateLotSize = (): string => {
     if (!stopLossPips || parseInt(stopLossPips) === 0) return '0.00';
     
-    const balance = parseFloat(accountBalance);
+    const balance = parseFloat(accountBalance.replace(/,/g, ''));
     const risk = riskPercentage / 100;
     const stopLoss = parseInt(stopLossPips);
     const riskAmount = balance * risk;
@@ -480,7 +411,7 @@ const App: FC = () => {
   const calculateMaxLotSize = (): string => {
     if (currency === 'JPY') return '0.00'; // JPYの場合は計算不要
     
-    const balance = parseFloat(accountBalance);
+    const balance = parseFloat(accountBalance.replace(/,/g, ''));
     
     // 証拠金がUSDの場合
     if (balanceCurrency === 'USD') {
@@ -519,49 +450,6 @@ const App: FC = () => {
     setIsHelpModalOpen(false);
   };
 
-
-  // 既存のuseEffectに証拠金の換算計算を追加
-  useEffect(() => {
-    // 必要な値がすべて揃っているか確認
-    if (accountBalance && stopLossPips && parseInt(stopLossPips) > 0) {
-      // ロットサイズを計算
-      const lotSize = calculateLotSize();
-      setCalculatedLot(lotSize);
-      
-      // リスク金額を計算
-      const balance = parseFloat(accountBalance);
-      const risk = parseFloat((riskPercentage / 100).toFixed(4)); // 小数点を固定
-      const riskAmt = Math.round(balance * risk); // 端数を丸める
-      
-      if (balanceCurrency === 'JPY') {
-        setRiskAmount(formatNumberWithCommas(riskAmt.toString()));
-        // USDでのリスク金額も計算（参考表示用）
-        const usdRate = parseFloat(currencyPrices['USD']);
-        if (!isNaN(usdRate) && usdRate > 0) {
-          const riskAmtUSD = riskAmt / usdRate;
-          setRiskAmountUSD(riskAmtUSD.toFixed(2));
-        }
-      } else {
-        setRiskAmount(riskAmt.toFixed(2));
-        // JPYでのリスク金額も計算（参考表示用）
-        const usdRate = parseFloat(currencyPrices['USD']);
-        if (!isNaN(usdRate) && usdRate > 0) {
-          const riskAmtJPY = riskAmt * usdRate;
-          setRiskAmountUSD(formatNumberWithCommas(Math.round(riskAmtJPY).toString()));
-        }
-      }
-      
-      // 証拠金の通貨換算表示を更新
-      updateBalanceEquivalent(balance);
-    } else {
-      // 必要な値が揃っていない場合はリセット
-      setCalculatedLot('0.00');
-      setRiskAmount('0');
-      setRiskAmountUSD('0');
-      setBalanceEquivalent('0');
-    }
-  }, [accountBalance, riskPercentage, stopLossPips, currency, currencyPrice, balanceCurrency]);
-
   // 証拠金の通貨換算を計算する関数を追加
   const updateBalanceEquivalent = (balance: number) => {
     if (balance <= 0) {
@@ -586,7 +474,7 @@ const App: FC = () => {
     // 必要なパラメータがない場合は計算しない
     if (!accountBalance || parseFloat(calculatedLot) <= 0 || currency === 'JPY') return '0.00';
     
-    const balance = parseFloat(accountBalance);
+    const balance = parseFloat(accountBalance.replace(/,/g, ''));
     const lotSize = parseFloat(calculatedLot);
     const rate = parseFloat(currencyPrice);
     
@@ -646,7 +534,6 @@ const App: FC = () => {
       )}
     </button>
   );
-
 
   return (
     <Page>
@@ -864,7 +751,7 @@ const App: FC = () => {
         <div className="p-4">
           <p className="mb-3">証拠金額: <strong>
             {balanceCurrency === 'JPY'
-              ? `${formattedBalance}円`
+              ? `${formatBalance}円`
               : `$${parseFloat(accountBalance).toFixed(2)}`}
           </strong></p>
           <p className="mb-3">証拠金通貨: <strong>{balanceCurrency}</strong></p>
