@@ -1,6 +1,6 @@
 // App.tsx
 import '@mobiscroll/react/dist/css/mobiscroll.min.css';
-import { Select, Page, setOptions, localeJa, Input, Popup, Switch } from '@mobiscroll/react';
+import { Select, Page, setOptions, localeJa, Input, Popup } from '@mobiscroll/react';
 import { FC, useState, useEffect } from 'react';
 import HelpModal from './HelpModal'; // 前提：別ファイルに作成済み
 
@@ -32,6 +32,7 @@ const App: FC = () => {
   const [riskAmountUSD, setRiskAmountUSD] = useState<string>('0'); // USD表示のリスク金額
   const [balanceEquivalent, setBalanceEquivalent] = useState<string>('0');
   const [inputBalance, setInputBalance] = useState<string>('0');
+  const [marginRatio, setMarginRatio] = useState<string>('0.00'); // 証拠金維持率のstate追加
 
   // 基軸通貨データ
   const currencyData = [
@@ -102,9 +103,6 @@ const App: FC = () => {
   }, [currency]);
 
   // 証拠金額が変更されたときにフォーマット済み表示を更新
-  useEffect(() => {
-    setFormattedBalance(formatNumberWithCommas(accountBalance));
-  }, [accountBalance]);
 
   // 入力値が変更されるたびにリアルタイムで計算結果を更新
   useEffect(() => {
@@ -264,6 +262,7 @@ const App: FC = () => {
 
   // 証拠金額が変更されたときにフォーマット済み表示を更新するuseEffectを修正
   useEffect(() => {
+    // 入力値のフォーマット処理
     if (balanceCurrency === 'USD') {
       // 入力中の場合は入力値をそのまま使用
       if (document.activeElement && document.activeElement.id === 'balance-input') {
@@ -276,14 +275,57 @@ const App: FC = () => {
         setInputBalance(value.toFixed(2));
       }
     } else {
-      // JPYの場合は従来通りカンマ区切り
-      setFormattedBalance(formatNumberWithCommas(accountBalance));
+      // JPYの場合は3桁カンマ区切り（従来通りだがformatBalanceを使用）
+      setFormattedBalance(formatBalance(accountBalance, 'JPY'));
       // 入力値も同期させる
-      setInputBalance(formatNumberWithCommas(accountBalance));
+      setInputBalance(formatBalance(accountBalance, 'JPY'));
     }
-  }, [accountBalance, balanceCurrency]);
   
-
+    // 必要な値がすべて揃っているか確認
+    if (accountBalance && stopLossPips && parseInt(stopLossPips) > 0) {
+      // ロットサイズを計算
+      const lotSize = calculateLotSize();
+      setCalculatedLot(lotSize);
+      
+      // リスク金額を計算
+      const balance = parseFloat(accountBalance);
+      const risk = parseFloat((riskPercentage / 100).toFixed(4)); // 小数点を固定
+      const riskAmt = Math.round(balance * risk); // 端数を丸める
+      
+      if (balanceCurrency === 'JPY') {
+        setRiskAmount(formatBalance(riskAmt.toString(), 'JPY')); // formatBalanceを使用
+        // USDでのリスク金額も計算（参考表示用）
+        const usdRate = parseFloat(currencyPrices['USD']);
+        if (!isNaN(usdRate) && usdRate > 0) {
+          const riskAmtUSD = riskAmt / usdRate;
+          setRiskAmountUSD(riskAmtUSD.toFixed(2));
+        }
+      } else {
+        setRiskAmount(formatBalance(riskAmt.toString(), 'USD')); // formatBalanceを使用
+        // JPYでのリスク金額も計算（参考表示用）
+        const usdRate = parseFloat(currencyPrices['USD']);
+        if (!isNaN(usdRate) && usdRate > 0) {
+          const riskAmtJPY = riskAmt * usdRate;
+          setRiskAmountUSD(formatBalance(Math.round(riskAmtJPY).toString(), 'JPY')); // formatBalanceを使用
+        }
+      }
+      
+      // 証拠金の通貨換算表示を更新
+      updateBalanceEquivalent(balance);
+      
+      // 証拠金維持率を計算
+      const ratio = calculateMarginRatio();
+      setMarginRatio(ratio);
+    } else {
+      // 必要な値が揃っていない場合はリセット
+      setCalculatedLot('0.00');
+      setRiskAmount('0');
+      setRiskAmountUSD('0');
+      setBalanceEquivalent('0');
+      setMarginRatio('0.00');
+    }
+  }, [accountBalance, riskPercentage, stopLossPips, currency, currencyPrice, balanceCurrency, leverage, inputBalance]);
+  
 
   // ロットサイズを計算
   const calculateLotSize = (): string => {
@@ -442,14 +484,36 @@ const App: FC = () => {
     if (balanceCurrency === 'USD') {
       // USDをJPYに換算
       const jpyValue = balance * usdRate;
-      setBalanceEquivalent(formatNumberWithCommas(Math.round(jpyValue).toString()));
+      setBalanceEquivalent(formatBalance(Math.round(jpyValue).toString(), 'JPY')); // formatBalanceを使用
     } else {
       // JPYをUSDに換算
       const usdValue = balance / usdRate;
-      setBalanceEquivalent(usdValue.toFixed(2));
+      setBalanceEquivalent(formatBalance(usdValue.toString(), 'USD')); // formatBalanceを使用
     }
   };
 
+  const calculateMarginRatio = (): string => {
+    // 必要なパラメータがない場合は計算しない
+    if (!accountBalance || parseFloat(calculatedLot) <= 0 || currency === 'JPY') return '0.00';
+    
+    const balance = parseFloat(accountBalance);
+    const lotSize = parseFloat(calculatedLot);
+    const rate = parseFloat(currencyPrice);
+    
+    // ポジションサイズ（通貨単位）：1ロット = 100,000通貨単位
+    const positionSize = lotSize * 100000;
+    
+    // 必要証拠金 = ポジションサイズ × レート × 証拠金率(1/レバレッジ)
+    const requiredMargin = positionSize * rate * (1 / leverage);
+    
+    // 証拠金維持率(%) = (有効証拠金 ÷ 必要証拠金) × 100
+    // 未決済ポジションがないため、有効証拠金 = 口座残高
+    const ratio = (balance / requiredMargin) * 100;
+    
+    // 小数点以下2桁で表示
+    return ratio.toFixed(2);
+  };
+  
   return (
     <Page>
       <div className='lg:w-150 lg:mx-auto pb-3'>
@@ -468,7 +532,7 @@ const App: FC = () => {
         </button>
       </div>
 
-      <div className='flex'>
+      <div className='flex justify-center'>
 
       {/* 計算結果表示 - 常に表示 */}
       <div className=" bg-blue-50 rounded-md p-3 border border-blue-200 mx-3 w-55">
@@ -486,11 +550,27 @@ const App: FC = () => {
               {balanceCurrency === 'JPY' ? `(約$${riskAmountUSD})` : `(約${riskAmountUSD}円)`}
             </p>
           </div>
+          {/* 証拠金維持率を追加 */}
+          {currency !== 'JPY' && parseFloat(marginRatio) > 0 && (
+            <div className="mt-2 border-t pt-2">
+              <p className="text-sm text-gray-600">証拠金維持率:</p>
+              <p className={`text-lg font-bold ${
+                parseFloat(marginRatio) < 100 ? 'text-red-600' : 
+                parseFloat(marginRatio) < 200 ? 'text-yellow-600' : 'text-green-600'
+              }`}>
+                {marginRatio}%
+              </p>
+              <p className="text-xs text-gray-500">
+                (レバレッジ {leverage}倍)
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
       {/* 証拠金通貨選択 */}
       <div className='px-1 mb-4 w-45'>
+        <p className="text-sm text-gray-600">証拠金通貨選択</p>
         <Select
           data={balanceCurrencyData}
           value={balanceCurrency}
@@ -499,7 +579,6 @@ const App: FC = () => {
           touchUi={true}
           label="証拠金通貨"
           labelStyle="stacked"
-          placeholder='証拠金通貨'
         />
       </div>
       </div>
@@ -539,7 +618,6 @@ const App: FC = () => {
           証拠金額 ({balanceCurrency === 'JPY' ? '円' : 'USD'})
         </p>
         <Input
-          id="balance-input"
           type={balanceCurrency === 'USD' ? 'tel' : 'text'} // USDの場合はtelタイプを使用
           value={inputBalance} // 編集中の入力値を使用
           onChange={handleAccountBalanceChange}
@@ -559,7 +637,7 @@ const App: FC = () => {
           )}
         </div>
       </div>
-      
+
       {/* 基軸通貨選択と価格表示 */}
       <div className='px-3'>
         <div className="flex flex-col items-center">
@@ -643,9 +721,9 @@ const App: FC = () => {
       >
         <div className="p-4">
           <p className="mb-3">証拠金額: <strong>
-            {balanceCurrency === 'JPY' 
-              ? `${formattedBalance}円` 
-              : `$${formattedBalance}`}
+            {balanceCurrency === 'JPY'
+              ? `${formattedBalance}円`
+              : `$${parseFloat(accountBalance).toFixed(2)}`}
           </strong></p>
           <p className="mb-3">証拠金通貨: <strong>{balanceCurrency}</strong></p>
           <p className="mb-3">基軸通貨: <strong>{currency}</strong> {currency !== 'JPY' && `(${currencyPrice}円)`}</p>
@@ -666,12 +744,23 @@ const App: FC = () => {
               </span>
             </p>
             {currency !== 'JPY' && (
-              <p className="text-center text-sm text-gray-600 mt-1">
-                最大取引可能ロット: {calculateMaxLotSize()} Lots (レバレッジ{leverage}倍)
-              </p>
+              <div>
+                <p className="text-center text-sm text-gray-600 mt-1">
+                  最大取引可能ロット: {calculateMaxLotSize()} Lots (レバレッジ{leverage}倍)
+                </p>
+                {/* 証拠金維持率をモーダルにも追加 */}
+                {parseFloat(marginRatio) > 0 && (
+                  <p className="text-center text-sm text-gray-600 mt-1">
+                    証拠金維持率: <span className={`font-bold ${
+                      parseFloat(marginRatio) < 100 ? 'text-red-600' : 
+                      parseFloat(marginRatio) < 200 ? 'text-yellow-600' : 'text-green-600'
+                    }`}>{marginRatio}%</span>
+                  </p>
+                )}
+              </div>
             )}
           </div>
-          
+
           <div className="mt-6 border-t pt-4">
             <p className="text-center text-sm text-gray-400">
               この結果はあくまで参考値です。実際の取引では、市場の状況や個人の取引戦略に応じて調整してください。
