@@ -1,54 +1,49 @@
-# React + TypeScript + Vite
+# FX Lot Size Calculator
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+FXトレードにおける適正ロットサイズを計算するWebアプリです。
 
-Currently, two official plugins are available:
+## 概要
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+証拠金・リスク許容度・損切り幅・通貨ペア・レバレッジを入力することで、リスク管理に基づいた推奨ロットサイズを即座に算出します。日本語UIで、スマートフォンでの利用を主に想定しています。
 
-## Expanding the ESLint configuration
+## 主な機能
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+- **ロットサイズ計算**: リスク%とストップロス幅（pips）から適正ロット数を算出
+- **証拠金通貨対応**: 日本円（JPY）・米ドル（USD）に対応
+- **通貨ペア対応**: JPY / USD / EUR / GBP / AUD / NZD / CAD / CHF
+- **レバレッジ選択**: 1倍〜1000倍まで対応
+- **証拠金維持率の表示**: ポジション保有時の証拠金維持率を自動計算
+- **為替レート取得**: Alpha Vantage APIによるリアルタイムレート更新（手動トリガー）
+- **損失許容額の表示**: JPY/USD両建てで参考表示
 
-```js
-export default tseslint.config({
-  extends: [
-    // Remove ...tseslint.configs.recommended and replace with this
-    ...tseslint.configs.recommendedTypeChecked,
-    // Alternatively, use this for stricter rules
-    ...tseslint.configs.strictTypeChecked,
-    // Optionally, add this for stylistic rules
-    ...tseslint.configs.stylisticTypeChecked,
-  ],
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+## 技術スタック
+
+| カテゴリ | 使用技術 |
+|---|---|
+| フレームワーク | React 19 + TypeScript 5.7 |
+| ビルドツール | Vite 6 |
+| スタイリング | Tailwind CSS v4 |
+| UIコンポーネント | Mobiscroll React, Radix UI, shadcn/ui |
+| デプロイ | GitHub Pages |
+
+## セットアップ
+
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## 主なコマンド
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default tseslint.config({
-  plugins: {
-    // Add the react-x and react-dom plugins
-    'react-x': reactX,
-    'react-dom': reactDom,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended typescript rules
-    ...reactX.configs['recommended-typescript'].rules,
-    ...reactDom.configs.recommended.rules,
-  },
-})
+```bash
+npm run dev       # 開発サーバー起動
+npm run build     # 型チェック + プロダクションビルド
+npm run lint      # ESLintチェック
+npm run preview   # ビルド結果のプレビュー
+npm run deploy    # GitHub Pagesへデプロイ
 ```
+
+## 注意事項
+
+- 計算結果はあくまで参考値です。実際の取引は自己責任で行ってください。
+- Alpha Vantage APIの無料プランは1分あたり5リクエストの制限があります。
