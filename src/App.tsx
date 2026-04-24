@@ -81,54 +81,36 @@ const App: FC = () => {
     { text: '1000倍', value: 1000 }
   ];
 
-  // Alpha Vantage APIからレートを取得する関数
+  // frankfurter.app APIからレートを一括取得する関数
   const fetchCurrencyRates = async () => {
     setIsLoading(true);
     setErrorMessage('');
-    
+
     try {
-      // Alpha Vantage APIキー（実際の使用時はご自身のAPIキーに置き換えてください）
-      const apiKey = 'K2WIB2APK0DHR9KS';
-      
-      // JPY以外の通貨のレートを取得
+      // 1リクエストでJPY基準の全通貨レートを取得
+      const response = await fetch(
+        'https://open.er-api.com/v6/latest/JPY'
+      );
+      if (!response.ok) throw new Error('レートの取得に失敗しました。');
+      const data = await response.json();
+
+      // JPY基準のレートを反転して各通貨/JPYレートに変換
       const currencies: CurrencyCode[] = ['USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
-      const newRates: Partial<Record<CurrencyCode, string>> = { 'JPY': '1.0000' };
-      
+      const newRates: Record<CurrencyCode, string> = { JPY: '1.0000' } as Record<CurrencyCode, string>;
       for (const curr of currencies) {
-        // 例: USD/JPYの場合、from_currency=USD, to_currency=JPY
-        const response = await fetch(`https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${curr}&to_currency=JPY&apikey=${apiKey}`);
-        const data = await response.json();
-        
-        // レスポンスからレート情報を取得
-        if (data['Realtime Currency Exchange Rate']) {
-          const rate = data['Realtime Currency Exchange Rate']['5. Exchange Rate'];
-          newRates[curr] = parseFloat(rate).toFixed(2);
-        } else if (data['Note']) {
-          // API制限エラーの場合
-          throw new Error('API制限に達しました。しばらく経ってからお試しください。');
-        } else {
-          throw new Error(`${curr}のレート取得に失敗しました。`);
-        }
-        
-        // Alpha Vantageの無料プランは1分あたり5リクエストまでの制限があるため少し待機
-        await new Promise(resolve => setTimeout(resolve, 12000));
+        const rate = (data.rates as Record<string, number>)[curr];
+        if (rate) newRates[curr] = (1 / rate).toFixed(2);
       }
-      
-      // 取得したレートをステートに保存
-      setCurrencyPrices(newRates as Record<CurrencyCode, string>);
-      
-      // 現在の日時を取得して更新時間とする
+
+      setCurrencyPrices(newRates);
+
       const now = new Date();
       const formattedDate = now.toLocaleDateString('ja-JP');
-      const formattedTime = now.toLocaleTimeString('ja-JP', { 
-        hour: '2-digit', 
-        minute: '2-digit' 
-      });
-      setLastUpdated(`${formattedDate} ${formattedTime} (API更新)`);
-      
-      // 選択されている通貨の価格を更新
+      const formattedTime = now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+      setLastUpdated(`${formattedDate} ${formattedTime}`);
+
       setCurrencyPrice(newRates[currency] || '-');
-      
+
     } catch (error) {
       console.error('通貨レート取得エラー:', error);
       setErrorMessage(error instanceof Error ? error.message : '通貨レートの取得に失敗しました。');
@@ -139,7 +121,7 @@ const App: FC = () => {
 
   // コンポーネントマウント時に通貨レートを取得
   useEffect(() => {
-    // fetchCurrencyRates(); // 実際に使用する場合はコメントを解除
+    fetchCurrencyRates();
     
     // 現在の日時を取得して更新時間とする（デフォルト値用）
     const now = new Date();
@@ -751,7 +733,7 @@ const App: FC = () => {
         <div className="p-4">
           <p className="mb-3">証拠金額: <strong>
             {balanceCurrency === 'JPY'
-              ? `${formatBalance}円`
+              ? `${inputBalance}円`
               : `$${parseFloat(accountBalance).toFixed(2)}`}
           </strong></p>
           <p className="mb-3">証拠金通貨: <strong>{balanceCurrency}</strong></p>
