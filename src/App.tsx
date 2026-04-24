@@ -19,7 +19,7 @@ const App: FC = () => {
   const [currency, setCurrency] = useState<CurrencyCode>('JPY');
   const [riskPercentage, setRiskPercentage] = useState<number>(2.5); // デフォルト2.5%
   const [stopLossPips, setStopLossPips] = useState<string>('25'); // デフォルト25pips
-  const [accountBalance, setAccountBalance] = useState<string>('0'); // デフォルト証拠金
+  const [accountBalance, setAccountBalance] = useState<string>(() => localStorage.getItem('accountBalance') ?? '0');
   const [leverage, setLeverage] = useState<number>(500); // デフォルトレバレッジ500倍
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false); // モーダルの表示状態
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false); // ヘルプモーダルの表示状態
@@ -27,10 +27,10 @@ const App: FC = () => {
   const [lastUpdated, setLastUpdated] = useState<string>(''); // 価格更新日時
   const [calculatedLot, setCalculatedLot] = useState<string>('0.00'); // 計算されたロットサイズ
   const [riskAmount, setRiskAmount] = useState<string>('0'); // 計算されたリスク金額
-  const [balanceCurrency, setBalanceCurrency] = useState<BalanceCurrency>('JPY'); // 証拠金通貨
+  const [balanceCurrency, setBalanceCurrency] = useState<BalanceCurrency>(() => (localStorage.getItem('balanceCurrency') as BalanceCurrency) ?? 'JPY');
   const [riskAmountUSD, setRiskAmountUSD] = useState<string>('0'); // USD表示のリスク金額
   const [balanceEquivalent, setBalanceEquivalent] = useState<string>('0');
-  const [inputBalance, setInputBalance] = useState<string>('0'); // 入力中の値を保持
+  const [inputBalance, setInputBalance] = useState<string>(() => localStorage.getItem('inputBalance') ?? '0');
   const [marginRatio, setMarginRatio] = useState<string>('0.00'); // 証拠金維持率のstate追加
   const [isLoading, setIsLoading] = useState<boolean>(false); // APIロード中の状態
   const [errorMessage, setErrorMessage] = useState<string>(''); // エラーメッセージ
@@ -118,6 +118,12 @@ const App: FC = () => {
       setIsLoading(false);
     }
   };
+
+  useEffect(() => {
+    localStorage.setItem('accountBalance', accountBalance);
+    localStorage.setItem('inputBalance', inputBalance);
+    localStorage.setItem('balanceCurrency', balanceCurrency);
+  }, [accountBalance, inputBalance, balanceCurrency]);
 
   // コンポーネントマウント時に通貨レートを取得
   useEffect(() => {
@@ -270,6 +276,13 @@ const App: FC = () => {
       const numericValue = inputValue.replace(/,/g, '').replace(/[^\d]/g, '');
       setAccountBalance(numericValue);
     }
+  };
+
+  const handleClearBalance = () => {
+    setAccountBalance('0');
+    setInputBalance('0');
+    localStorage.removeItem('accountBalance');
+    localStorage.removeItem('inputBalance');
   };
 
   // 入力値のフォーマットと計算
@@ -635,6 +648,14 @@ const App: FC = () => {
           inputStyle="box"
           labelStyle="stacked"
         />
+        <div className='flex justify-end mt-1'>
+          <button
+            onClick={handleClearBalance}
+            className="text-xs px-3 py-1 rounded-full border border-red-300 text-red-400 hover:bg-red-50 hover:border-red-400 hover:text-red-600 transition-all duration-150"
+          >
+            ✕ クリア
+          </button>
+        </div>
         <div className='text-xs text-gray-500 text-center mt-1'>
           <p>取引に使用可能な資金額を入力してください</p>
           {/* 証拠金の換算表示 */}
@@ -703,8 +724,8 @@ const App: FC = () => {
         </div>
       </div>
       
-      {/* 設定確認ボタン - おしゃれなデザイン */}
-      <div className='px-3 mt-6'>
+      {/* 設定確認ボタン - sticky */}
+      <div className='sticky bottom-0 px-3 py-3 bg-white/80 backdrop-blur-sm'>
         <button 
           onClick={openModal}
           className="w-full py-3 px-4 bg-gradient-to-r from-orange-400 to-orange-600 text-white rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200 font-medium flex items-center justify-center"
