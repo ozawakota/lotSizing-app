@@ -16,11 +16,23 @@ type CurrencyCode = 'JPY' | 'USD' | 'EUR' | 'GBP' | 'AUD' | 'NZD' | 'CAD' | 'CHF
 type BalanceCurrency = 'JPY' | 'USD';
 
 const App: FC = () => {
-  const [currency, setCurrency] = useState<CurrencyCode>('JPY');
-  const [riskPercentage, setRiskPercentage] = useState<number>(2.5); // デフォルト2.5%
-  const [stopLossPips, setStopLossPips] = useState<string>('25'); // デフォルト25pips
+  const validCurrencies: CurrencyCode[] = ['JPY', 'USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
+  const [currency, setCurrency] = useState<CurrencyCode>(() => {
+    const saved = localStorage.getItem('currency') as CurrencyCode | null;
+    return saved && validCurrencies.includes(saved) ? saved : 'JPY';
+  });
+  const [riskPercentage, setRiskPercentage] = useState<number>(() => {
+    const saved = localStorage.getItem('riskPercentage');
+    const n = saved ? parseFloat(saved) : NaN;
+    return Number.isFinite(n) ? n : 2.5;
+  });
+  const [stopLossPips, setStopLossPips] = useState<string>(() => localStorage.getItem('stopLossPips') ?? '25');
   const [accountBalance, setAccountBalance] = useState<string>(() => localStorage.getItem('accountBalance') ?? '0');
-  const [leverage, setLeverage] = useState<number>(500); // デフォルトレバレッジ500倍
+  const [leverage, setLeverage] = useState<number>(() => {
+    const saved = localStorage.getItem('leverage');
+    const n = saved ? parseInt(saved, 10) : NaN;
+    return Number.isFinite(n) ? n : 500;
+  });
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false); // モーダルの表示状態
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false); // ヘルプモーダルの表示状態
   const [currencyPrice, setCurrencyPrice] = useState<string>('-'); // 選択された通貨の価格
@@ -81,36 +93,106 @@ const App: FC = () => {
     { text: '1000倍', value: 1000 }
   ];
 
-  // frankfurter.app APIからレートを一括取得する関数
+  // ExchangeRate-API 経由で取得
+  const fetchFromExchangeRateAPI = async (): Promise<Partial<Record<CurrencyCode, string>>> => {
+    const apiKey = import.meta.env.VITE_EXCHANGERATE_API_KEY;
+    const url = apiKey
+      ? `https://v6.exchangerate-api.com/v6/${apiKey}/latest/JPY`
+      : 'https://open.er-api.com/v6/latest/JPY';
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`ExchangeRate HTTP ${response.status}`);
+    const data = await response.json();
+    if (data.result !== 'success') throw new Error(`ExchangeRate: ${data['error-type'] ?? '不明'}`);
+    const rates = (data.conversion_rates ?? data.rates) as Record<string, number> | undefined;
+    if (!rates) throw new Error('ExchangeRate: レスポンスに rates が含まれていません');
+    const result: Partial<Record<CurrencyCode, string>> = {};
+    const currencies: CurrencyCode[] = ['USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
+    for (const curr of currencies) {
+      const rate = rates[curr];
+      if (rate) result[curr] = (1 / rate).toFixed(2);
+    }
+    return result;
+  };
+
+  // GAS 経由で取得（JSONP方式：CORS回避のため <script> タグで読み込み）
+  const fetchFromGAS = (gasUrl: string): Promise<Partial<Record<CurrencyCode, string>>> => {
+    return new Promise((resolve, reject) => {
+      const callbackName = `gasCallback_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const script = document.createElement('script');
+      const cleanup = () => {
+        clearTimeout(timer);
+        delete (window as unknown as Record<string, unknown>)[callbackName];
+        script.remove();
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('GAS タイムアウト (10秒)'));
+      }, 10000);
+      (window as unknown as Record<string, (data: unknown) => void>)[callbackName] = (data) => {
+        cleanup();
+        const d = data as { result?: string; error?: string; rates?: Record<string, number> };
+        if (d.result !== 'success') {
+          reject(new Error(`GAS: ${d.error ?? '不明'}`));
+          return;
+        }
+        const result: Partial<Record<CurrencyCode, string>> = {};
+        const currencies: CurrencyCode[] = ['USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
+        for (const curr of currencies) {
+          const rate = d.rates?.[curr];
+          if (typeof rate === 'number' && rate > 0) result[curr] = rate.toFixed(2);
+        }
+        console.log('[GAS] 取得レート:', result);
+        resolve(result);
+      };
+      script.onerror = () => {
+        cleanup();
+        reject(new Error('GAS スクリプト読み込み失敗（URL/権限を確認）'));
+      };
+      const sep = gasUrl.includes('?') ? '&' : '?';
+      script.src = `${gasUrl}${sep}callback=${callbackName}`;
+      document.head.appendChild(script);
+    });
+  };
+
+  // レートを一括取得する関数（GAS優先、失敗時はExchangeRate-APIにフォールバック）
   const fetchCurrencyRates = async () => {
     setIsLoading(true);
     setErrorMessage('');
 
-    try {
-      // 1リクエストでJPY基準の全通貨レートを取得
-      const response = await fetch(
-        'https://open.er-api.com/v6/latest/JPY'
-      );
-      if (!response.ok) throw new Error('レートの取得に失敗しました。');
-      const data = await response.json();
+    const gasUrl = import.meta.env.VITE_GAS_RATES_URL;
+    let fetched: Partial<Record<CurrencyCode, string>> = {};
+    let source = '';
 
-      // JPY基準のレートを反転して各通貨/JPYレートに変換
-      const currencies: CurrencyCode[] = ['USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
-      const newRates: Record<CurrencyCode, string> = { JPY: '1.0000' } as Record<CurrencyCode, string>;
-      for (const curr of currencies) {
-        const rate = (data.rates as Record<string, number>)[curr];
-        if (rate) newRates[curr] = (1 / rate).toFixed(2);
+    try {
+      if (gasUrl) {
+        try {
+          fetched = await fetchFromGAS(gasUrl);
+          source = 'GAS';
+        } catch (e) {
+          console.warn('GAS失敗、ExchangeRate-APIへフォールバック:', e);
+          fetched = await fetchFromExchangeRateAPI();
+          source = 'ExchangeRate(fallback)';
+        }
+      } else {
+        fetched = await fetchFromExchangeRateAPI();
+        source = 'ExchangeRate';
       }
 
-      setCurrencyPrices(newRates);
+      if (Object.keys(fetched).length === 0) {
+        throw new Error('レート取得に失敗しました（0件）');
+      }
+
+      // 既存の値を保持しつつ取得したキーのみ上書き（マージ）
+      setCurrencyPrices(prev => ({ ...prev, ...fetched, JPY: '1.0000' }));
 
       const now = new Date();
       const formattedDate = now.toLocaleDateString('ja-JP');
       const formattedTime = now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
-      setLastUpdated(`${formattedDate} ${formattedTime}`);
+      setLastUpdated(`${formattedDate} ${formattedTime} (${source})`);
 
-      setCurrencyPrice(newRates[currency] || '-');
-
+      // currentのcurrencyに対して即座にcurrencyPriceも更新
+      if (fetched[currency]) setCurrencyPrice(fetched[currency] as string);
+      else if (currency === 'JPY') setCurrencyPrice('1.0000');
     } catch (error) {
       console.error('通貨レート取得エラー:', error);
       setErrorMessage(error instanceof Error ? error.message : '通貨レートの取得に失敗しました。');
@@ -123,7 +205,11 @@ const App: FC = () => {
     localStorage.setItem('accountBalance', accountBalance);
     localStorage.setItem('inputBalance', inputBalance);
     localStorage.setItem('balanceCurrency', balanceCurrency);
-  }, [accountBalance, inputBalance, balanceCurrency]);
+    localStorage.setItem('currency', currency);
+    localStorage.setItem('riskPercentage', String(riskPercentage));
+    localStorage.setItem('stopLossPips', stopLossPips);
+    localStorage.setItem('leverage', String(leverage));
+  }, [accountBalance, inputBalance, balanceCurrency, currency, riskPercentage, stopLossPips, leverage]);
 
   // コンポーネントマウント時に通貨レートを取得
   useEffect(() => {
@@ -152,19 +238,6 @@ const App: FC = () => {
     return numericValue.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   };
 
-  // 通貨が変更されたときに価格を更新
-  useEffect(() => {
-    setCurrencyPrice(currencyPrices[currency] || '-');
-    
-    // 現在の日時を取得して更新時間とする
-    const now = new Date();
-    const formattedDate = now.toLocaleDateString('ja-JP');
-    const formattedTime = now.toLocaleTimeString('ja-JP', { 
-      hour: '2-digit', 
-      minute: '2-digit' 
-    });
-    setLastUpdated(`${formattedDate} ${formattedTime}`);
-  }, [currency]);
 
   // 数値をフォーマットする関数を通貨に合わせて変更
   const formatBalance = (num: string, currency: BalanceCurrency): string => {
@@ -341,6 +414,10 @@ const App: FC = () => {
   // 通貨が変更されたときのハンドラ
   const handleCurrencyChange = (event: any) => {
     setCurrency(event.value as CurrencyCode);
+    const now = new Date();
+    setLastUpdated(
+      `${now.toLocaleDateString('ja-JP')} ${now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`
+    );
   };
 
   // ロットサイズを計算
@@ -354,26 +431,12 @@ const App: FC = () => {
     
     // 証拠金がUSDの場合
     if (balanceCurrency === 'USD') {
-      // USD建ての場合、1標準ロット(100,000通貨単位)のpip価値を計算
-      // 基本的に、USD/通貨ペアの場合、1pipあたり10ドル（1標準ロット）
-      const basePipValueUSD = 10; // 基本の1pipあたりの価値（USD）
-      
-      // 通貨ペアに応じた調整
-      let adjustedPipValueUSD = basePipValueUSD;
-      
-      if (currency === 'JPY') {
-        // USD/JPYは特殊なケース: 1 pip = 0.01円 = 0.01円 ÷ USD/JPYレート
-        // 例: USD/JPY=147.52の場合、0.01円 ÷ 147.52 = 約 $0.0000678（1通貨あたり）
-        // 標準ロット(100,000通貨)では: 0.0000678 × 100,000 = 約 $6.78
-        adjustedPipValueUSD = 100000 * 0.01 / parseFloat(currencyPrices['USD']);
-      } else if (currency === 'USD') {
-        // USD自体を取引する場合は特別な計算が必要
-        adjustedPipValueUSD = 10; // 簡略化
-      } else {
-        // 他の通貨ペア（EUR/USD, GBP/USDなど）は基本の10ドル/pipを使用
-        adjustedPipValueUSD = basePipValueUSD;
-      }
-      
+      // このアプリのペアはすべて XXX/JPY
+      // 1pip = 0.01円 × 100,000通貨 = 1,000円/lot
+      // pip価値(USD) = 1,000円 ÷ USD/JPYレート
+      const usdJpyRate = parseFloat(currencyPrices['USD']);
+      const adjustedPipValueUSD = 1000 / usdJpyRate;
+
       // リスク額 ÷ (ストップロス幅 × pip価値) = ロットサイズ
       const lotSize = riskAmount / (stopLoss * adjustedPipValueUSD);
       return lotSize.toFixed(2);
