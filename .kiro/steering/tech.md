@@ -59,6 +59,8 @@ Single-page application with no backend. All computation runs client-side. Excha
 - **Tailwind v4 via Vite plugin**: No config file required; utility-first with `tw-animate-css` for animations
 - **`@/` path alias**: Maps to `./src`; prefer absolute imports for cross-directory imports
 - **GitHub Pages deployment**: `vite.config.ts` sets `base` to `/lotSizing-app/` when `GITHUB_PAGES` env var is set
+- **Environment variables**: All Vite-exposed env vars must be prefixed `VITE_*`. Current vars: `VITE_EXCHANGERATE_API_KEY` (optional, enables paid endpoint), `VITE_GAS_RATES_URL` (optional, enables GAS primary source). `.env.example` is the reference template — never commit real keys.
+- **Client-side persistence**: User input state is persisted to `localStorage` using a lazy `useState` initializer pattern (read on mount, validate, fallback to default) plus a single consolidated `useEffect` that writes all keys on change. No external state library.
 
 ---
 _Document standards and patterns, not every dependency_

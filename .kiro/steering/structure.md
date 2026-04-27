@@ -62,6 +62,8 @@ type CurrencyCode = 'JPY' | 'USD' | 'EUR' | ...;
 - `useEffect` for reactive calculation on input change — dependencies listed explicitly
 - Formatting helpers (`formatNumberWithCommas`, `formatBalance`) defined as local functions within the component file
 - Inline component definitions (`UpdateRatesButton`) acceptable for small render-only subcomponents
+- **Persistence pattern**: For state that should survive reloads, use a lazy `useState` initializer that reads + validates from `localStorage`, paired with a single consolidated `useEffect` that writes all persisted keys when any of them changes. Adding new persisted state means extending both ends — no separate persistence layer.
+- **External-API helpers**: Network fetchers (`fetchFromGAS`, `fetchFromExchangeRateAPI`) are local functions inside `App.tsx`, returning `Partial<Record<CurrencyCode, string>>`. The orchestrator (`fetchCurrencyRates`) selects primary/fallback and merges into state via functional updater (`prev => ({ ...prev, ...fetched })`) to avoid clobbering keys not in the response.
 
 ---
 _Document patterns, not file trees. New files following patterns shouldn't require updates_
