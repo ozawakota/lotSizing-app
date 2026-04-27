@@ -5,7 +5,8 @@ FX Lot Size Calculator — a mobile-first web app that helps forex traders deter
 ## Core Capabilities
 
 - **Lot size calculation**: Derives recommended lots from account balance, risk %, stop-loss pips, leverage, and currency pair
-- **Live exchange rates**: Fetches JPY-based rates from open.er-api.com on load; user can refresh manually
+- **Live exchange rates**: Fetches JPY-based rates from a primary source (Google Apps Script wrapping Google Finance) with automatic fallback to ExchangeRate-API; user can refresh manually
+- **Input persistence**: User selections (account balance, base currency, risk %, stop-loss pips, leverage, balance currency) are persisted to `localStorage` so reloads preserve state
 - **Multi-currency support**: Account balance in JPY or USD; 8 base currencies (JPY, USD, EUR, GBP, AUD, NZD, CAD, CHF)
 - **Margin ratio display**: Shows margin maintenance ratio color-coded by safety threshold
 - **Settings summary modal**: Confirms all inputs and calculated results before trading

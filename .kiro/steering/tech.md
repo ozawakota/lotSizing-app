@@ -2,7 +2,13 @@
 
 ## Architecture
 
-Single-page application with no backend. All computation runs client-side. Exchange rates are fetched from a public API at runtime. Deployed as a static site to GitHub Pages.
+Single-page application with no backend. All computation runs client-side. Exchange rates are fetched from external providers at runtime with primary/fallback strategy. Deployed as a static site to GitHub Pages.
+
+### Rate-Fetching Strategy
+- **Primary**: Google Apps Script (GAS) endpoint wrapping `GOOGLEFINANCE()` in a Google Sheet — accessed via **JSONP** (`<script>` tag injection) to bypass CORS restrictions on `script.google.com`
+- **Fallback**: ExchangeRate-API (`v6.exchangerate-api.com` if `VITE_EXCHANGERATE_API_KEY` set, otherwise public `open.er-api.com`)
+- Source identifier is appended to the displayed update timestamp (e.g., `(GAS)`, `(ExchangeRate(fallback))`) for diagnostics
+- Response shape differs across providers (`conversion_rates` vs `rates`) — handle both
 
 ## Core Technologies
 
