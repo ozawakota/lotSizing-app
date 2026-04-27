@@ -79,7 +79,23 @@ const HelpModal: FC<HelpModalProps> = ({ isOpen, onClose }) => {
             <span className="font-semibold">レバレッジの影響</span>: 高レバレッジはより大きな利益の可能性を提供しますが、損失のリスクも同様に増大します。自分の経験レベルに合ったレバレッジを選択してください。
           </li>
         </ul>
-        
+
+        <h4 className="font-bold mt-4 mb-2">APIの使用について:</h4>
+        <ul className="list-disc pl-5 mb-3">
+          <li className="mb-2">
+            <span className="font-semibold">レート取得元</span>: 「レート更新」ボタン押下時に外部APIへ通信します。優先順位は (1) Google Apps Script 経由の Google Finance、(2) ExchangeRate-API（フォールバック）です。利用したソースは「価格更新日時」末尾に <code>(GAS)</code> や <code>(ExchangeRate)</code> として表示されます。
+          </li>
+          <li className="mb-2">
+            <span className="font-semibold">取得頻度の目安</span>: 無料APIにはリクエスト数の上限があります。レートは数分〜数十分単位の更新で十分なため、必要なときのみ手動更新することを推奨します。
+          </li>
+          <li className="mb-2">
+            <span className="font-semibold">通信内容</span>: 送信されるのはレート問い合わせのみで、証拠金額や入力値などの個人情報は外部に送信されません。入力値はブラウザの localStorage にのみ保存されます。
+          </li>
+          <li className="mb-2">
+            <span className="font-semibold">取得失敗時</span>: ネットワークエラーや上限超過などで取得に失敗した場合は、エラーメッセージが表示され、直前のレート（または初期デフォルト値）で計算が継続されます。実取引前には最新レートを必ず確認してください。
+          </li>
+        </ul>
+
         <p className="text-sm text-gray-400">
           ※このアプリはあくまで参考値です。実際の取引では、市場の状況や個人の取引戦略に応じて調整してください。
         </p>
