@@ -10,6 +10,9 @@ lerna-debug.log*
 node_modules
 *.local
 
+# Playwright CLI artifacts
+.playwright-cli/
+
 # Environment variables
 .env
 .env.*
