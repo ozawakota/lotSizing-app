@@ -15,6 +15,28 @@ type CurrencyCode = 'JPY' | 'USD' | 'EUR' | 'GBP' | 'AUD' | 'NZD' | 'CAD' | 'CHF
 // 証拠金通貨単位
 type BalanceCurrency = 'JPY' | 'USD';
 
+// 数値文字列を3桁ごとのカンマ区切りに整形する（純粋関数・モジュールスコープ）
+const formatNumberWithCommas = (num: string): string => {
+  // 数字以外の文字を除去
+  const numericValue = num.replace(/[^\d]/g, '');
+  // 3桁ごとにカンマを挿入
+  return numericValue.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+};
+
+// 整形後の文字列で、左からn個目の数字の直後にあたるカーソル位置を求める
+// （カンマ挿入によるズレを吸収し、数字インデックス基準でカーソルを復元するために使用）
+const caretPositionForDigitIndex = (formatted: string, digitCount: number): number => {
+  if (digitCount <= 0) return 0;
+  let count = 0;
+  for (let i = 0; i < formatted.length; i++) {
+    if (/\d/.test(formatted[i])) {
+      count++;
+      if (count === digitCount) return i + 1;
+    }
+  }
+  return formatted.length;
+};
+
 const App: FC = () => {
   const validCurrencies: CurrencyCode[] = ['JPY', 'USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
   const [currency, setCurrency] = useState<CurrencyCode>(() => {
@@ -42,7 +64,12 @@ const App: FC = () => {
   const [balanceCurrency, setBalanceCurrency] = useState<BalanceCurrency>(() => (localStorage.getItem('balanceCurrency') as BalanceCurrency) ?? 'JPY');
   const [riskAmountUSD, setRiskAmountUSD] = useState<string>('0'); // USD表示のリスク金額
   const [balanceEquivalent, setBalanceEquivalent] = useState<string>('0');
-  const [inputBalance, setInputBalance] = useState<string>(() => localStorage.getItem('inputBalance') ?? '0');
+  const [inputBalance, setInputBalance] = useState<string>(() => {
+    const stored = localStorage.getItem('inputBalance') ?? '0';
+    // JPYは初期表示からカンマ区切りに揃える（USDは小数点があるためそのまま）
+    const savedCurrency = (localStorage.getItem('balanceCurrency') as BalanceCurrency) ?? 'JPY';
+    return savedCurrency === 'JPY' ? formatNumberWithCommas(stored) : stored;
+  });
   const [marginRatio, setMarginRatio] = useState<string>('0.00'); // 証拠金維持率のstate追加
   const [isLoading, setIsLoading] = useState<boolean>(false); // APIロード中の状態
   const [errorMessage, setErrorMessage] = useState<string>(''); // エラーメッセージ
@@ -231,14 +258,6 @@ const App: FC = () => {
   }, [currency, currencyPrices]);
 
   // 数値を3桁カンマ区切りにフォーマットする関数
-  const formatNumberWithCommas = (num: string): string => {
-    // 数字以外の文字を除去
-    const numericValue = num.replace(/[^\d]/g, '');
-    // 3桁ごとにカンマを挿入
-    return numericValue.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  };
-
-
   // 数値をフォーマットする関数を通貨に合わせて変更
   const formatBalance = (num: string, currency: BalanceCurrency): string => {
     if (currency === 'USD') {
@@ -328,26 +347,38 @@ const App: FC = () => {
   // 証拠金額が変更されたときのハンドラを修正
   const handleAccountBalanceChange = (event: any) => {
     const inputValue = event.target.value;
-    
-    // まず入力値をそのまま保存（編集中の値）
-    setInputBalance(inputValue);
-    
-    // 次に処理済みの値を内部状態として保存
+
     if (balanceCurrency === 'USD') {
-      // USDの場合、小数点は許可
+      // USDの場合、小数点は許可。編集中の値はそのまま表示
+      setInputBalance(inputValue);
+
       // カンマを削除し、小数点と数字のみ許可
       const numericValue = inputValue.replace(/,/g, '').replace(/[^\d.]/g, '');
-      
+
       // 小数点が2つ以上ある場合は最初の小数点のみ保持
       const parts = numericValue.split('.');
       const formattedValue = parts[0] + (parts.length > 1 ? '.' + parts[1] : '');
-      
+
       setAccountBalance(formattedValue);
     } else {
-      // JPYの場合、整数のみ
-      // カンマを削除し、数字のみ許可
-      const numericValue = inputValue.replace(/,/g, '').replace(/[^\d]/g, '');
+      // JPYの場合、整数のみ。表示はカンマ区切りに整形する
+      const el = event.target as HTMLInputElement;
+      const prevCaret = el.selectionStart ?? inputValue.length;
+      // カーソルより左にある数字の個数を記録しておく（カンマ位置に依存しない基準）
+      const digitsBeforeCaret = inputValue.slice(0, prevCaret).replace(/[^\d]/g, '').length;
+
+      // 先頭の余分な0を除去（初期値"0"への打鍵で "01,000,000" になるのを防ぐ）
+      const numericValue = inputValue.replace(/[^\d]/g, '').replace(/^0+(?=\d)/, '');
+      const formatted = formatNumberWithCommas(numericValue);
+
       setAccountBalance(numericValue);
+      setInputBalance(formatted);
+
+      // 再レンダリングでカーソルが末尾に飛ぶため、数字インデックス基準で復元する
+      requestAnimationFrame(() => {
+        const newCaret = caretPositionForDigitIndex(formatted, digitsBeforeCaret);
+        el.setSelectionRange(newCaret, newCaret);
+      });
     }
   };
 
