@@ -1,0 +1,471 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - heading "FX" [level=1] [ref=e6]
+    - paragraph [ref=e7]: Lot Size Calculator
+    - generic [ref=e8]:
+      - generic [ref=e9]:
+        - generic [ref=e10]: 東京
+        - generic [ref=e13]: 11:56:00
+      - generic [ref=e14]:
+        - generic [ref=e15]: ロンドン
+        - generic [ref=e18]: 03:56:00
+      - generic [ref=e19]:
+        - generic [ref=e20]: ニューヨーク
+        - generic [ref=e23]: 22:56:00
+    - button "?" [ref=e24]
+  - generic [ref=e25]:
+    - generic [ref=e27]:
+      - generic [ref=e28]:
+        - paragraph [ref=e29]: "適正ロット:"
+        - paragraph [ref=e30]: 0.00 Lots
+      - generic [ref=e31]:
+        - paragraph [ref=e32]: "損失許容額:"
+        - paragraph [ref=e33]: 0円
+        - paragraph [ref=e34]: (約$0.00)
+    - generic [ref=e35]:
+      - paragraph [ref=e36]: 証拠金通貨選択
+      - listbox "証拠金通貨" [ref=e40]:
+        - generic [ref=e41]:
+          - generic [ref=e43]:
+            - option [aria-hidden] [ref=e44] [cursor=pointer]
+            - option [aria-hidden] [ref=e45] [cursor=pointer]
+            - option [aria-hidden] [ref=e46] [cursor=pointer]
+            - option [aria-hidden] [ref=e47] [cursor=pointer]
+            - option [aria-hidden] [ref=e48] [cursor=pointer]
+            - option [aria-hidden] [ref=e49] [cursor=pointer]
+            - option [aria-hidden] [ref=e50] [cursor=pointer]
+            - option [aria-hidden] [ref=e51] [cursor=pointer]
+            - option [aria-hidden] [ref=e52] [cursor=pointer]
+            - option [aria-hidden] [ref=e53] [cursor=pointer]
+            - option [aria-hidden] [ref=e54] [cursor=pointer]
+            - option [aria-hidden] [ref=e55] [cursor=pointer]
+            - option [aria-hidden] [ref=e56] [cursor=pointer]
+            - option [aria-hidden] [ref=e57] [cursor=pointer]
+            - option [aria-hidden] [ref=e58] [cursor=pointer]
+            - option [aria-hidden] [ref=e59] [cursor=pointer]
+            - option [aria-hidden] [ref=e60] [cursor=pointer]
+            - option [aria-hidden] [ref=e61] [cursor=pointer]
+            - option [aria-hidden] [ref=e62] [cursor=pointer]
+            - option [aria-hidden] [ref=e63] [cursor=pointer]
+            - option [aria-hidden] [ref=e64] [cursor=pointer]
+            - option [aria-hidden] [ref=e65] [cursor=pointer]
+            - option [aria-hidden] [ref=e66] [cursor=pointer]
+            - option [aria-hidden] [ref=e67] [cursor=pointer]
+            - option [aria-hidden] [ref=e68] [cursor=pointer]
+            - option [aria-hidden] [ref=e69] [cursor=pointer]
+            - option [aria-hidden] [ref=e70] [cursor=pointer]
+            - option [aria-hidden] [ref=e71] [cursor=pointer]
+            - option [aria-hidden] [ref=e72] [cursor=pointer]
+            - option [aria-hidden] [ref=e73] [cursor=pointer]
+            - option [aria-hidden] [ref=e74] [cursor=pointer]
+            - option [aria-hidden] [ref=e75] [cursor=pointer]
+            - option [aria-hidden] [ref=e76] [cursor=pointer]
+            - option [aria-hidden] [ref=e77] [cursor=pointer]
+            - option [aria-hidden] [ref=e78] [cursor=pointer]
+            - option [aria-hidden] [ref=e79] [cursor=pointer]
+            - option [aria-hidden] [ref=e80] [cursor=pointer]
+            - option [aria-hidden] [ref=e81] [cursor=pointer]
+            - option [aria-hidden] [ref=e82] [cursor=pointer]
+            - option [aria-hidden] [ref=e83] [cursor=pointer]
+            - option "日本円" [selected] [ref=e84] [cursor=pointer]
+            - option "米ドル" [ref=e85] [cursor=pointer]
+            - option [aria-hidden] [ref=e86] [cursor=pointer]
+            - option [aria-hidden] [ref=e87] [cursor=pointer]
+            - option [aria-hidden] [ref=e88] [cursor=pointer]
+            - option [aria-hidden] [ref=e89] [cursor=pointer]
+            - option [aria-hidden] [ref=e90] [cursor=pointer]
+            - option [aria-hidden] [ref=e91] [cursor=pointer]
+            - option [aria-hidden] [ref=e92] [cursor=pointer]
+            - option [aria-hidden] [ref=e93] [cursor=pointer]
+            - option [aria-hidden] [ref=e94] [cursor=pointer]
+            - option [aria-hidden] [ref=e95] [cursor=pointer]
+            - option [aria-hidden] [ref=e96] [cursor=pointer]
+            - option [aria-hidden] [ref=e97] [cursor=pointer]
+            - option [aria-hidden] [ref=e98] [cursor=pointer]
+            - option [aria-hidden] [ref=e99] [cursor=pointer]
+            - option [aria-hidden] [ref=e100] [cursor=pointer]
+            - option [aria-hidden] [ref=e101] [cursor=pointer]
+            - option [aria-hidden] [ref=e102] [cursor=pointer]
+            - option [aria-hidden] [ref=e103] [cursor=pointer]
+            - option [aria-hidden] [ref=e104] [cursor=pointer]
+            - option [aria-hidden] [ref=e105] [cursor=pointer]
+            - option [aria-hidden] [ref=e106] [cursor=pointer]
+            - option [aria-hidden] [ref=e107] [cursor=pointer]
+            - option [aria-hidden] [ref=e108] [cursor=pointer]
+            - option [aria-hidden] [ref=e109] [cursor=pointer]
+            - option [aria-hidden] [ref=e110] [cursor=pointer]
+            - option [aria-hidden] [ref=e111] [cursor=pointer]
+            - option [aria-hidden] [ref=e112] [cursor=pointer]
+            - option [aria-hidden] [ref=e113] [cursor=pointer]
+            - option [aria-hidden] [ref=e114] [cursor=pointer]
+            - option [aria-hidden] [ref=e115] [cursor=pointer]
+            - option [aria-hidden] [ref=e116] [cursor=pointer]
+            - option [aria-hidden] [ref=e117] [cursor=pointer]
+            - option [aria-hidden] [ref=e118] [cursor=pointer]
+            - option [aria-hidden] [ref=e119] [cursor=pointer]
+            - option [aria-hidden] [ref=e120] [cursor=pointer]
+            - option [aria-hidden] [ref=e121] [cursor=pointer]
+            - option [aria-hidden] [ref=e122] [cursor=pointer]
+            - option [aria-hidden] [ref=e123] [cursor=pointer]
+            - option [aria-hidden] [ref=e124] [cursor=pointer]
+          - generic [ref=e125]:
+            - option [aria-hidden] [ref=e126] [cursor=pointer]
+            - option [aria-hidden] [ref=e127] [cursor=pointer]
+            - option [aria-hidden] [ref=e128] [cursor=pointer]
+            - option [aria-hidden] [ref=e129] [cursor=pointer]
+            - option [aria-hidden] [ref=e130] [cursor=pointer]
+            - option [aria-hidden] [ref=e131] [cursor=pointer]
+            - option [aria-hidden] [ref=e132] [cursor=pointer]
+            - option [aria-hidden] [ref=e133] [cursor=pointer]
+            - option [aria-hidden] [ref=e134] [cursor=pointer]
+            - option [selected] [aria-hidden] [ref=e135] [cursor=pointer]: 日本円
+            - option [aria-hidden] [ref=e136] [cursor=pointer]: 米ドル
+            - option [aria-hidden] [ref=e137] [cursor=pointer]
+            - option [aria-hidden] [ref=e138] [cursor=pointer]
+            - option [aria-hidden] [ref=e139] [cursor=pointer]
+            - option [aria-hidden] [ref=e140] [cursor=pointer]
+            - option [aria-hidden] [ref=e141] [cursor=pointer]
+            - option [aria-hidden] [ref=e142] [cursor=pointer]
+            - option [aria-hidden] [ref=e143] [cursor=pointer]
+            - option [aria-hidden] [ref=e144] [cursor=pointer]
+  - generic [ref=e145]:
+    - generic [ref=e146]:
+      - paragraph [ref=e147]: ストップ幅（pips）
+      - spinbutton [ref=e150]: "25"
+      - paragraph [ref=e151]: "例: USD/JPYなら30pips = 0.30円"
+    - generic [ref=e152]:
+      - paragraph [ref=e153]: リスク%
+      - listbox "リスク%" [ref=e157]:
+        - generic [ref=e158]:
+          - generic [ref=e160]:
+            - option [aria-hidden] [ref=e161] [cursor=pointer]
+            - option [aria-hidden] [ref=e162] [cursor=pointer]
+            - option [aria-hidden] [ref=e163] [cursor=pointer]
+            - option [aria-hidden] [ref=e164] [cursor=pointer]
+            - option [aria-hidden] [ref=e165] [cursor=pointer]
+            - option [aria-hidden] [ref=e166] [cursor=pointer]
+            - option [aria-hidden] [ref=e167] [cursor=pointer]
+            - option [aria-hidden] [ref=e168] [cursor=pointer]
+            - option [aria-hidden] [ref=e169] [cursor=pointer]
+            - option [aria-hidden] [ref=e170] [cursor=pointer]
+            - option [aria-hidden] [ref=e171] [cursor=pointer]
+            - option [aria-hidden] [ref=e172] [cursor=pointer]
+            - option [aria-hidden] [ref=e173] [cursor=pointer]
+            - option [aria-hidden] [ref=e174] [cursor=pointer]
+            - option [aria-hidden] [ref=e175] [cursor=pointer]
+            - option [aria-hidden] [ref=e176] [cursor=pointer]
+            - option [aria-hidden] [ref=e177] [cursor=pointer]
+            - option [aria-hidden] [ref=e178] [cursor=pointer]
+            - option [aria-hidden] [ref=e179] [cursor=pointer]
+            - option [aria-hidden] [ref=e180] [cursor=pointer]
+            - option [aria-hidden] [ref=e181] [cursor=pointer]
+            - option [aria-hidden] [ref=e182] [cursor=pointer]
+            - option [aria-hidden] [ref=e183] [cursor=pointer]
+            - option [aria-hidden] [ref=e184] [cursor=pointer]
+            - option [aria-hidden] [ref=e185] [cursor=pointer]
+            - option [aria-hidden] [ref=e186] [cursor=pointer]
+            - option [aria-hidden] [ref=e187] [cursor=pointer]
+            - option [aria-hidden] [ref=e188] [cursor=pointer]
+            - option [aria-hidden] [ref=e189] [cursor=pointer]
+            - option [aria-hidden] [ref=e190] [cursor=pointer]
+            - option [aria-hidden] [ref=e191] [cursor=pointer]
+            - option [aria-hidden] [ref=e192] [cursor=pointer]
+            - option [aria-hidden] [ref=e193] [cursor=pointer]
+            - option [aria-hidden] [ref=e194] [cursor=pointer]
+            - option [aria-hidden] [ref=e195] [cursor=pointer]
+            - option [aria-hidden] [ref=e196] [cursor=pointer]
+            - option "0.5%" [ref=e197] [cursor=pointer]
+            - option "1.0%" [ref=e198] [cursor=pointer]
+            - option "1.5%" [ref=e199] [cursor=pointer]
+            - option "2.0%" [ref=e200] [cursor=pointer]
+            - option "2.5%" [selected] [ref=e201] [cursor=pointer]
+            - option "3.0%" [ref=e202] [cursor=pointer]
+            - option "3.5%" [ref=e203] [cursor=pointer]
+            - option "4.0%" [ref=e204] [cursor=pointer]
+            - option "4.5%" [ref=e205] [cursor=pointer]
+            - option "5.0%" [ref=e206] [cursor=pointer]
+            - option "5.5%" [ref=e207] [cursor=pointer]
+            - option "6.0%" [ref=e208] [cursor=pointer]
+            - option "6.5%" [ref=e209] [cursor=pointer]
+            - option "7.0%" [ref=e210] [cursor=pointer]
+            - option "7.5%" [ref=e211] [cursor=pointer]
+            - option "8.0%" [ref=e212] [cursor=pointer]
+            - option "8.5%" [ref=e213] [cursor=pointer]
+            - option "9.0%" [ref=e214] [cursor=pointer]
+            - option "9.5%" [ref=e215] [cursor=pointer]
+            - option "10.0%" [ref=e216] [cursor=pointer]
+            - option "10.5%" [ref=e217] [cursor=pointer]
+            - option "11.0%" [ref=e218] [cursor=pointer]
+            - option "11.5%" [ref=e219] [cursor=pointer]
+            - option "12.0%" [ref=e220] [cursor=pointer]
+            - option "12.5%" [ref=e221] [cursor=pointer]
+            - option "13.0%" [ref=e222] [cursor=pointer]
+            - option "13.5%" [ref=e223] [cursor=pointer]
+            - option "14.0%" [ref=e224] [cursor=pointer]
+            - option "14.5%" [ref=e225] [cursor=pointer]
+            - option "15.0%" [ref=e226] [cursor=pointer]
+            - option "15.5%" [ref=e227] [cursor=pointer]
+            - option "16.0%" [ref=e228] [cursor=pointer]
+            - option "16.5%" [ref=e229] [cursor=pointer]
+            - option "17.0%" [ref=e230] [cursor=pointer]
+            - option "17.5%" [ref=e231] [cursor=pointer]
+            - option "18.0%" [ref=e232] [cursor=pointer]
+            - option "18.5%" [ref=e233] [cursor=pointer]
+            - option "19.0%" [ref=e234] [cursor=pointer]
+            - option "19.5%" [ref=e235] [cursor=pointer]
+            - option "20.0%" [ref=e236] [cursor=pointer]
+            - option "20.5%" [ref=e237] [cursor=pointer]
+            - option "21.0%" [ref=e238] [cursor=pointer]
+            - option "21.5%" [ref=e239] [cursor=pointer]
+            - option "22.0%" [ref=e240] [cursor=pointer]
+            - option "22.5%" [ref=e241] [cursor=pointer]
+          - generic [ref=e242]:
+            - option [aria-hidden] [ref=e243] [cursor=pointer]
+            - option [aria-hidden] [ref=e244] [cursor=pointer]
+            - option [aria-hidden] [ref=e245] [cursor=pointer]
+            - option [aria-hidden] [ref=e246] [cursor=pointer]
+            - option [aria-hidden] [ref=e247] [cursor=pointer]
+            - option [aria-hidden] [ref=e248] [cursor=pointer]: 0.5%
+            - option [aria-hidden] [ref=e249] [cursor=pointer]: 1.0%
+            - option [aria-hidden] [ref=e250] [cursor=pointer]: 1.5%
+            - option [aria-hidden] [ref=e251] [cursor=pointer]: 2.0%
+            - option [selected] [aria-hidden] [ref=e252] [cursor=pointer]: 2.5%
+            - option [aria-hidden] [ref=e253] [cursor=pointer]: 3.0%
+            - option [aria-hidden] [ref=e254] [cursor=pointer]: 3.5%
+            - option [aria-hidden] [ref=e255] [cursor=pointer]: 4.0%
+            - option [aria-hidden] [ref=e256] [cursor=pointer]: 4.5%
+            - option [aria-hidden] [ref=e257] [cursor=pointer]: 5.0%
+            - option [aria-hidden] [ref=e258] [cursor=pointer]: 5.5%
+            - option [aria-hidden] [ref=e259] [cursor=pointer]: 6.0%
+            - option [aria-hidden] [ref=e260] [cursor=pointer]: 6.5%
+            - option [aria-hidden] [ref=e261] [cursor=pointer]: 7.0%
+  - generic [ref=e262]:
+    - paragraph [ref=e263]: 証拠金額 (円)
+    - textbox [ref=e266]:
+      - /placeholder: 証拠金額を入力
+      - text: "0"
+    - button "✕ クリア" [ref=e268]
+    - paragraph [ref=e270]: 取引に使用可能な資金額を入力してください
+  - generic [ref=e273]:
+    - generic [ref=e274]:
+      - paragraph [ref=e275]: 通貨ベース（価格）
+      - paragraph [ref=e276]: JPY = 1.0000
+    - generic [ref=e277]:
+      - paragraph [ref=e278]: 価格更新日時
+      - paragraph [ref=e279]: 2026/9/29 11:56 (デフォルト値)
+      - button "更新中..." [disabled] [ref=e280]
+  - generic [ref=e284]:
+    - generic [ref=e285]:
+      - paragraph [ref=e286]: 基軸通貨
+      - listbox "基軸通貨" [ref=e290]:
+        - generic [ref=e291]:
+          - generic [ref=e293]:
+            - option [aria-hidden] [ref=e294] [cursor=pointer]
+            - option [aria-hidden] [ref=e295] [cursor=pointer]
+            - option [aria-hidden] [ref=e296] [cursor=pointer]
+            - option [aria-hidden] [ref=e297] [cursor=pointer]
+            - option [aria-hidden] [ref=e298] [cursor=pointer]
+            - option [aria-hidden] [ref=e299] [cursor=pointer]
+            - option [aria-hidden] [ref=e300] [cursor=pointer]
+            - option [aria-hidden] [ref=e301] [cursor=pointer]
+            - option [aria-hidden] [ref=e302] [cursor=pointer]
+            - option [aria-hidden] [ref=e303] [cursor=pointer]
+            - option [aria-hidden] [ref=e304] [cursor=pointer]
+            - option [aria-hidden] [ref=e305] [cursor=pointer]
+            - option [aria-hidden] [ref=e306] [cursor=pointer]
+            - option [aria-hidden] [ref=e307] [cursor=pointer]
+            - option [aria-hidden] [ref=e308] [cursor=pointer]
+            - option [aria-hidden] [ref=e309] [cursor=pointer]
+            - option [aria-hidden] [ref=e310] [cursor=pointer]
+            - option [aria-hidden] [ref=e311] [cursor=pointer]
+            - option [aria-hidden] [ref=e312] [cursor=pointer]
+            - option [aria-hidden] [ref=e313] [cursor=pointer]
+            - option [aria-hidden] [ref=e314] [cursor=pointer]
+            - option [aria-hidden] [ref=e315] [cursor=pointer]
+            - option [aria-hidden] [ref=e316] [cursor=pointer]
+            - option [aria-hidden] [ref=e317] [cursor=pointer]
+            - option [aria-hidden] [ref=e318] [cursor=pointer]
+            - option [aria-hidden] [ref=e319] [cursor=pointer]
+            - option [aria-hidden] [ref=e320] [cursor=pointer]
+            - option [aria-hidden] [ref=e321] [cursor=pointer]
+            - option [aria-hidden] [ref=e322] [cursor=pointer]
+            - option [aria-hidden] [ref=e323] [cursor=pointer]
+            - option [aria-hidden] [ref=e324] [cursor=pointer]
+            - option [aria-hidden] [ref=e325] [cursor=pointer]
+            - option [aria-hidden] [ref=e326] [cursor=pointer]
+            - option [aria-hidden] [ref=e327] [cursor=pointer]
+            - option [aria-hidden] [ref=e328] [cursor=pointer]
+            - option [aria-hidden] [ref=e329] [cursor=pointer]
+            - option [aria-hidden] [ref=e330] [cursor=pointer]
+            - option [aria-hidden] [ref=e331] [cursor=pointer]
+            - option [aria-hidden] [ref=e332] [cursor=pointer]
+            - option [aria-hidden] [ref=e333] [cursor=pointer]
+            - option "JPY" [selected] [ref=e334] [cursor=pointer]
+            - option "USD" [ref=e335] [cursor=pointer]
+            - option "EUR" [ref=e336] [cursor=pointer]
+            - option "GBP" [ref=e337] [cursor=pointer]
+            - option "AUD" [ref=e338] [cursor=pointer]
+            - option "NZD" [ref=e339] [cursor=pointer]
+            - option "CAD" [ref=e340] [cursor=pointer]
+            - option "CHF" [ref=e341] [cursor=pointer]
+            - option [aria-hidden] [ref=e342] [cursor=pointer]
+            - option [aria-hidden] [ref=e343] [cursor=pointer]
+            - option [aria-hidden] [ref=e344] [cursor=pointer]
+            - option [aria-hidden] [ref=e345] [cursor=pointer]
+            - option [aria-hidden] [ref=e346] [cursor=pointer]
+            - option [aria-hidden] [ref=e347] [cursor=pointer]
+            - option [aria-hidden] [ref=e348] [cursor=pointer]
+            - option [aria-hidden] [ref=e349] [cursor=pointer]
+            - option [aria-hidden] [ref=e350] [cursor=pointer]
+            - option [aria-hidden] [ref=e351] [cursor=pointer]
+            - option [aria-hidden] [ref=e352] [cursor=pointer]
+            - option [aria-hidden] [ref=e353] [cursor=pointer]
+            - option [aria-hidden] [ref=e354] [cursor=pointer]
+            - option [aria-hidden] [ref=e355] [cursor=pointer]
+            - option [aria-hidden] [ref=e356] [cursor=pointer]
+            - option [aria-hidden] [ref=e357] [cursor=pointer]
+            - option [aria-hidden] [ref=e358] [cursor=pointer]
+            - option [aria-hidden] [ref=e359] [cursor=pointer]
+            - option [aria-hidden] [ref=e360] [cursor=pointer]
+            - option [aria-hidden] [ref=e361] [cursor=pointer]
+            - option [aria-hidden] [ref=e362] [cursor=pointer]
+            - option [aria-hidden] [ref=e363] [cursor=pointer]
+            - option [aria-hidden] [ref=e364] [cursor=pointer]
+            - option [aria-hidden] [ref=e365] [cursor=pointer]
+            - option [aria-hidden] [ref=e366] [cursor=pointer]
+            - option [aria-hidden] [ref=e367] [cursor=pointer]
+            - option [aria-hidden] [ref=e368] [cursor=pointer]
+            - option [aria-hidden] [ref=e369] [cursor=pointer]
+            - option [aria-hidden] [ref=e370] [cursor=pointer]
+            - option [aria-hidden] [ref=e371] [cursor=pointer]
+            - option [aria-hidden] [ref=e372] [cursor=pointer]
+            - option [aria-hidden] [ref=e373] [cursor=pointer]
+            - option [aria-hidden] [ref=e374] [cursor=pointer]
+          - generic [ref=e375]:
+            - option [aria-hidden] [ref=e376] [cursor=pointer]
+            - option [aria-hidden] [ref=e377] [cursor=pointer]
+            - option [aria-hidden] [ref=e378] [cursor=pointer]
+            - option [aria-hidden] [ref=e379] [cursor=pointer]
+            - option [aria-hidden] [ref=e380] [cursor=pointer]
+            - option [aria-hidden] [ref=e381] [cursor=pointer]
+            - option [aria-hidden] [ref=e382] [cursor=pointer]
+            - option [aria-hidden] [ref=e383] [cursor=pointer]
+            - option [aria-hidden] [ref=e384] [cursor=pointer]
+            - option [selected] [aria-hidden] [ref=e385] [cursor=pointer]: JPY
+            - option [aria-hidden] [ref=e386] [cursor=pointer]: USD
+            - option [aria-hidden] [ref=e387] [cursor=pointer]: EUR
+            - option [aria-hidden] [ref=e388] [cursor=pointer]: GBP
+            - option [aria-hidden] [ref=e389] [cursor=pointer]: AUD
+            - option [aria-hidden] [ref=e390] [cursor=pointer]: NZD
+            - option [aria-hidden] [ref=e391] [cursor=pointer]: CAD
+            - option [aria-hidden] [ref=e392] [cursor=pointer]: CHF
+            - option [aria-hidden] [ref=e393] [cursor=pointer]
+            - option [aria-hidden] [ref=e394] [cursor=pointer]
+    - generic [ref=e395]:
+      - paragraph [ref=e396]: レバレッジ
+      - listbox "レバレッジ" [ref=e400]:
+        - generic [ref=e401]:
+          - generic [ref=e403]:
+            - option [aria-hidden] [ref=e404] [cursor=pointer]
+            - option [aria-hidden] [ref=e405] [cursor=pointer]
+            - option [aria-hidden] [ref=e406] [cursor=pointer]
+            - option [aria-hidden] [ref=e407] [cursor=pointer]
+            - option [aria-hidden] [ref=e408] [cursor=pointer]
+            - option [aria-hidden] [ref=e409] [cursor=pointer]
+            - option [aria-hidden] [ref=e410] [cursor=pointer]
+            - option [aria-hidden] [ref=e411] [cursor=pointer]
+            - option [aria-hidden] [ref=e412] [cursor=pointer]
+            - option [aria-hidden] [ref=e413] [cursor=pointer]
+            - option [aria-hidden] [ref=e414] [cursor=pointer]
+            - option [aria-hidden] [ref=e415] [cursor=pointer]
+            - option [aria-hidden] [ref=e416] [cursor=pointer]
+            - option [aria-hidden] [ref=e417] [cursor=pointer]
+            - option [aria-hidden] [ref=e418] [cursor=pointer]
+            - option [aria-hidden] [ref=e419] [cursor=pointer]
+            - option [aria-hidden] [ref=e420] [cursor=pointer]
+            - option [aria-hidden] [ref=e421] [cursor=pointer]
+            - option [aria-hidden] [ref=e422] [cursor=pointer]
+            - option [aria-hidden] [ref=e423] [cursor=pointer]
+            - option [aria-hidden] [ref=e424] [cursor=pointer]
+            - option [aria-hidden] [ref=e425] [cursor=pointer]
+            - option [aria-hidden] [ref=e426] [cursor=pointer]
+            - option [aria-hidden] [ref=e427] [cursor=pointer]
+            - option [aria-hidden] [ref=e428] [cursor=pointer]
+            - option [aria-hidden] [ref=e429] [cursor=pointer]
+            - option [aria-hidden] [ref=e430] [cursor=pointer]
+            - option [aria-hidden] [ref=e431] [cursor=pointer]
+            - option [aria-hidden] [ref=e432] [cursor=pointer]
+            - option [aria-hidden] [ref=e433] [cursor=pointer]
+            - option [aria-hidden] [ref=e434] [cursor=pointer]
+            - option "1倍" [ref=e435] [cursor=pointer]
+            - option "2倍" [ref=e436] [cursor=pointer]
+            - option "5倍" [ref=e437] [cursor=pointer]
+            - option "10倍" [ref=e438] [cursor=pointer]
+            - option "25倍" [ref=e439] [cursor=pointer]
+            - option "50倍" [ref=e440] [cursor=pointer]
+            - option "100倍" [ref=e441] [cursor=pointer]
+            - option "200倍" [ref=e442] [cursor=pointer]
+            - option "400倍" [ref=e443] [cursor=pointer]
+            - option "500倍" [selected] [ref=e444] [cursor=pointer]
+            - option "888倍" [ref=e445] [cursor=pointer]
+            - option "1000倍" [ref=e446] [cursor=pointer]
+            - option [aria-hidden] [ref=e447] [cursor=pointer]
+            - option [aria-hidden] [ref=e448] [cursor=pointer]
+            - option [aria-hidden] [ref=e449] [cursor=pointer]
+            - option [aria-hidden] [ref=e450] [cursor=pointer]
+            - option [aria-hidden] [ref=e451] [cursor=pointer]
+            - option [aria-hidden] [ref=e452] [cursor=pointer]
+            - option [aria-hidden] [ref=e453] [cursor=pointer]
+            - option [aria-hidden] [ref=e454] [cursor=pointer]
+            - option [aria-hidden] [ref=e455] [cursor=pointer]
+            - option [aria-hidden] [ref=e456] [cursor=pointer]
+            - option [aria-hidden] [ref=e457] [cursor=pointer]
+            - option [aria-hidden] [ref=e458] [cursor=pointer]
+            - option [aria-hidden] [ref=e459] [cursor=pointer]
+            - option [aria-hidden] [ref=e460] [cursor=pointer]
+            - option [aria-hidden] [ref=e461] [cursor=pointer]
+            - option [aria-hidden] [ref=e462] [cursor=pointer]
+            - option [aria-hidden] [ref=e463] [cursor=pointer]
+            - option [aria-hidden] [ref=e464] [cursor=pointer]
+            - option [aria-hidden] [ref=e465] [cursor=pointer]
+            - option [aria-hidden] [ref=e466] [cursor=pointer]
+            - option [aria-hidden] [ref=e467] [cursor=pointer]
+            - option [aria-hidden] [ref=e468] [cursor=pointer]
+            - option [aria-hidden] [ref=e469] [cursor=pointer]
+            - option [aria-hidden] [ref=e470] [cursor=pointer]
+            - option [aria-hidden] [ref=e471] [cursor=pointer]
+            - option [aria-hidden] [ref=e472] [cursor=pointer]
+            - option [aria-hidden] [ref=e473] [cursor=pointer]
+            - option [aria-hidden] [ref=e474] [cursor=pointer]
+            - option [aria-hidden] [ref=e475] [cursor=pointer]
+            - option [aria-hidden] [ref=e476] [cursor=pointer]
+            - option [aria-hidden] [ref=e477] [cursor=pointer]
+            - option [aria-hidden] [ref=e478] [cursor=pointer]
+            - option [aria-hidden] [ref=e479] [cursor=pointer]
+            - option [aria-hidden] [ref=e480] [cursor=pointer]
+            - option [aria-hidden] [ref=e481] [cursor=pointer]
+            - option [aria-hidden] [ref=e482] [cursor=pointer]
+            - option [aria-hidden] [ref=e483] [cursor=pointer]
+            - option [aria-hidden] [ref=e484] [cursor=pointer]
+          - generic [ref=e485]:
+            - option [aria-hidden] [ref=e486] [cursor=pointer]: 1倍
+            - option [aria-hidden] [ref=e487] [cursor=pointer]: 2倍
+            - option [aria-hidden] [ref=e488] [cursor=pointer]: 5倍
+            - option [aria-hidden] [ref=e489] [cursor=pointer]: 10倍
+            - option [aria-hidden] [ref=e490] [cursor=pointer]: 25倍
+            - option [aria-hidden] [ref=e491] [cursor=pointer]: 50倍
+            - option [aria-hidden] [ref=e492] [cursor=pointer]: 100倍
+            - option [aria-hidden] [ref=e493] [cursor=pointer]: 200倍
+            - option [aria-hidden] [ref=e494] [cursor=pointer]: 400倍
+            - option [selected] [aria-hidden] [ref=e495] [cursor=pointer]: 500倍
+            - option [aria-hidden] [ref=e496] [cursor=pointer]: 888倍
+            - option [aria-hidden] [ref=e497] [cursor=pointer]: 1000倍
+            - option [aria-hidden] [ref=e498] [cursor=pointer]
+            - option [aria-hidden] [ref=e499] [cursor=pointer]
+            - option [aria-hidden] [ref=e500] [cursor=pointer]
+            - option [aria-hidden] [ref=e501] [cursor=pointer]
+            - option [aria-hidden] [ref=e502] [cursor=pointer]
+            - option [aria-hidden] [ref=e503] [cursor=pointer]
+            - option [aria-hidden] [ref=e504] [cursor=pointer]
+      - paragraph [ref=e505]: お使いのブローカーが提供するレバレッジを選択してください
+  - button [ref=e507]
