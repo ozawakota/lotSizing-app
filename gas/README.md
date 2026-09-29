@@ -94,3 +94,10 @@ var CONFIG = {
    数分単位の遅延が出るようなら「1分粒度」の実効性が落ちるので、その場合は `/price` を `/quote` に替えて `last_quote_at` で鮮度ガードを入れる等を検討する。
 2. **GAS 時間トリガーの精度** — 秒単位の正確さは保証されず、稀に実行がスキップ/遅延する。「毎分」はおおむねの目安。
 3. **判定はローソク境界に一致しない** — ローリング窓のため、窓内でスパイクして戻る動きは取りこぼし得る（設計上の割り切り。詳細は ADR-0001）。
+
+---
+
+> **通貨強弱は GAS を使わない構成に変更しました。** ボタン押下でクライアントから無料・キー不要の
+> Frankfurter(ECB) API を直接叩き、日次で算出・表示します（GAS 不要）。詳細は
+> [`docs/adr/0003-currency-strength-on-demand-client-side-free-api.md`](../docs/adr/0003-currency-strength-on-demand-client-side-free-api.md) を参照。
+> このディレクトリの GAS は price-move alert 専用です。

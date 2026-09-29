@@ -3,6 +3,7 @@ import '@mobiscroll/react/dist/css/mobiscroll.min.css';
 import { Select, Page, setOptions, localeJa, Input, Popup } from '@mobiscroll/react';
 import { FC, useState, useEffect } from 'react';
 import HelpModal from './HelpModal'; // 前提：別ファイルに作成済み
+import CurrencyStrengthMeter from './CurrencyStrengthMeter';
 
 setOptions({
   locale: localeJa,
@@ -718,6 +719,8 @@ const App: FC = () => {
         <p className='text-center'>Lot Size Calculator</p>
         {/* 時間 */}
         <WorldClock />
+        {/* 通貨強弱（毎時・折りたたみ式） */}
+        <CurrencyStrengthMeter />
         {/* ヘルプボタン（右上に配置） */}
         <button 
           className="absolute top-0 right-3 text-orange-500 font-bold rounded-full h-8 w-8 flex items-center justify-center border border-orange-500"
