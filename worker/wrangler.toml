@@ -11,7 +11,7 @@ crons = ["0 * * * *"]
 # KV ネームスペース（`wrangler kv namespace create STRENGTH_KV` で作成し id を貼る）
 [[kv_namespaces]]
 binding = "STRENGTH_KV"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "2bf5986d239e492ab68449b7df253ec4"
 
 # 秘匿情報はここに書かず、`wrangler secret put TWELVE_DATA_API_KEY` で登録する:
 #   TWELVE_DATA_API_KEY = <Twelve Data の APIキー>

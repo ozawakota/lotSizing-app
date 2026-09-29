@@ -50,8 +50,14 @@ const computeSnapshot = async (env: Env): Promise<StrengthSnapshot> => {
     `&apikey=${encodeURIComponent(env.TWELVE_DATA_API_KEY)}`;
 
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Twelve Data HTTP ${res.status}`);
-  const data = (await res.json()) as Record<string, TwelveDataNode>;
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Twelve Data HTTP ${res.status}: ${text.slice(0, 200)}`);
+  const parsed = JSON.parse(text) as Record<string, TwelveDataNode> & { code?: number; message?: string };
+  // 認証・プラン等のエラーは 200 でも {code, message} で返ることがある
+  if (typeof parsed.code === 'number' && parsed.message) {
+    throw new Error(`Twelve Data ${parsed.code}: ${parsed.message}`);
+  }
+  const data = parsed as Record<string, TwelveDataNode>;
 
   const start: JpyPairCloses = {};
   const end: JpyPairCloses = {};
@@ -92,10 +98,20 @@ export default {
     );
   },
 
-  // クライアント向け: KV のスナップショットを返すだけ。
-  async fetch(_req: Request, env: Env): Promise<Response> {
-    const cached = await env.STRENGTH_KV.get(KV_KEY);
-    const body = cached ?? JSON.stringify({ error: 'no snapshot' });
-    return new Response(body, { headers: CORS_HEADERS });
+  // クライアント向け: KV のスナップショットを返す。
+  // KV が空（デプロイ直後で Cron 未実行）の場合は初回だけその場で算出して保存する（cold-start解消）。
+  // KV が埋まっている間は再計算しないため、Twelve Data クォータは増えない。
+  async fetch(_req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    let cached = await env.STRENGTH_KV.get(KV_KEY);
+    if (!cached) {
+      try {
+        cached = JSON.stringify(await computeSnapshot(env));
+        ctx.waitUntil(env.STRENGTH_KV.put(KV_KEY, cached));
+      } catch (e) {
+        const error = e instanceof Error ? e.message : 'compute failed';
+        return new Response(JSON.stringify({ error }), { headers: CORS_HEADERS });
+      }
+    }
+    return new Response(cached, { headers: CORS_HEADERS });
   },
 };
