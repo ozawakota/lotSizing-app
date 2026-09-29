@@ -16,6 +16,10 @@ type CurrencyCode = 'JPY' | 'USD' | 'EUR' | 'GBP' | 'AUD' | 'NZD' | 'CAD' | 'CHF
 // 証拠金通貨単位
 type BalanceCurrency = 'JPY' | 'USD';
 
+// Mobiscroll の onChange イベントの最小構造（Select は value、Input は target.value を参照）
+type MbscValueChangeEvent = { value: unknown };
+type MbscInputChangeEvent = { target: { value: string } };
+
 // 数値文字列を3桁ごとのカンマ区切りに整形する（純粋関数・モジュールスコープ）
 const formatNumberWithCommas = (num: string): string => {
   // 数字以外の文字を除去
@@ -365,7 +369,7 @@ const App: FC = () => {
   };
 
   // 通貨変更時の処理
-  const handleBalanceCurrencyChange = (event: any) => {
+  const handleBalanceCurrencyChange = (event: MbscValueChangeEvent) => {
     const newCurrency = event.value as BalanceCurrency;
     const oldCurrency = balanceCurrency;
     
@@ -413,24 +417,24 @@ const App: FC = () => {
   };
 
   // リスク許容度が変更されたときのハンドラ
-  const handleRiskChange = (event: any) => {
-    setRiskPercentage(event.value);
+  const handleRiskChange = (event: MbscValueChangeEvent) => {
+    setRiskPercentage(event.value as number);
   };
 
   // レバレッジが変更されたときのハンドラ
-  const handleLeverageChange = (event: any) => {
-    setLeverage(event.value);
+  const handleLeverageChange = (event: MbscValueChangeEvent) => {
+    setLeverage(event.value as number);
   };
 
   // 損切り幅が変更されたときのハンドラ
-  const handleStopLossChange = (event: any) => {
+  const handleStopLossChange = (event: MbscInputChangeEvent) => {
     // 数値以外の入力を排除
     const value = event.target.value.replace(/[^0-9]/g, '');
     setStopLossPips(value);
   };
 
   // 証拠金額が変更されたときのハンドラを修正
-  const handleAccountBalanceChange = (event: any) => {
+  const handleAccountBalanceChange = (event: MbscInputChangeEvent) => {
     const inputValue = event.target.value;
 
     if (balanceCurrency === 'USD') {
@@ -528,7 +532,7 @@ const App: FC = () => {
   });
 
   // 通貨が変更されたときのハンドラ
-  const handleCurrencyChange = (event: any) => {
+  const handleCurrencyChange = (event: MbscValueChangeEvent) => {
     setCurrency(event.value as CurrencyCode);
     const now = new Date();
     setLastUpdated(
