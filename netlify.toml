@@ -1,0 +1,7 @@
+# Netlify ビルド設定
+# VITE_STRENGTH_URL は秘匿情報ではない公開Worker URL のためここに記載してよい
+# （Twelve Data キーは Cloudflare Worker のシークレット側に保持）。
+# Vite はビルド時に VITE_* を読み込み、バンドルへ埋め込む。
+[build.environment]
+  NODE_VERSION = "22"
+  VITE_STRENGTH_URL = "https://currency-strength.ozawa19890413.workers.dev"
