@@ -37,6 +37,90 @@ const caretPositionForDigitIndex = (formatted: string, digitCount: number): numb
   return formatted.length;
 };
 
+// FX市場セッション（東京・ロンドン・ニューヨーク）の現地時刻とオープン状態を
+// 1秒ごとに更新して表示する。オープン判定は各セッションの現地時間で行うため、
+// DST（英BST・米EDT）は Intl により自動で吸収される。
+type MarketSession = {
+  label: string;
+  timeZone: string;
+  openHour: number; // 現地オープン時刻（時, 24h）
+  closeHour: number; // 現地クローズ時刻（時, 24h）
+};
+
+// BabyPips標準のセッション時間（各セッションの現地時間で定義）
+const MARKET_SESSIONS: MarketSession[] = [
+  { label: '東京', timeZone: 'Asia/Tokyo', openHour: 9, closeHour: 18 },
+  { label: 'ロンドン', timeZone: 'Europe/London', openHour: 8, closeHour: 17 },
+  { label: 'ニューヨーク', timeZone: 'America/New_York', openHour: 8, closeHour: 17 },
+];
+
+// 指定タイムゾーンにおける現地の「時」と「曜日」を取り出す
+const getLocalHourAndWeekday = (timeZone: string, at: Date): { hour: number; weekday: string } => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour: '2-digit',
+    hourCycle: 'h23',
+    weekday: 'short',
+  }).formatToParts(at);
+  const hour = parseInt(parts.find((p) => p.type === 'hour')?.value ?? '0', 10);
+  const weekday = parts.find((p) => p.type === 'weekday')?.value ?? '';
+  return { hour, weekday };
+};
+
+// セッションがオープン中か判定する。FX市場は土日クローズのため、
+// 各セッションの現地曜日が月〜金かつ営業時間内のときのみオープン。
+const isSessionOpen = (session: MarketSession, at: Date): boolean => {
+  const { hour, weekday } = getLocalHourAndWeekday(session.timeZone, at);
+  const isWeekday = weekday !== 'Sat' && weekday !== 'Sun';
+  return isWeekday && hour >= session.openHour && hour < session.closeHour;
+};
+
+const formatSessionTime = (timeZone: string, at: Date): string =>
+  new Intl.DateTimeFormat('ja-JP', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).format(at);
+
+const WorldClock: FC = () => {
+  const [now, setNow] = useState<Date>(() => new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="flex justify-center gap-5 mt-1 text-xs">
+      {MARKET_SESSIONS.map((session) => {
+        const open = isSessionOpen(session, now);
+        return (
+          <div key={session.timeZone} className="text-center">
+            <div className="flex items-center justify-center gap-1">
+              <span
+                aria-hidden="true"
+                className={`inline-block h-2 w-2 rounded-full ${
+                  open ? 'bg-green-500' : 'border border-gray-400'
+                }`}
+              />
+              <span className={open ? 'text-gray-800 font-medium' : 'text-gray-400'}>
+                {session.label}
+              </span>
+            </div>
+            <div
+              className={`font-mono tabular-nums ${open ? 'text-gray-800' : 'text-gray-400'}`}
+            >
+              {formatSessionTime(session.timeZone, now)}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 const App: FC = () => {
   const validCurrencies: CurrencyCode[] = ['JPY', 'USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
   const [currency, setCurrency] = useState<CurrencyCode>(() => {
@@ -632,7 +716,8 @@ const App: FC = () => {
       <div className="relative">
         <h1 className='text-center text-2xl lh-base'>FX</h1>
         <p className='text-center'>Lot Size Calculator</p>
-        
+        {/* 時間 */}
+        <WorldClock />
         {/* ヘルプボタン（右上に配置） */}
         <button 
           className="absolute top-0 right-3 text-orange-500 font-bold rounded-full h-8 w-8 flex items-center justify-center border border-orange-500"
@@ -649,7 +734,7 @@ const App: FC = () => {
         </div>
       )}
 
-      <div className='flex justify-center'>
+      <div className='flex justify-center mt-2'>
 
       {/* 計算結果表示 - 常に表示 */}
       <div className=" bg-blue-50 rounded-md p-3 border border-blue-200 mx-3 w-55">

@@ -17,6 +17,14 @@ _Avoid_: rate, quote (when precision matters)
 **Rate source**:
 An external provider of exchange rates. Providers differ in **freshness** (how stale the number is) and **granularity** (how often it updates). GOOGLEFINANCE-via-GAS and ExchangeRate-API are treated as _display-grade_ (delayed / daily) — adequate for the calculator, **not** for detecting minute-scale moves.
 
+**Market session** (取引セッション):
+One of the three major FX trading windows the app tracks — **Tokyo**, **London**, **New York**. Each has an **open** and **close** boundary expressed in that session's *local* time (so DST is handled automatically): Tokyo 09:00–18:00 JST, London 08:00–17:00 local, New York 08:00–17:00 local (BabyPips convention). A session is either **open** or **closed** at a given instant.
+_Avoid_: market, timezone, city clock (a session is a market-activity window, not merely a place's wall-clock time)
+
+**Session overlap**:
+An interval when two sessions are simultaneously open (notably London↔New York). Overlaps are when liquidity and volatility are highest, so they matter to a trader deciding position size.
+_Avoid_: rush hour, peak (too informal)
+
 ### Price-move alerting
 
 **Price-move alert**:
