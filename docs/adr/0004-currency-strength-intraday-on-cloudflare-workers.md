@@ -2,7 +2,11 @@
 
 ## Status
 
-accepted（[ADR-0003](./0003-currency-strength-on-demand-client-side-free-api.md) を差し替え。[ADR-0002](./0002-currency-strength-hourly-on-gas-cached-snapshot.md) の設計を GAS 以外で再現）
+superseded by ADR-0005
+
+> Cloudflare Worker + Cron + KV というインフラ構成は維持しつつ、指標と表示を OANDA 方式
+> （対数変化率の合算・起点から0ベースの累積折れ線）へ変更したため差し替え。
+> 現行方針は [ADR-0005](./0005-currency-strength-oanda-cumulative-log.md) を参照。
 
 ## Context / Decision
 

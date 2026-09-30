@@ -1,18 +1,16 @@
 /// <reference types="@cloudflare/workers-types" />
-// 通貨強弱 Cloudflare Worker（Cron + KV キャッシュ）
-// 設計: docs/adr/0004-currency-strength-intraday-on-cloudflare-workers.md
+// 通貨強弱 Cloudflare Worker（Cron + KV キャッシュ / OANDA式・累積対数）
+// 設計: docs/adr/0005-currency-strength-oanda-cumulative-log.md
 //
-// - scheduled(): 毎時 Cron。Twelve Data の 1h 時系列（7ペア一括）を取得し、
-//   直前の確定クロックアワーで8通貨の強弱を算出して KV にキャッシュする。
-// - fetch(): クライアントに KV のスナップショットを JSON(+CORS) で返すだけ。
+// - scheduled(): 2つの Cron。
+//     "0 0 * * *"    → 日足シリーズ(daily)を更新（年初起点用、1日1回）
+//     "0 *\/2 * * *" → 15分足シリーズ(intraday)を更新（4時間前/当日用、2時間ごと）
+//   いずれも Twelve Data から7ペアの時系列を取得し KV に保存。失敗時は前回値を保持。
+// - fetch(): KV の intraday/daily を返すだけ（無ければ初回のみ算出）。クライアントが
+//   起点を選んで累積対数強弱を計算・折れ線表示する。
 //
-// 計算式はフロントと共有（単一実装）: ../../src/lib/strength.ts
-import {
-  computeStrengthScores,
-  type JpyPairCloses,
-  type JpyPairCurrency,
-  type StrengthSnapshot,
-} from '../../src/lib/strength';
+// 強弱の計算式はフロントと共有: ../../src/lib/strength.ts（computeCumulativeStrength）
+import type { JpyPairCurrency, RateSeries } from '../../src/lib/strength';
 
 interface Env {
   TWELVE_DATA_API_KEY: string;
@@ -20,7 +18,9 @@ interface Env {
 }
 
 const PAIRS: JpyPairCurrency[] = ['USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
-const KV_KEY = 'snapshot';
+
+const KV_INTRADAY = 'intraday';
+const KV_DAILY = 'daily';
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -38,80 +38,95 @@ interface TwelveDataNode {
   values?: TwelveDataValue[];
 }
 
-const toHhmm = (datetime: string): string => datetime.match(/(\d{2}:\d{2})/)?.[1] ?? datetime;
-
-// Twelve Data から7ペアの1時間足（直近2本）を一括取得し、スナップショットを組み立てる。
-const computeSnapshot = async (env: Env): Promise<StrengthSnapshot> => {
+// Twelve Data から7ペアの時系列を一括取得し、datetime で揃えた RateSeries を作る。
+const fetchSeries = async (env: Env, interval: string, outputsize: number): Promise<RateSeries> => {
   const symbols = PAIRS.map((c) => `${c}/JPY`);
   const url =
     'https://api.twelvedata.com/time_series' +
     `?symbol=${encodeURIComponent(symbols.join(','))}` +
-    '&interval=1h&outputsize=2&timezone=Asia/Tokyo' +
+    `&interval=${encodeURIComponent(interval)}` +
+    `&outputsize=${outputsize}` +
+    '&timezone=Asia/Tokyo' +
     `&apikey=${encodeURIComponent(env.TWELVE_DATA_API_KEY)}`;
 
   const res = await fetch(url);
   const text = await res.text();
   if (!res.ok) throw new Error(`Twelve Data HTTP ${res.status}: ${text.slice(0, 200)}`);
   const parsed = JSON.parse(text) as Record<string, TwelveDataNode> & { code?: number; message?: string };
-  // 認証・プラン等のエラーは 200 でも {code, message} で返ることがある
   if (typeof parsed.code === 'number' && parsed.message) {
     throw new Error(`Twelve Data ${parsed.code}: ${parsed.message}`);
   }
-  const data = parsed as Record<string, TwelveDataNode>;
 
-  const start: JpyPairCloses = {};
-  const end: JpyPairCloses = {};
-  let windowStart = '';
-  let windowEnd = '';
-
+  // シンボルごとに datetime→close のマップを作る
+  const maps: Record<JpyPairCurrency, Map<string, number>> = {} as Record<JpyPairCurrency, Map<string, number>>;
   for (const c of PAIRS) {
-    const node = data[`${c}/JPY`];
+    const node = parsed[`${c}/JPY`];
     if (!node || node.status !== 'ok' || !node.values || node.values.length < 2) {
       throw new Error(`系列不足: ${c}/JPY (${node?.message ?? 'no data'})`);
     }
-    const e = parseFloat(node.values[0].close); // 最新＝窓終了
-    const s = parseFloat(node.values[1].close); // 1本前＝窓開始
-    if (Number.isNaN(e) || Number.isNaN(s) || s <= 0) throw new Error(`終値異常: ${c}/JPY`);
-    end[c] = e;
-    start[c] = s;
-    if (!windowStart) {
-      windowStart = toHhmm(node.values[1].datetime);
-      windowEnd = toHhmm(node.values[0].datetime);
+    const m = new Map<string, number>();
+    for (const v of node.values) {
+      const close = parseFloat(v.close);
+      if (!Number.isNaN(close) && close > 0) m.set(v.datetime, close);
     }
+    maps[c] = m;
   }
 
-  return { windowStart, windowEnd, computedAt: Date.now(), scores: computeStrengthScores(start, end) };
+  // 全ペアに存在する datetime のみ（昇順）を採用して整列
+  const first = maps[PAIRS[0]];
+  const datetimes = [...first.keys()]
+    .filter((dt) => PAIRS.every((c) => maps[c].has(dt)))
+    .sort();
+  if (datetimes.length < 2) throw new Error('共通の時系列が不足');
+
+  const rates: Record<JpyPairCurrency, number[]> = {} as Record<JpyPairCurrency, number[]>;
+  for (const c of PAIRS) rates[c] = datetimes.map((dt) => maps[c].get(dt) as number);
+
+  return { interval, datetimes, rates };
+};
+
+const updateIntraday = async (env: Env): Promise<RateSeries> => {
+  const series = await fetchSeries(env, '15min', 130); // 約32時間分（当日＋4時間前をカバー）
+  await env.STRENGTH_KV.put(KV_INTRADAY, JSON.stringify(series));
+  return series;
+};
+
+const updateDaily = async (env: Env): Promise<RateSeries> => {
+  const series = await fetchSeries(env, '1day', 300); // 約1年分（年初起点をカバー）
+  await env.STRENGTH_KV.put(KV_DAILY, JSON.stringify(series));
+  return series;
 };
 
 export default {
-  // 毎時 Cron。失敗時は前回の KV スナップショットを保持（上書きしない）。
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+  // Cron: event.cron で日足/15分足を出し分け。失敗時は前回値を保持。
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    const job = event.cron === '0 0 * * *' ? updateDaily : updateIntraday;
     ctx.waitUntil(
-      (async () => {
-        try {
-          const snapshot = await computeSnapshot(env);
-          await env.STRENGTH_KV.put(KV_KEY, JSON.stringify(snapshot));
-        } catch (e) {
-          console.error('通貨強弱 Cron 失敗（前回値を保持）:', e);
-        }
-      })(),
+      job(env).catch((e) => {
+        console.error('通貨強弱 Cron 失敗（前回値を保持）:', e);
+      }),
     );
   },
 
-  // クライアント向け: KV のスナップショットを返す。
-  // KV が空（デプロイ直後で Cron 未実行）の場合は初回だけその場で算出して保存する（cold-start解消）。
-  // KV が埋まっている間は再計算しないため、Twelve Data クォータは増えない。
+  // クライアント向け: KV の intraday/daily を返す。無ければ初回のみ算出（cold-start解消）。
   async fetch(_req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    let cached = await env.STRENGTH_KV.get(KV_KEY);
-    if (!cached) {
-      try {
-        cached = JSON.stringify(await computeSnapshot(env));
-        ctx.waitUntil(env.STRENGTH_KV.put(KV_KEY, cached));
-      } catch (e) {
-        const error = e instanceof Error ? e.message : 'compute failed';
-        return new Response(JSON.stringify({ error }), { headers: CORS_HEADERS });
+    try {
+      let intradayRaw = await env.STRENGTH_KV.get(KV_INTRADAY);
+      let dailyRaw = await env.STRENGTH_KV.get(KV_DAILY);
+      if (!intradayRaw) {
+        const s = await updateIntraday(env);
+        intradayRaw = JSON.stringify(s);
       }
+      if (!dailyRaw) {
+        const s = await updateDaily(env);
+        dailyRaw = JSON.stringify(s);
+      }
+      ctx.waitUntil(Promise.resolve());
+      const body = `{"computedAt":${Date.now()},"intraday":${intradayRaw},"daily":${dailyRaw}}`;
+      return new Response(body, { headers: CORS_HEADERS });
+    } catch (e) {
+      const error = e instanceof Error ? e.message : 'compute failed';
+      return new Response(JSON.stringify({ error }), { headers: CORS_HEADERS });
     }
-    return new Response(cached, { headers: CORS_HEADERS });
   },
 };

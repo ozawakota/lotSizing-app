@@ -41,20 +41,20 @@ The move size that fires an alert. Currently **25 pips** (0.25 yen for USD/JPY).
 ### Currency strength
 
 **Currency strength** (通貨強弱):
-A per-currency momentum score: for each of the app's **8 currencies**, the equal-weighted average of its **% change against each of the other 7** over a lookback **window**. Scores are relative and sum to ~0 across the basket — a currency is "strong" only relative to the others, never in absolute terms. Distinct from a **Spot price** (one rate at one instant) and from a **Rolling 5-minute move** (a single-pair spike metric).
-_Avoid_: momentum, trend, index (too generic); "strong currency" as an absolute claim.
+An **OANDA-style cumulative momentum score** (per ADR-0005): for each of the app's **8 currencies**, the **sum of its log changes against each of the other 7** (derived via JPY cross), **accumulated from a chosen start point** with the start fixed at **0**. Positive = bought/strengthening, negative = sold/weakening. Scores are relative and sum to ~0 at every point — a currency is "strong" only relative to the others, never in absolute terms. Distinct from a **Spot price** (one rate at one instant) and a **Rolling 5-minute move** (a single-pair spike metric).
+_Avoid_: momentum, trend, index (too generic); "strong currency" as an absolute claim; "average % change" (superseded — it is now a **sum of log changes**).
 
-**Strength window**:
-The lookback the % change is measured over: the **last completed clock hour** (intraday — the two most recent hourly closes from the time-series source, e.g. 09:00→10:00). This is **hourly/intraday**, sourced from a keyed intraday provider (Twelve Data) via a server, because a keyless source can only give daily data.
-_Avoid_: interval, period (say "window"); "daily" (the window is intraday again — see ADR-0004).
+**Strength start point** (起点):
+The 0-baseline the cumulative plot is measured from. One of **4時間前 / 当日 / 年初** (`4h` / `today` / `year`), matching OANDA's selector. `4h` and `today` are read from the 15-minute series; `year` from the daily series.
+_Avoid_: "window" (the metric is now a running cumulative from a start point, not a single fixed window).
 
 **Strength refresh**:
-A **Cloudflare Worker Cron** recomputes the snapshot **once per hour**: it fetches the 7 X/JPY hourly series from **Twelve Data** (key held server-side in a Worker secret), computes the scores, and caches them in **Workers KV**. The client reads the cached snapshot from the Worker endpoint and **auto-refreshes every hour while open** (plus a manual button). No GAS; the SPA stays on GitHub Pages.
-_Avoid_: "on demand only", "keyless", "Frankfurter" (superseded — see ADR-0004); "GAS" (deliberately not used).
+A **Cloudflare Worker** with two Cron jobs fetches the 7 X/JPY series from **Twelve Data** (key in a Worker secret) and caches them in **Workers KV**: the **15-minute** series every **2 hours** (covers `4h`+`today`), the **daily** series **once a day** (covers `year`). This keeps usage within the Twelve Data free tier (~91 credits/day). The client reads the cached series, computes the cumulative strength for the selected start point in the browser, renders a **0-based line chart**, and **auto-refreshes hourly while open** (plus a manual button). No GAS; the SPA stays on GitHub Pages.
+_Avoid_: "hourly recompute", "single snapshot" (superseded — see ADR-0005); "GAS" (deliberately not used).
 
 ## Flagged ambiguities
 
-- **"毎時" (hourly) — restored, on a non-GAS server.** The request "毎時、通貨強弱を表示" is intraday/hourly. Design history: ADR-0002 (GAS cron, rejected — "no GAS") → ADR-0003 (keyless daily, on-demand button — rejected — "want hourly-moving values") → **ADR-0004 (current): Cloudflare Worker Cron + KV cache + Twelve Data, client auto-refreshes hourly.** "毎時" now means both the recompute cadence and the intraday window granularity.
+- **"毎時" (hourly) → now a cumulative-from-start-point view.** Design history: ADR-0002 (GAS cron, rejected — "no GAS") → ADR-0003 (keyless daily, on-demand — rejected — "want hourly-moving values") → ADR-0004 (Cloudflare Worker snapshot per hour) → **ADR-0005 (current): OANDA-style cumulative log strength on Cloudflare, start point 4時間前/当日/年初, line chart.** The client auto-refreshes hourly while open, but the metric is now a running cumulative from a **Strength start point**, not a single-hour window.
 
 - **"5-minute candle" (5分足)** — In common trading language this implies OHLC candle data (open/high/low/close on fixed boundaries). In *this* project the trigger is a **Rolling 5-minute move** on spot price, which is deliberately *not* candle-based. When someone says "5分足で25pips変化", they mean the rolling spot difference, not a candle's range.
 

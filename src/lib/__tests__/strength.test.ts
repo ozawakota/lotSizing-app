@@ -4,8 +4,11 @@ import {
   computeStrengthScores,
   sortScores,
   formatWindowLabel,
+  findStartIndex,
+  computeCumulativeStrength,
   type StrengthScore,
   type StrengthSnapshot,
+  type RateSeries,
 } from '../strength';
 
 describe('computeStrengthScores', () => {
@@ -72,5 +75,82 @@ describe('formatWindowLabel', () => {
       scores: [],
     };
     expect(formatWindowLabel(snapshot)).toBe('09:00 → 10:00');
+  });
+});
+
+const flatRow = { USD: 100, EUR: 100, GBP: 100, AUD: 100, NZD: 100, CAD: 100, CHF: 100 };
+
+// Build an aligned RateSeries from per-datetime rate rows.
+const makeSeries = (
+  interval: string,
+  points: Array<{ dt: string; rates: Record<string, number> }>,
+): RateSeries => ({
+  interval,
+  datetimes: points.map((p) => p.dt),
+  rates: {
+    USD: points.map((p) => p.rates.USD),
+    EUR: points.map((p) => p.rates.EUR),
+    GBP: points.map((p) => p.rates.GBP),
+    AUD: points.map((p) => p.rates.AUD),
+    NZD: points.map((p) => p.rates.NZD),
+    CAD: points.map((p) => p.rates.CAD),
+    CHF: points.map((p) => p.rates.CHF),
+  },
+});
+
+describe('findStartIndex', () => {
+  const dts = [
+    '2026-09-29 22:00:00',
+    '2026-09-30 00:00:00',
+    '2026-09-30 06:00:00',
+    '2026-09-30 09:00:00',
+    '2026-09-30 10:00:00',
+  ];
+  const now = new Date('2026-09-30T01:05:00Z'); // 10:05 JST on 2026-09-30
+
+  it("'today' picks the first bar on today's JST date", () => {
+    expect(findStartIndex(dts, 'today', now)).toBe(1); // 2026-09-30 00:00
+  });
+
+  it("'4h' picks the first bar at/after now-4h", () => {
+    // now-4h = 06:05 JST -> first bar >= that is index 3 (09:00)
+    expect(findStartIndex(dts, '4h', now)).toBe(3);
+  });
+
+  it("'year' picks the first bar in the current JST year", () => {
+    const yearDts = ['2025-12-31 00:00:00', '2026-01-05 00:00:00', '2026-09-30 00:00:00'];
+    expect(findStartIndex(yearDts, 'year', now)).toBe(1);
+  });
+});
+
+describe('computeCumulativeStrength', () => {
+  it('starts every currency at 0 and keeps the sum ~0 at each point', () => {
+    const series = makeSeries('15min', [
+      { dt: '2026-09-30 09:00:00', rates: { ...flatRow } },
+      { dt: '2026-09-30 09:15:00', rates: { ...flatRow, USD: 101 } }, // USD +1% vs JPY
+      { dt: '2026-09-30 09:30:00', rates: { ...flatRow, USD: 102 } },
+    ]);
+    const { datetimes, series: out, latest } = computeCumulativeStrength(series, 0);
+
+    expect(datetimes).toHaveLength(3);
+    for (const c of CURRENCIES) expect(out[c][0]).toBeCloseTo(0, 9); // 0 baseline
+    for (let i = 0; i < 3; i++) {
+      const sum = CURRENCIES.reduce((acc, c) => acc + out[c][i], 0);
+      expect(Math.abs(sum)).toBeLessThan(1e-6);
+    }
+    // USD rose the most -> strongest at the end
+    expect(sortScores(latest)[0].currency).toBe('USD');
+    expect(latest.find((s) => s.currency === 'USD')!.changePct).toBeGreaterThan(0);
+  });
+
+  it('slices from the given start index', () => {
+    const series = makeSeries('15min', [
+      { dt: 'a', rates: { ...flatRow } },
+      { dt: 'b', rates: { ...flatRow, USD: 101 } },
+      { dt: 'c', rates: { ...flatRow, USD: 102 } },
+    ]);
+    const res = computeCumulativeStrength(series, 1);
+    expect(res.datetimes).toEqual(['b', 'c']);
+    for (const c of CURRENCIES) expect(res.series[c][0]).toBeCloseTo(0, 9); // baseline at index 1
   });
 });

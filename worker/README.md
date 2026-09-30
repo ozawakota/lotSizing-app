@@ -1,22 +1,22 @@
 # 通貨強弱 Worker (Cloudflare Workers)
 
-イントラデイの通貨強弱を **毎時 Cron で算出し KV にキャッシュ**、クライアントへ配信する Cloudflare Worker。
-GAS は使わない。設計は [`docs/adr/0004-currency-strength-intraday-on-cloudflare-workers.md`](../docs/adr/0004-currency-strength-intraday-on-cloudflare-workers.md)、
-用語は [`CONTEXT.md`](../CONTEXT.md)（Currency strength / Strength window / Strength refresh）を参照。
+OANDA式の通貨強弱（対数変化率の合算・起点から0ベースの累積）を出すため、**X/JPYの時系列を Cron で取得し KV にキャッシュ**、クライアントへ配信する Cloudflare Worker。
+GAS は使わない。設計は [`docs/adr/0005-currency-strength-oanda-cumulative-log.md`](../docs/adr/0005-currency-strength-oanda-cumulative-log.md)、
+用語は [`CONTEXT.md`](../CONTEXT.md)（Currency strength / Strength start point / Strength refresh）を参照。
 
-- 本体: [`src/index.ts`](./src/index.ts)（`scheduled()`＝毎時Cron、`fetch()`＝KV配信）
-- 計算式はフロントの [`src/lib/strength.ts`](../src/lib/strength.ts) を共有 import（単一実装）
+- 本体: [`src/index.ts`](./src/index.ts)（`scheduled()`＝2つのCronで時系列取得、`fetch()`＝KV配信）
+- 強弱の計算式はフロントの [`src/lib/strength.ts`](../src/lib/strength.ts)（`computeCumulativeStrength`）を共有 import（単一実装）。クライアントが起点(4時間前/当日/年初)を選んで累積を計算。
 
 ## 仕様の要点
 
 | 項目 | 値 |
 |------|-----|
 | 対象通貨 | JPY, USD, EUR, GBP, AUD, NZD, CAD, CHF の8通貨 |
-| 指標 | 各通貨の他7通貨に対する変化率の等加重平均（総和≈0） |
-| 窓 | 直前の確定クロックアワー（例 09:00→10:00、1時間足2本） |
-| データ源 | Twelve Data `time_series`（1h・直近2本、7ペア一括＝7 req/回） |
-| 実行 | Cloudflare Cron・毎時（`0 * * * *`） |
-| キャッシュ | Workers KV（キー `snapshot`） |
+| 指標 | 各通貨の他7通貨に対する**対数変化率の合算**を起点から累積（総和≈0、起点0） |
+| 起点 | 4時間前 / 当日（15分足）／ 年初（日足） |
+| データ源 | Twelve Data `time_series`（7ペア一括＝7 credits/回、credits はシンボル数課金） |
+| 実行 | Cron 2本：15分足=2時間ごと `0 */2 * * *`、日足=1日1回 `0 0 * * *`（≈91 credits/日で無料枠内） |
+| キャッシュ | Workers KV（キー `intraday` / `daily`） |
 | 失敗時 | KV を上書きせず前回値を保持 |
 
 ## セットアップ

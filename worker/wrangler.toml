@@ -4,9 +4,10 @@ name = "currency-strength"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 
-# 毎時0分に scheduled() を実行（直前の確定クロックアワーで再計算）
+# Cron: 15分足は2時間ごと、日足は1日1回（無料枠に収めるための頻度調整）
+# 15分足 12回/日 ×7 + 日足 1回/日 ×7 ≈ 91 credits/日（Twelve Data無料枠内）
 [triggers]
-crons = ["0 * * * *"]
+crons = ["0 */2 * * *", "0 0 * * *"]
 
 # KV ネームスペース（`wrangler kv namespace create STRENGTH_KV` で作成し id を貼る）
 [[kv_namespaces]]

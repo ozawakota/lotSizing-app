@@ -2,29 +2,36 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import CurrencyStrengthMeter from '../CurrencyStrengthMeter';
-import type { StrengthSnapshot } from '../lib/strength';
+import type { RateSeries } from '../lib/strength';
 
 const WORKER_URL = 'https://currency-strength.example.workers.dev';
 
-// USD 最強・JPY 最弱になる Worker スナップショット
-const snapshot: StrengthSnapshot = {
-  windowStart: '09:00',
-  windowEnd: '10:00',
+// USD だけ上昇する小さな時系列を作る
+const makeSeries = (interval: string, dts: string[], usd: number[]): RateSeries => ({
+  interval,
+  datetimes: dts,
+  rates: {
+    USD: usd,
+    EUR: dts.map(() => 100),
+    GBP: dts.map(() => 100),
+    AUD: dts.map(() => 100),
+    NZD: dts.map(() => 100),
+    CAD: dts.map(() => 100),
+    CHF: dts.map(() => 100),
+  },
+});
+
+const body = {
   computedAt: Date.now(),
-  scores: [
-    { currency: 'USD', changePct: 0.42 },
-    { currency: 'GBP', changePct: 0.18 },
-    { currency: 'EUR', changePct: 0.05 },
-    { currency: 'AUD', changePct: 0.01 },
-    { currency: 'NZD', changePct: -0.02 },
-    { currency: 'CAD', changePct: -0.1 },
-    { currency: 'CHF', changePct: -0.2 },
-    { currency: 'JPY', changePct: -0.34 },
-  ],
+  intraday: makeSeries(
+    '15min',
+    ['2026-09-30 09:00:00', '2026-09-30 09:15:00', '2026-09-30 09:30:00', '2026-09-30 09:45:00'],
+    [100, 100.3, 100.6, 101],
+  ),
+  daily: makeSeries('1day', ['2026-09-28 00:00:00', '2026-09-29 00:00:00', '2026-09-30 00:00:00'], [100, 100.5, 101]),
 };
 
-const okResponse = (body: unknown): Response =>
-  ({ ok: true, status: 200, json: async () => body }) as Response;
+const okResponse = (b: unknown): Response => ({ ok: true, status: 200, json: async () => b }) as Response;
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -37,21 +44,31 @@ afterEach(() => {
 });
 
 describe('CurrencyStrengthMeter', () => {
-  it('auto-fetches the Worker snapshot on mount and renders ranked bars', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(snapshot));
+  it('auto-fetches on mount and renders the chart + legend', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
     render(<CurrencyStrengthMeter />);
 
-    await waitFor(() => expect(screen.getByText('09:00 → 10:00')).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('img', { name: '通貨強弱チャート' })).toBeTruthy());
     expect(String(fetchSpy.mock.calls[0][0])).toBe(WORKER_URL);
-    // USD は JPY より上位（DOM上で前）
-    const usd = screen.getByText('USD');
-    const jpy = screen.getByText('JPY');
-    expect(usd.compareDocumentPosition(jpy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // 凡例に8通貨
+    for (const c of ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD']) {
+      expect(screen.getByText(c)).toBeTruthy();
+    }
+  });
+
+  it('renders start-point buttons and lets you switch range', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
+    render(<CurrencyStrengthMeter />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '年初' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: '年初' }));
+    // 切替後もチャートが描画される（daily を使用）
+    expect(screen.getByRole('img', { name: '通貨強弱チャート' })).toBeTruthy();
   });
 
   it('re-fetches automatically every hour', async () => {
     vi.useFakeTimers();
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(snapshot));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
     render(<CurrencyStrengthMeter />);
 
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
@@ -59,24 +76,15 @@ describe('CurrencyStrengthMeter', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('re-fetches when the update button is pressed', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(snapshot));
-    render(<CurrencyStrengthMeter />);
-
-    await waitFor(() => expect(screen.getByRole('button', { name: '通貨強弱を更新' })).toBeTruthy());
-    fireEvent.click(screen.getByRole('button', { name: '通貨強弱を更新' }));
-    await waitFor(() => expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(2));
-  });
-
-  it('shows an error and no bars when the fetch fails, without crashing', async () => {
+  it('shows an error and no chart when the fetch fails', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network down'));
     render(<CurrencyStrengthMeter />);
 
     await waitFor(() => expect(screen.getByText('network down')).toBeTruthy());
-    expect(screen.queryByText('→', { exact: false })).toBeNull();
+    expect(screen.queryByRole('img', { name: '通貨強弱チャート' })).toBeNull();
   });
 
-  it('surfaces a "no snapshot" error payload from the Worker', async () => {
+  it('surfaces an error payload from the Worker', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse({ error: 'no snapshot' }));
     render(<CurrencyStrengthMeter />);
 
