@@ -15,8 +15,8 @@ import {
 
 interface StrengthData {
   computedAt: number;
-  intraday: RateSeries;
-  daily: RateSeries;
+  intraday: RateSeries | null; // Worker がまだ取得していないと null になり得る
+  daily: RateSeries | null;
 }
 
 const REFRESH_MS = 60 * 60 * 1000; // 1時間
@@ -115,6 +115,12 @@ const CurrencyStrengthMeter: FC = () => {
       </div>
 
       {error && <p className="mt-1 text-center text-red-600">{error}</p>}
+
+      {data && !error && !cumulative && (
+        <p className="mt-1 text-center text-gray-400">
+          {RANGE_LABELS[range]}データを準備中です。少し待って「更新」を押してください。
+        </p>
+      )}
 
       {cumulative && cumulative.datetimes.length >= 2 && (
         <div className="mx-auto mt-2 max-w-md">

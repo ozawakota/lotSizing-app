@@ -4,10 +4,11 @@ name = "currency-strength"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 
-# Cron: 15分足は2時間ごと、日足は1日1回（無料枠に収めるための頻度調整）
+# Cron: 15分足は2時間ごと(毎偶数時00分)、日足は1日1回(00:30)。
+# 別の分にずらして 8 credits/分 の制限を回避。
 # 15分足 12回/日 ×7 + 日足 1回/日 ×7 ≈ 91 credits/日（Twelve Data無料枠内）
 [triggers]
-crons = ["0 */2 * * *", "0 0 * * *"]
+crons = ["0 */2 * * *", "30 0 * * *"]
 
 # KV ネームスペース（`wrangler kv namespace create STRENGTH_KV` で作成し id を貼る）
 [[kv_namespaces]]

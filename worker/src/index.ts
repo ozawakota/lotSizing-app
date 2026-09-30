@@ -100,7 +100,7 @@ const updateDaily = async (env: Env): Promise<RateSeries> => {
 export default {
   // Cron: event.cron で日足/15分足を出し分け。失敗時は前回値を保持。
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    const job = event.cron === '0 0 * * *' ? updateDaily : updateIntraday;
+    const job = event.cron === '30 0 * * *' ? updateDaily : updateIntraday;
     ctx.waitUntil(
       job(env).catch((e) => {
         console.error('通貨強弱 Cron 失敗（前回値を保持）:', e);
@@ -109,24 +109,30 @@ export default {
   },
 
   // クライアント向け: KV の intraday/daily を返す。無ければ初回のみ算出（cold-start解消）。
-  async fetch(_req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  // Twelve Data は 8 credits/分の制限があり、7ペア一括=7 credits のため、
+  // 1リクエストで取得するデータセットは最大1つに絞る（intraday優先）。
+  async fetch(_req: Request, env: Env): Promise<Response> {
+    let intradayRaw = await env.STRENGTH_KV.get(KV_INTRADAY);
+    let dailyRaw = await env.STRENGTH_KV.get(KV_DAILY);
+
     try {
-      let intradayRaw = await env.STRENGTH_KV.get(KV_INTRADAY);
-      let dailyRaw = await env.STRENGTH_KV.get(KV_DAILY);
       if (!intradayRaw) {
-        const s = await updateIntraday(env);
-        intradayRaw = JSON.stringify(s);
+        intradayRaw = JSON.stringify(await updateIntraday(env)); // 7 credits
+      } else if (!dailyRaw) {
+        dailyRaw = JSON.stringify(await updateDaily(env)); // 7 credits（別リクエストで）
       }
-      if (!dailyRaw) {
-        const s = await updateDaily(env);
-        dailyRaw = JSON.stringify(s);
-      }
-      ctx.waitUntil(Promise.resolve());
-      const body = `{"computedAt":${Date.now()},"intraday":${intradayRaw},"daily":${dailyRaw}}`;
-      return new Response(body, { headers: CORS_HEADERS });
     } catch (e) {
-      const error = e instanceof Error ? e.message : 'compute failed';
-      return new Response(JSON.stringify({ error }), { headers: CORS_HEADERS });
+      // lazy取得の失敗（分次レート制限など）は致命的にしない。キャッシュ済み分だけ返す。
+      console.error('通貨強弱 lazy取得 失敗:', e);
     }
+
+    if (!intradayRaw && !dailyRaw) {
+      return new Response(
+        JSON.stringify({ error: '準備中です。少し待って「更新」を押してください' }),
+        { headers: CORS_HEADERS },
+      );
+    }
+    const body = `{"computedAt":${Date.now()},"intraday":${intradayRaw ?? 'null'},"daily":${dailyRaw ?? 'null'}}`;
+    return new Response(body, { headers: CORS_HEADERS });
   },
 };
