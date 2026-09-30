@@ -124,7 +124,9 @@ const CurrencyStrengthMeter: FC = () => {
 
       {cumulative && cumulative.datetimes.length >= 2 && (
         <div className="mx-auto mt-2 max-w-md">
-          <StrengthChart cumulative={cumulative} />
+          <div className="px-2">
+            <StrengthChart cumulative={cumulative} />
+          </div>
           <div className="mt-2 grid grid-cols-4 gap-x-3 gap-y-1 px-2">
             {legend.map((s) => (
               <div key={s.currency} className="flex items-center gap-1">
