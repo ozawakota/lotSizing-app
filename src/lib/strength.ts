@@ -80,7 +80,7 @@ export function formatWindowLabel(snapshot: StrengthSnapshot): string {
 // ---------------------------------------------------------------------------
 
 // Start point for the cumulative plot (baseline = 0 at this point).
-export type StrengthRange = '4h' | 'today' | 'year';
+export type StrengthRange = '1h' | '4h' | 'today' | 'year';
 
 // A time-series of X/JPY closes shared across the 7 pairs, aligned by datetime.
 export interface RateSeries {
@@ -106,6 +106,7 @@ const jstDateStr = (d: Date): string => new Date(d.getTime() + JST_OFFSET).toISO
 
 /**
  * Find the index in `datetimes` to use as the 0-baseline for the given range:
+ * - '1h'    → the first bar at or after (now − 1h)
  * - '4h'    → the first bar at or after (now − 4h)
  * - 'today' → the first bar on today's JST date
  * - 'year'  → the first bar in the current JST year
@@ -123,8 +124,9 @@ export function findStartIndex(datetimes: string[], range: StrengthRange, now: D
     const i = datetimes.findIndex((dt) => dt.slice(0, 10) >= today);
     return i < 0 ? 0 : i;
   }
-  // '4h'
-  const target = now.getTime() - 4 * 60 * 60 * 1000;
+  // '1h' / '4h' — hour-offset from now
+  const hours = range === '1h' ? 1 : 4;
+  const target = now.getTime() - hours * 60 * 60 * 1000;
   const i = datetimes.findIndex((dt) => parseJst(dt) >= target);
   return i < 0 ? 0 : i;
 }

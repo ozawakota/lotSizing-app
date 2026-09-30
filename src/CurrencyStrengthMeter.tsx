@@ -22,6 +22,7 @@ interface StrengthData {
 const REFRESH_MS = 60 * 60 * 1000; // 1時間
 
 const RANGE_LABELS: Record<StrengthRange, string> = {
+  '1h': '1時間前',
   '4h': '4時間前',
   today: '当日',
   year: '年初',

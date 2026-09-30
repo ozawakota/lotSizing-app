@@ -117,6 +117,11 @@ describe('findStartIndex', () => {
     expect(findStartIndex(dts, '4h', now)).toBe(3);
   });
 
+  it("'1h' picks the first bar at/after now-1h", () => {
+    // now-1h = 09:05 JST -> first bar >= that is index 4 (10:00)
+    expect(findStartIndex(dts, '1h', now)).toBe(4);
+  });
+
   it("'year' picks the first bar in the current JST year", () => {
     const yearDts = ['2025-12-31 00:00:00', '2026-01-05 00:00:00', '2026-09-30 00:00:00'];
     expect(findStartIndex(yearDts, 'year', now)).toBe(1);
