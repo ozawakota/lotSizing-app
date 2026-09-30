@@ -35,7 +35,7 @@ const CURRENCY_COLORS: Record<CurrencyCode, string> = {
   CHF: '#0891b2',
   AUD: '#ea580c',
   CAD: '#ca8a04',
-  NZD: '#db2777',
+  NZD: '#0d9488',
 };
 
 const fetchStrength = async (): Promise<StrengthData> => {
