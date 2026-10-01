@@ -3,6 +3,7 @@ import '@mobiscroll/react/dist/css/mobiscroll.min.css';
 import { Select, Page, setOptions, localeJa, Input, Popup } from '@mobiscroll/react';
 import { FC, useState, useEffect } from 'react';
 import HelpModal from './HelpModal'; // 前提：別ファイルに作成済み
+import DstInfoModal from './DstInfoModal'; // 夏時間/冬時間の説明モーダル
 import CurrencyStrengthMeter from './CurrencyStrengthMeter';
 
 setOptions({
@@ -226,6 +227,7 @@ const App: FC = () => {
   });
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false); // モーダルの表示状態
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false); // ヘルプモーダルの表示状態
+  const [isDstModalOpen, setIsDstModalOpen] = useState<boolean>(false); // 夏時間/冬時間モーダルの表示状態
   const [currencyPrice, setCurrencyPrice] = useState<string>('-'); // 選択された通貨の価格
   const [lastUpdated, setLastUpdated] = useState<string>(''); // 価格更新日時
   const [calculatedLot, setCalculatedLot] = useState<string>('0.00'); // 計算されたロットサイズ
@@ -708,6 +710,16 @@ const App: FC = () => {
     setIsHelpModalOpen(false);
   };
 
+  // 夏時間/冬時間モーダルを開く
+  const openDstModal = () => {
+    setIsDstModalOpen(true);
+  };
+
+  // 夏時間/冬時間モーダルを閉じる
+  const closeDstModal = () => {
+    setIsDstModalOpen(false);
+  };
+
   // 証拠金の通貨換算を計算する関数を追加
   const updateBalanceEquivalent = (balance: number) => {
     if (balance <= 0) {
@@ -805,8 +817,20 @@ const App: FC = () => {
         <WorldClock />
         {/* 通貨強弱（毎時・折りたたみ式） */}
         <CurrencyStrengthMeter />
+        {/* 夏時間/冬時間の説明ボタン（ヘルプボタンの左隣に配置） */}
+        <button
+          type="button"
+          aria-label="夏時間・冬時間について"
+          className="absolute top-0 right-12 text-sky-500 rounded-full h-8 w-8 flex items-center justify-center border border-sky-500"
+          onClick={openDstModal}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="9" strokeWidth="2" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 7v5l3 2" />
+          </svg>
+        </button>
         {/* ヘルプボタン（右上に配置） */}
-        <button 
+        <button
           className="absolute top-0 right-3 text-orange-500 font-bold rounded-full h-8 w-8 flex items-center justify-center border border-orange-500"
           onClick={openHelpModal}
         >
@@ -1068,9 +1092,15 @@ const App: FC = () => {
       </Popup>
       
       {/* 別ファイルから作成したヘルプモーダル */}
-      <HelpModal 
-        isOpen={isHelpModalOpen} 
-        onClose={closeHelpModal} 
+      <HelpModal
+        isOpen={isHelpModalOpen}
+        onClose={closeHelpModal}
+      />
+
+      {/* 夏時間/冬時間の説明モーダル */}
+      <DstInfoModal
+        isOpen={isDstModalOpen}
+        onClose={closeDstModal}
       />
       </div>
     </Page>
