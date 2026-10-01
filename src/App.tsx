@@ -812,7 +812,6 @@ const App: FC = () => {
       {/* ヘッダー部分 */}
       <div className="relative">
         <h1 className='text-center text-2xl lh-base'>FX</h1>
-        <p className='text-center'>Lot Size Calculator</p>
         {/* 時間 */}
         <WorldClock />
         {/* 通貨強弱（毎時・折りたたみ式） */}
