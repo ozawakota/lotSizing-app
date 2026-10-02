@@ -222,7 +222,10 @@ const OrderFlow: FC<{ onOpenMenu?: () => void }> = ({ onOpenMenu }) => {
   return (
     <div className="px-3 pb-6">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="whitespace-nowrap text-base font-bold">取引量・センチメント</h2>
+        {/* mobiscroll のグローバル見出しスタイル（詳細度が高い）に font-size を奪われ 34px に
+            肥大化し、nowrap でボタンを画面外へ押し出していた。text-base! で意図通り 16px に強制し、
+            min-w-0 truncate で万一長くてもボタンを押し出さないようにする。 */}
+        <h2 className="min-w-0 truncate text-base! font-bold">取引量・センチメント</h2>
         <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"

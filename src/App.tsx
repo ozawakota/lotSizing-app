@@ -843,7 +843,9 @@ const App: FC = () => {
       <>
       {/* ヘッダー部分 */}
       <div className="relative">
-        <h1 className='text-center text-2xl lh-base'>FX</h1>
+        {/* mobiscroll のグローバル見出しスタイルに font-size を奪われ肥大化するため、
+            text-base!（important）で 16px に強制し、取引量ページの見出しと大きさを揃える。 */}
+        <h1 className='text-center text-base! font-bold lh-base'>FX</h1>
         {/* 時間 */}
         <WorldClock />
         {/* 通貨強弱（毎時・折りたたみ式） */}
