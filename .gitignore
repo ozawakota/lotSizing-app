@@ -18,6 +18,12 @@ node_modules
 .env.*
 !.env.example
 
+# Build output (Netlify がソースからビルドするため追跡しない)
+dist/
+
+# Wrangler ローカルキャッシュ
+worker/.wrangler/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
