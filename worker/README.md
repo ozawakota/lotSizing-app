@@ -68,11 +68,14 @@ npm install                      # wrangler と @cloudflare/workers-types
 npx wrangler login               # Cloudflare アカウントにログイン
 npx wrangler kv namespace create STRENGTH_KV   # 出力の id を wrangler.toml に貼る
 npx wrangler secret put TWELVE_DATA_API_KEY    # Twelve Data のキーを登録（バンドルには載らない）
+npx wrangler secret put MYFXBOOK_EMAIL         # /flow センチメント用（Myfxbook 無料アカウント）
+npx wrangler secret put MYFXBOOK_PASSWORD      # /flow センチメント用
 npx wrangler deploy              # デプロイ（Cron も同時に設定される）
 ```
 
-デプロイで発行された Worker の URL を、フロントの環境変数 `VITE_STRENGTH_URL` に設定する
-（例: `.env` に `VITE_STRENGTH_URL=https://currency-strength.<subdomain>.workers.dev`）。
+デプロイで発行された Worker の URL を、フロントの環境変数に設定する:
+- `VITE_STRENGTH_URL=https://currency-strength.<subdomain>.workers.dev`（通貨強弱）
+- `VITE_FLOW_URL=https://currency-strength.<subdomain>.workers.dev/flow`（取引量・センチメント）
 
 ## 動作確認
 
@@ -83,9 +86,32 @@ curl "https://currency-strength.<subdomain>.workers.dev"
 npx wrangler dev --test-scheduled
 ```
 
+## 取引量・センチメント (`/flow`)
+
+同じ Worker の **`/flow` パス**で、7ペア（X/JPY）の建玉情報を配信する。
+フロントは [`src/OrderFlow.tsx`](../src/OrderFlow.tsx)、ロジック/型は [`src/lib/flow.ts`](../src/lib/flow.ts) を Worker と共有する。
+
+> **経緯**: 当初 Twelve Data の `interval=4h` tick volume を使う設計だったが、FXでは常に `volume=0` が返り使えなかった。
+> そのため取引量は **Myfxbook Community Outlook の実建玉 volume（`longVolume` / `shortVolume`）に一本化**した。
+> これは当初要望「取引量が買いか売りか」に直接合致する（Twelve Data 4時間足取得は廃止）。
+
+| 項目 | 値 |
+|------|-----|
+| データ源 | Myfxbook Community Outlook（`login.json` → `get-community-outlook.json`） |
+| 取得値 | ペアごとの `longPercentage/shortPercentage`（建玉割合）と `longVolume/shortVolume`（買い量/売り量） |
+| 優勢判定 | `longVolume` と `shortVolume` の多い方を「買い優勢 / 売り優勢」とする |
+| 実行 | Cron 1本：毎時 `15 * * * *`（Myfxbook 最大48 req/日、無料枠100内・最小15分粒度も満たす） |
+| キャッシュ | Workers KV（`flow` / `mfb_session`。session 切れ時は再ログインして1回リトライ） |
+| 失敗時 | KV を上書きせず前回値を保持 |
+
+> **注意**: スポットFXに中央集権的な出来高は無い。ここで言う取引量・建玉割合は **Myfxbook の個人投資家コミュニティの現在ポジション**であり、市場全体ではなく個人投資家層の傾向を表す。
+
+動作確認: `curl "https://currency-strength.<subdomain>.workers.dev/flow"`
+
 ## 無料枠
 
-Workers 100k req/日・KV 書込 1000/日（Cron＝約13回/日）・Cron 3個/Worker で、いずれも十分。
+Workers 100k req/日・KV 書込 1000/日・Cron 3個/Worker で、いずれも十分。
 ※ Workers/KV の無料枠は**アカウント単位**で全 Worker/Pages と共有。
 実質のボトルネックは Twelve Data 無料枠 800/日（15分足84＋日足7＝**約91/日**、価格アラートと共有）。
 なお 8 credits/分 の分次制限があるため、7ペア一括(=7)を超えないよう Cron を別の分に分散している。
+Myfxbook は無料枠 100 req/日・最小15分粒度で、毎時更新（1〜2 req/回）はいずれも満たす。

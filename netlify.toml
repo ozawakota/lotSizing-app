@@ -5,3 +5,5 @@
 [build.environment]
   NODE_VERSION = "22"
   VITE_STRENGTH_URL = "https://currency-strength.ozawa19890413.workers.dev"
+  # 取引量・センチメント ページ（同じ Worker の /flow パス）
+  VITE_FLOW_URL = "https://currency-strength.ozawa19890413.workers.dev/flow"

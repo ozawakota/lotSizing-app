@@ -4,16 +4,21 @@ name = "currency-strength"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 
-# Cron: 15分足は2時間ごと(毎偶数時00分)、日足は1日1回(00:30)。
-# 別の分にずらして 8 credits/分 の制限を回避。
-# 15分足 12回/日 ×7 + 日足 1回/日 ×7 ≈ 91 credits/日（Twelve Data無料枠内）
+# Cron（分をずらして Twelve Data 8 credits/分 制限を回避）:
+#   "0 */2 * * *"  15分足 2時間ごと(毎偶数時00分) … 強弱(4時間前/当日)
+#   "30 0 * * *"   日足 1日1回(00:30)            … 強弱(年初)
+#   "15 * * * *"   毎時15分                      … /flow の建玉情報(Myfxbook)
+# Twelve Data: 15分足84 + 日足7 ≈ 91 credits/日（無料枠800内）
+# Myfxbook: 毎時1〜2req ≈ 最大48/日（無料枠100内、最小15分粒度も満たす）
 [triggers]
-crons = ["0 */2 * * *", "30 0 * * *"]
+crons = ["0 */2 * * *", "30 0 * * *", "15 * * * *"]
 
 # KV ネームスペース（`wrangler kv namespace create STRENGTH_KV` で作成し id を貼る）
 [[kv_namespaces]]
 binding = "STRENGTH_KV"
 id = "2bf5986d239e492ab68449b7df253ec4"
 
-# 秘匿情報はここに書かず、`wrangler secret put TWELVE_DATA_API_KEY` で登録する:
+# 秘匿情報はここに書かず、`wrangler secret put <NAME>` で登録する:
 #   TWELVE_DATA_API_KEY = <Twelve Data の APIキー>
+#   MYFXBOOK_EMAIL      = <Myfxbook 無料アカウントのメール>   … /flow センチメント用
+#   MYFXBOOK_PASSWORD   = <Myfxbook 無料アカウントのパスワード> … /flow センチメント用
