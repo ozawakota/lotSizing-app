@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeSummary, type Cashflow, type FundSettings, type Trade } from '../fund';
+import { computeSummary, dailyPnl, monthGrid, type Cashflow, type FundSettings, type Trade } from '../fund';
 
 const settings: FundSettings = { startingBalance: 10000, currency: 'JPY' };
 
@@ -57,6 +57,11 @@ describe('computeSummary', () => {
     expect(s.equityCurve.map((p) => p.balance)).toEqual([10100, 10400, 10350]);
   });
 
+  it('dailyPnl は日付ごとに損益を合算', () => {
+    const m = dailyPnl([trade('2026-01-01', 100), trade('2026-01-01', -30), trade('2026-01-02', 50)]);
+    expect(m).toEqual({ '2026-01-01': 70, '2026-01-02': 50 });
+  });
+
   it('最大ドローダウンはピークからの最大下落幅', () => {
     // 10000 → +1000(11000 peak) → -2000(9000) → +500(9500)
     const s = computeSummary(
@@ -65,5 +70,24 @@ describe('computeSummary', () => {
       [],
     );
     expect(s.maxDrawdown).toBe(2000);
+  });
+});
+
+describe('monthGrid', () => {
+  it('2026-01 は木曜始まり・最初の週は前半3つが空白', () => {
+    // 2026-01-01 は木曜(Dow=4)。
+    const weeks = monthGrid(2026, 1);
+    expect(weeks[0].slice(0, 4)).toEqual([null, null, null, null]);
+    expect(weeks[0][4]).toBe('2026-01-01');
+  });
+
+  it('全セルは7の倍数、日付は1〜月末を網羅', () => {
+    const weeks = monthGrid(2026, 2); // 2月=28日
+    const flat = weeks.flat();
+    expect(flat.length % 7).toBe(0);
+    const days = flat.filter((c): c is string => c !== null);
+    expect(days[0]).toBe('2026-02-01');
+    expect(days[days.length - 1]).toBe('2026-02-28');
+    expect(days.length).toBe(28);
   });
 });

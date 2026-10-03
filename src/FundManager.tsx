@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Menu } from 'lucide-react';
 import type { Cashflow, FundSummary, Trade } from '@/lib/fund';
+import TradeCalendar from './TradeCalendar';
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 const FUND_URL = import.meta.env.VITE_FUND_URL as string | undefined;
@@ -62,6 +63,7 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
   const [summary, setSummary] = useState<FundSummary | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [cashflows, setCashflows] = useState<Cashflow[]>([]);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [error, setError] = useState('');
   const btnRef = useRef<HTMLDivElement>(null);
 
@@ -245,6 +247,9 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
             </div>
           )}
 
+          {/* 月間損益カレンダー */}
+          <TradeCalendar trades={trades} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
+
           {/* 設定 */}
           <form onSubmit={saveSettings} className="bg-gray-50 rounded-md p-3 border border-gray-200">
             <p className="text-sm font-bold text-gray-700 mb-1">初期設定</p>
@@ -265,10 +270,10 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
           </form>
 
           {/* トレード追加 */}
-          <form onSubmit={addTrade} className="bg-white rounded-md p-3 border border-gray-200 space-y-2">
+          <form key={selectedDate ?? 'new'} onSubmit={addTrade} className="bg-white rounded-md p-3 border border-gray-200 space-y-2">
             <p className="text-sm font-bold text-gray-700">トレード追加</p>
             <div className="grid grid-cols-2 gap-2">
-              <input name="date" type="date" defaultValue={today()} className={inputCls} required />
+              <input name="date" type="date" defaultValue={selectedDate ?? today()} className={inputCls} required />
               <input name="instrument" placeholder="USD_JPY" className={inputCls} required />
               <select name="direction" className={inputCls}>
                 <option value="long">買い</option>
@@ -281,19 +286,27 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
             <button className="w-full rounded bg-orange-500 text-white py-1.5 text-sm">追加</button>
           </form>
 
-          {/* トレード一覧 */}
-          {trades.length > 0 && (
-            <div className="bg-white rounded-md border border-gray-200 divide-y">
-              {trades.map((t) => (
-                <div key={t.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
-                  <span className="text-gray-500">{t.date}</span>
-                  <span>{t.instrument} {t.direction === 'long' ? '買' : '売'} {t.lot}</span>
-                  <span className={t.pnl >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>
-                    {t.pnl.toLocaleString()}
-                  </span>
-                  <button onClick={() => del('trades', t.id)} className="text-gray-400 hover:text-red-500">×</button>
+          {/* 選択日のトレード */}
+          {selectedDate && (
+            <div className="bg-white rounded-md border border-gray-200">
+              <p className="px-3 py-1.5 text-xs font-bold text-gray-700 border-b">{selectedDate} のトレード</p>
+              {trades.filter((t) => t.date === selectedDate).length === 0 ? (
+                <p className="px-3 py-2 text-xs text-gray-400">記録なし</p>
+              ) : (
+                <div className="divide-y">
+                  {trades
+                    .filter((t) => t.date === selectedDate)
+                    .map((t) => (
+                      <div key={t.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                        <span>{t.instrument} {t.direction === 'long' ? '買' : '売'} {t.lot}</span>
+                        <span className={t.pnl >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>
+                          {t.pnl.toLocaleString()}
+                        </span>
+                        <button onClick={() => del('trades', t.id)} className="text-gray-400 hover:text-red-500">×</button>
+                      </div>
+                    ))}
                 </div>
-              ))}
+              )}
             </div>
           )}
 

@@ -49,6 +49,28 @@ export interface FundSummary {
   equityCurve: EquityPoint[];
 }
 
+// 日付ごとの合計損益（"YYYY-MM-DD" → 損益合計）。月間損益カレンダー用。
+export function dailyPnl(trades: Trade[]): Record<string, number> {
+  const map: Record<string, number> = {};
+  for (const t of trades) map[t.date] = (map[t.date] ?? 0) + t.pnl;
+  return map;
+}
+
+// year・month(1-12) の月カレンダー（日曜始まり）。各セルは "YYYY-MM-DD" か null（空白）。
+export function monthGrid(year: number, month: number): (string | null)[][] {
+  const startDow = new Date(Date.UTC(year, month - 1, 1)).getUTCDay(); // 0=日
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const cells: (string | null)[] = [];
+  for (let i = 0; i < startDow; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) {
+    cells.push(`${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
+  }
+  while (cells.length % 7 !== 0) cells.push(null);
+  const weeks: (string | null)[][] = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  return weeks;
+}
+
 interface DatedDelta {
   date: string;
   delta: number;
