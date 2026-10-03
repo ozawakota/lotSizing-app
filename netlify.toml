@@ -7,3 +7,11 @@
   VITE_STRENGTH_URL = "https://currency-strength.ozawa19890413.workers.dev"
   # 取引量・センチメント ページ（同じ Worker の /flow パス）
   VITE_FLOW_URL = "https://currency-strength.ozawa19890413.workers.dev/flow"
+  # 相場変動通知（Alert Worker + VAPID 公開鍵。いずれも公開値）
+  VITE_ALERT_URL = "https://lotsizing-alert.ozawa19890413.workers.dev"
+  VITE_VAPID_PUBLIC_KEY = "BDMQvoZB44nljNEEXuR3OAB-cvo6jhjTZVO0C8XAn3MtRkM8M7tv4KAeHAz1_aKQytj_zs9heXVZ9SUoPvPVhto"
+  # エリオット波動 / 損切り提案（Python backend Worker）
+  VITE_BACKEND_URL = "https://lotsizing-elliott.ozawa19890413.workers.dev"
+  # 資金管理（fund Worker + Google OAuth クライアントID。クライアントIDは公開値）
+  VITE_FUND_URL = "https://lotsizing-fund.ozawa19890413.workers.dev"
+  VITE_GOOGLE_CLIENT_ID = "109768926010-pu509efgmds8k9vieq0t57h0ool573i6.apps.googleusercontent.com"
