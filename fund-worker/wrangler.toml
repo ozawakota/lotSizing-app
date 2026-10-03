@@ -8,7 +8,7 @@ compatibility_date = "2026-09-01"
 
 [vars]
 # フロントと同じ Google OAuth クライアントID（IDトークンの aud 検証に使用）。
-GOOGLE_CLIENT_ID = "<GCP の OAuth クライアントID>.apps.googleusercontent.com"
+GOOGLE_CLIENT_ID = "109768926010-pu509efgmds8k9vieq0t57h0ool573i6.apps.googleusercontent.com"
 # 許可するメール（カンマ区切り）。
 ALLOWED_EMAILS = "ozawa19890413@gmail.com"
 
