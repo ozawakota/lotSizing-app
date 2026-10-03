@@ -8,6 +8,7 @@ import CurrencyStrengthMeter from './CurrencyStrengthMeter';
 import MarketAlertCard from './MarketAlertCard'; // 相場変動通知の ON/OFF カード
 import OrderFlow from './OrderFlow'; // 取引量・センチメント ページ
 import StopLossTool from './StopLossTool'; // 損切り提案 ページ
+import FundManager from './FundManager'; // 資金管理（トレードジャーナル）ページ
 import { Menu } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetClose } from '@/components/ui/sheet';
 
@@ -214,7 +215,7 @@ const WorldClock: FC = () => {
 
 const App: FC = () => {
   // 表示中のページ（ロット計算 / 取引量・センチメント）とハンバーガーメニューの開閉。
-  const [view, setView] = useState<'calculator' | 'flow' | 'stoploss'>('calculator');
+  const [view, setView] = useState<'calculator' | 'flow' | 'stoploss' | 'fund'>('calculator');
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
   const validCurrencies: CurrencyCode[] = ['JPY', 'USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
   const [currency, setCurrency] = useState<CurrencyCode>(() => {
@@ -824,7 +825,7 @@ const App: FC = () => {
             <SheetTitle>メニュー</SheetTitle>
           </SheetHeader>
           <nav className="flex flex-col gap-1 px-2">
-            {([['calculator', 'ロット計算'], ['flow', '取引量・センチメント'], ['stoploss', '損切り提案']] as const).map(([key, label]) => (
+            {([['calculator', 'ロット計算'], ['flow', '取引量・センチメント'], ['stoploss', '損切り提案'], ['fund', '資金管理']] as const).map(([key, label]) => (
               <SheetClose asChild key={key}>
                 <button
                   type="button"
@@ -1152,8 +1153,10 @@ const App: FC = () => {
       </>
       ) : view === 'flow' ? (
         <OrderFlow onOpenMenu={() => setMenuOpen(true)} />
-      ) : (
+      ) : view === 'stoploss' ? (
         <StopLossTool onOpenMenu={() => setMenuOpen(true)} />
+      ) : (
+        <FundManager onOpenMenu={() => setMenuOpen(true)} />
       )}
       </div>
     </Page>

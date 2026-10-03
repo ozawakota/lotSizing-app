@@ -1,0 +1,17 @@
+# 資金管理 fund-worker 設定
+# 役割: Google 認証（許可メールのみ）で認可し、Turso(libSQL) にユーザー別で
+#       トレード/入出金/設定を記録。/summary で残高・勝率・DD・エクイティを返す。
+# 集計ロジックは ../src/lib/fund.ts、Google クレーム検証は ../src/lib/googleAuth.ts を共有。
+name = "lotsizing-fund"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+[vars]
+# フロントと同じ Google OAuth クライアントID（IDトークンの aud 検証に使用）。
+GOOGLE_CLIENT_ID = "<GCP の OAuth クライアントID>.apps.googleusercontent.com"
+# 許可するメール（カンマ区切り）。
+ALLOWED_EMAILS = "ozawa19890413@gmail.com"
+
+# secret（`wrangler secret put <NAME>` で登録。ここには書かない）:
+#   TURSO_DATABASE_URL … 例 libsql://<db>-<org>.turso.io
+#   TURSO_AUTH_TOKEN   … `turso db tokens create <db>` の出力
