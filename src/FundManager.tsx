@@ -14,7 +14,7 @@ const FUND_URL = import.meta.env.VITE_FUND_URL as string | undefined;
 interface GoogleId {
   accounts: {
     id: {
-      initialize: (cfg: { client_id: string; callback: (r: { credential: string }) => void }) => void;
+      initialize: (cfg: { client_id: string; callback: (r: { credential: string }) => void; auto_select?: boolean }) => void;
       renderButton: (el: HTMLElement, opts: Record<string, unknown>) => void;
     };
   };
@@ -25,12 +25,24 @@ declare global {
   }
 }
 
-const decodeEmail = (idToken: string): string => {
+const STORAGE_KEY = 'fund_id_token';
+
+const decodePayload = (idToken: string): { email?: string; exp?: number } => {
   try {
-    return JSON.parse(atob(idToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).email ?? '';
+    return JSON.parse(atob(idToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
   } catch {
-    return '';
+    return {};
   }
+};
+const decodeEmail = (idToken: string): string => decodePayload(idToken).email ?? '';
+// 失効していない（exp が未来）か。
+const tokenValid = (idToken: string): boolean => {
+  const exp = decodePayload(idToken).exp;
+  return typeof exp === 'number' && exp * 1000 > Date.now();
+};
+const storedToken = (): string => {
+  const t = localStorage.getItem(STORAGE_KEY);
+  return t && tokenValid(t) ? t : '';
 };
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -56,8 +68,8 @@ function EquityCurve({ startingBalance, balances }: { startingBalance: number; b
 }
 
 export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) {
-  const [idToken, setIdToken] = useState('');
-  const [email, setEmail] = useState('');
+  const [idToken, setIdToken] = useState(storedToken); // 有効な保存トークンがあれば復元
+  const [email, setEmail] = useState(() => (storedToken() ? decodeEmail(storedToken()) : ''));
   const [settings, setSettings] = useState<FundSettings>({ startingBalance: 0, currency: 'JPY' });
   const [trades, setTrades] = useState<Trade[]>([]);
   const [cashflows, setCashflows] = useState<Cashflow[]>([]);
@@ -77,6 +89,7 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}`, ...(init?.headers ?? {}) },
       });
       if (res.status === 401 || res.status === 403) {
+        localStorage.removeItem(STORAGE_KEY);
         setIdToken('');
         setEmail('');
         throw new Error('ログインが必要です（再度サインインしてください）');
@@ -105,7 +118,9 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
       if (!window.google || !btnRef.current) return;
       window.google.accounts.id.initialize({
         client_id: CLIENT_ID as string,
+        auto_select: true, // 前回同意済みなら再読み込み時にクリック不要で自動サインイン
         callback: (r) => {
+          localStorage.setItem(STORAGE_KEY, r.credential);
           setIdToken(r.credential);
           setEmail(decodeEmail(r.credential));
         },
