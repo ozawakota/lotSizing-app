@@ -3,6 +3,7 @@
 // 月間損益カレンダー・エクイティ曲線・タグ絞り込みに対応。
 // VITE_GOOGLE_CLIENT_ID / VITE_FUND_URL 未設定時は案内のみ表示。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Popup } from '@mobiscroll/react';
 import { Menu } from 'lucide-react';
 import { aggregateByTag, computeSummary, pnlOf, type Cashflow, type FundSettings, type Trade } from '@/lib/fund';
 import TradeCalendar from './TradeCalendar';
@@ -140,19 +141,21 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
 
   const addTrade = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const f = new FormData(e.currentTarget);
+    if (!selectedDate) return;
+    const form = e.currentTarget;
+    const f = new FormData(form);
     try {
       await api('/trades', {
         method: 'POST',
         body: JSON.stringify({
-          date: f.get('date'),
+          date: selectedDate,
           invested: Number(f.get('invested')),
           recovered: Number(f.get('recovered')),
           tags: parseTags(String(f.get('tags') ?? '')),
           note: f.get('note') || undefined,
         }),
       });
-      (e.target as HTMLFormElement).reset();
+      form.reset();
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : '追加に失敗しました');
@@ -198,7 +201,7 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
   };
 
   const inputCls = 'rounded border border-gray-300 px-2 py-1 text-sm bg-white w-full';
-  const dayTrades = selectedDate ? viewTrades.filter((t) => t.date === selectedDate) : [];
+  const dayTrades = selectedDate ? trades.filter((t) => t.date === selectedDate) : [];
 
   return (
     <>
@@ -291,34 +294,21 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
           {/* 月間損益カレンダー */}
           <TradeCalendar trades={viewTrades} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
 
-          {/* 記録追加（1タップ入力） */}
-          <form key={selectedDate ?? 'new'} onSubmit={addTrade} className="bg-white rounded-md p-3 border border-gray-200 space-y-2">
-            <p className="text-sm font-bold text-gray-700">記録を追加</p>
-            <div className="grid grid-cols-2 gap-2">
-              <input name="date" type="date" defaultValue={selectedDate ?? today()} className={inputCls} required />
-              <input name="tags" placeholder="タグ（例: 店A 20スロ）" list="tag-suggest" className={inputCls} />
-              <input name="invested" inputMode="decimal" placeholder="投資金額" className={inputCls} required />
-              <input name="recovered" inputMode="decimal" placeholder="回収金額" className={inputCls} required />
-              <input name="note" placeholder="メモ(任意)" className={`${inputCls} col-span-2`} />
-            </div>
-            <datalist id="tag-suggest">
-              {tagAggs.map((a) => (
-                <option key={a.tag} value={a.tag} />
-              ))}
-            </datalist>
-            <button className="w-full rounded bg-orange-500 text-white py-1.5 text-sm">追加</button>
-          </form>
-
-          {/* 選択日の記録 */}
-          {selectedDate && (
-            <div className="bg-white rounded-md border border-gray-200">
-              <p className="px-3 py-1.5 text-xs font-bold text-gray-700 border-b">{selectedDate} の記録</p>
+          {/* 日付タップで開くモーダル: その日の記録を閲覧＋入力 */}
+          <Popup
+            isOpen={selectedDate !== null}
+            onClose={() => setSelectedDate(null)}
+            headerText={selectedDate ?? ''}
+            buttons={[{ text: '閉じる', handler: () => setSelectedDate(null) }]}
+          >
+            <div className="p-3 space-y-3 min-w-[260px]">
+              {/* その日の記録 */}
               {dayTrades.length === 0 ? (
-                <p className="px-3 py-2 text-xs text-gray-400">記録なし</p>
+                <p className="text-xs text-gray-400">まだ記録がありません</p>
               ) : (
-                <div className="divide-y">
+                <div className="border border-gray-200 rounded divide-y">
                   {dayTrades.map((t) => (
-                    <div key={t.id} className="flex items-center justify-between px-3 py-1.5 text-xs gap-2">
+                    <div key={t.id} className="flex items-center justify-between px-2 py-1.5 text-xs gap-2">
                       <span className="text-gray-500 shrink-0">投{yen(t.invested)}→回{yen(t.recovered)}</span>
                       <span className="flex-1 truncate text-gray-400">{t.tags.join(' ')}</span>
                       <span className={pnlOf(t) >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>
@@ -330,8 +320,24 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
                   ))}
                 </div>
               )}
+
+              {/* 追加フォーム（日付はこの日に固定） */}
+              <form key={selectedDate ?? 'none'} onSubmit={addTrade} className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <input name="invested" inputMode="decimal" placeholder="投資金額" className={inputCls} required />
+                  <input name="recovered" inputMode="decimal" placeholder="回収金額" className={inputCls} required />
+                  <input name="tags" placeholder="タグ（例: 店A 20スロ）" list="tag-suggest" className={`${inputCls} col-span-2`} />
+                  <input name="note" placeholder="メモ(任意)" className={`${inputCls} col-span-2`} />
+                </div>
+                <datalist id="tag-suggest">
+                  {tagAggs.map((a) => (
+                    <option key={a.tag} value={a.tag} />
+                  ))}
+                </datalist>
+                <button className="w-full rounded bg-orange-500 text-white py-2 text-sm">この日に追加</button>
+              </form>
             </div>
-          )}
+          </Popup>
 
           {/* 設定 */}
           <form onSubmit={saveSettings} className="bg-gray-50 rounded-md p-3 border border-gray-200">
