@@ -46,12 +46,12 @@ describe('rangePips', () => {
     expect(rangePips(samples, 'GBP/USD')).toBeCloseTo(25, 6);
   });
 
-  it('XAU/JPY は 1円 を 1単位として換算', () => {
+  it('XAU/USD は 1ドル を 1単位として換算', () => {
     const samples: Sample[] = [
-      { ts: T0, bid: 390000 },
-      { ts: T0 + 1, bid: 391000 },
+      { ts: T0, bid: 2650 },
+      { ts: T0 + 1, bid: 2655 },
     ];
-    expect(rangePips(samples, 'XAU/JPY')).toBeCloseTo(1000, 6);
+    expect(rangePips(samples, 'XAU/USD')).toBeCloseTo(5, 6);
   });
 
   it('サンプルが1つなら 0', () => {
@@ -88,25 +88,25 @@ describe('evaluate', () => {
     expect(r.samples).toEqual([]);
   });
 
-  it('XAU/JPY は 15分で1000円以上動いたら発火する', () => {
+  it('XAU/USD は 15分で5ドル以上動いたら発火する', () => {
     const now = T0 + min(5);
     const r = evaluate({
-      pair: 'XAU/JPY',
-      samples: [{ ts: T0, bid: 390000 }],
-      newSample: { ts: now, bid: 391000 },
+      pair: 'XAU/USD',
+      samples: [{ ts: T0, bid: 2650 }],
+      newSample: { ts: now, bid: 2655 },
       cooldownUntil: null,
       now,
     });
     expect(r.triggered).toBe(true);
-    expect(r.rangePips).toBeCloseTo(1000, 6);
+    expect(r.rangePips).toBeCloseTo(5, 6);
   });
 
-  it('XAU/JPY は 1000円未満では発火しない', () => {
+  it('XAU/USD は 5ドル未満では発火しない', () => {
     const now = T0 + min(5);
     const r = evaluate({
-      pair: 'XAU/JPY',
-      samples: [{ ts: T0, bid: 390000 }],
-      newSample: { ts: now, bid: 390500 },
+      pair: 'XAU/USD',
+      samples: [{ ts: T0, bid: 2650 }],
+      newSample: { ts: now, bid: 2652 },
       cooldownUntil: null,
       now,
     });
@@ -163,7 +163,7 @@ describe('formatAlertBody', () => {
     expect(formatAlertBody('GBP/USD', 1.2725, 1.27)).toBe('GBP/USD が15分で25pips変動（1.27000 → 1.27250）');
   });
 
-  it('XAU/JPY は円単位・小数なし', () => {
-    expect(formatAlertBody('XAU/JPY', 391000, 390000)).toBe('XAU/JPY が15分で1000円変動（390000 → 391000）');
+  it('XAU/USD はドル単位・小数2桁', () => {
+    expect(formatAlertBody('XAU/USD', 2655, 2650)).toBe('XAU/USD が15分で5ドル変動（2650.00 → 2655.00）');
   });
 });

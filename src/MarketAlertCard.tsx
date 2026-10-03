@@ -1,5 +1,5 @@
 // 相場変動通知の ON/OFF カード（計算機ページに配置）。
-// 外貨ex 準拠: 対象ペアの Bid が15分で大きく変動（FX=25pips / XAU/JPY=1000円）したらプッシュ通知。
+// 外貨ex 準拠: 対象ペアの Bid が15分で大きく変動（FX=25pips / XAU/USD=5ドル）したらプッシュ通知。
 // 検知/送信は Alert Worker が担い、本カードは購読の登録/解除と状態表示のみ。
 import { useEffect, useState } from 'react';
 import {

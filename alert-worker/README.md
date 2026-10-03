@@ -1,7 +1,7 @@
 # 相場変動通知 Alert Worker
 
-外貨ex の「相場変動通知」準拠。対象4ペア（GBP/JPY, XAU/JPY, AUD/USD, GBP/USD）の
-**Bid が過去15分以内に大きく変動**（FX=25pips / XAU/JPY=1000円）したら Web Push で通知し、
+外貨ex の「相場変動通知」準拠。対象4ペア（GBP/JPY, XAU/USD, AUD/USD, GBP/USD）の
+**Bid が過去15分以内に大きく変動**（FX=25pips / XAU/USD=5ドル）したら Web Push で通知し、
 **発火後15分はそのペアの測定を休止**する。アプリを閉じていても届く（iOS はホーム画面に追加した PWA のみ）。
 対象ペア・しきい値は [`../src/lib/alert.ts`](../src/lib/alert.ts) の `PAIR_CONFIG` で変更できる。
 

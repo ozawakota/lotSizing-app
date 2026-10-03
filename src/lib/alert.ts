@@ -4,25 +4,25 @@
 //
 // しきい値はペアごとに持つ:
 //  - FX は 25pips（JPY クロス=0.01/pip、ドルストレート=0.0001/pip）。
-//  - XAU/JPY（ゴールド円）は pip 概念が合わないため「円」で判定（1pip=1円、しきい値=円）。
+//  - XAU/USD（ゴールド）は pip 概念が合わないため「ドル」で判定（1単位=1ドル、しきい値=ドル）。
 //
 // Worker(Cron 毎分) が OANDA practice から Bid を取得し、本モジュールで判定する。
 // 判定は副作用のない純関数に閉じ込め、Worker・テストから共有する。
 
-export type AlertPair = 'GBP/JPY' | 'XAU/JPY' | 'AUD/USD' | 'GBP/USD';
+export type AlertPair = 'GBP/JPY' | 'XAU/USD' | 'AUD/USD' | 'GBP/USD';
 
 interface PairConfig {
   oanda: string; // OANDA v20 の instrument 名（pricing の instruments に渡す）
   pipSize: number; // 1 pip（または1単位）あたりの価格差
   thresholdPips: number; // 発火しきい値（pipSize 単位の個数）
-  unit: 'pips' | '円'; // 通知文の単位表記
+  unit: 'pips' | '円' | 'ドル'; // 通知文の単位表記
   digits: number; // 通知文でのレート表示小数桁
 }
 
 // 対象ペアと判定設定。ここを編集すれば対象の増減・しきい値変更ができる。
 export const PAIR_CONFIG: Record<AlertPair, PairConfig> = {
   'GBP/JPY': { oanda: 'GBP_JPY', pipSize: 0.01, thresholdPips: 25, unit: 'pips', digits: 3 },
-  'XAU/JPY': { oanda: 'XAU_JPY', pipSize: 1, thresholdPips: 1000, unit: '円', digits: 0 },
+  'XAU/USD': { oanda: 'XAU_USD', pipSize: 1, thresholdPips: 5, unit: 'ドル', digits: 2 },
   'AUD/USD': { oanda: 'AUD_USD', pipSize: 0.0001, thresholdPips: 25, unit: 'pips', digits: 5 },
   'GBP/USD': { oanda: 'GBP_USD', pipSize: 0.0001, thresholdPips: 25, unit: 'pips', digits: 5 },
 };
@@ -110,7 +110,7 @@ export function evaluate(input: EvalInput): EvalResult {
 
 // プッシュ通知の本文を組み立てる。
 //   FX     : "GBP/JPY が15分で25pips変動（190.000 → 190.250）"
-//   ゴールド: "XAU/JPY が15分で1000円変動（390000 → 391000）"
+//   ゴールド: "XAU/USD が15分で5ドル変動（2650.00 → 2655.00）"
 export function formatAlertBody(pair: AlertPair, high: number, low: number): string {
   const cfg = PAIR_CONFIG[pair];
   const amount = Math.round((high - low) / cfg.pipSize);
