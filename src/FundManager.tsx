@@ -63,6 +63,8 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
   const [cashflows, setCashflows] = useState<Cashflow[]>([]);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [modalTags, setModalTags] = useState<string[]>([]);
+  const [tagDraft, setTagDraft] = useState('');
   const [error, setError] = useState('');
   const btnRef = useRef<HTMLDivElement>(null);
 
@@ -125,6 +127,12 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
     if (idToken) reload();
   }, [idToken, reload]);
 
+  // モーダルを開く日が変わったらタグ入力をリセット。
+  useEffect(() => {
+    setModalTags([]);
+    setTagDraft('');
+  }, [selectedDate]);
+
   // タグ絞り込み中はそのタグを含むトレードだけを対象にする。
   const viewTrades = useMemo(
     () => (selectedTag ? trades.filter((t) => t.tags.includes(selectedTag)) : trades),
@@ -133,17 +141,20 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
   const summary = useMemo(() => computeSummary(settings, viewTrades, cashflows), [settings, viewTrades, cashflows]);
   const tagAggs = useMemo(() => aggregateByTag(trades).sort((a, b) => b.count - a.count), [trades]);
 
-  const parseTags = (raw: string): string[] =>
-    raw
-      .split(/[,、\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
+  // チップ式タグ入力。入力中のドラフトも取り込む。
+  const addTagChip = (tag: string) => {
+    const t = tag.trim();
+    if (t && !modalTags.includes(t)) setModalTags((prev) => [...prev, t]);
+    setTagDraft('');
+  };
 
   const addTrade = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!selectedDate) return;
     const form = e.currentTarget;
     const f = new FormData(form);
+    const draft = tagDraft.trim();
+    const tags = draft && !modalTags.includes(draft) ? [...modalTags, draft] : modalTags;
     try {
       await api('/trades', {
         method: 'POST',
@@ -151,11 +162,13 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
           date: selectedDate,
           invested: Number(f.get('invested')),
           recovered: Number(f.get('recovered')),
-          tags: parseTags(String(f.get('tags') ?? '')),
+          tags,
           note: f.get('note') || undefined,
         }),
       });
       form.reset();
+      setModalTags([]);
+      setTagDraft('');
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : '追加に失敗しました');
@@ -326,14 +339,50 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
                 <div className="grid grid-cols-2 gap-2">
                   <input name="invested" inputMode="decimal" placeholder="投資金額" className={inputCls} required />
                   <input name="recovered" inputMode="decimal" placeholder="回収金額" className={inputCls} required />
-                  <input name="tags" placeholder="タグ（例: 店A 20スロ）" list="tag-suggest" className={`${inputCls} col-span-2`} />
                   <input name="note" placeholder="メモ(任意)" className={`${inputCls} col-span-2`} />
                 </div>
-                <datalist id="tag-suggest">
-                  {tagAggs.map((a) => (
-                    <option key={a.tag} value={a.tag} />
-                  ))}
-                </datalist>
+
+                {/* タグ（チップ式: 入力してEnter / 候補タップで追加 / ×で削除） */}
+                <div>
+                  {modalTags.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mb-1">
+                      {modalTags.map((tg) => (
+                        <span key={tg} className="text-xs bg-orange-100 text-orange-700 rounded-full px-2 py-0.5 flex items-center">
+                          {tg}
+                          <button type="button" onClick={() => setModalTags(modalTags.filter((x) => x !== tg))} className="ml-1">
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <input
+                    value={tagDraft}
+                    onChange={(e) => setTagDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ',') {
+                        e.preventDefault();
+                        addTagChip(tagDraft);
+                      }
+                    }}
+                    placeholder="タグを入力してEnter（例: 店A）"
+                    className={inputCls}
+                  />
+                  {tagAggs.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {tagAggs.map((a) => (
+                        <button
+                          type="button"
+                          key={a.tag}
+                          onClick={() => addTagChip(a.tag)}
+                          className="text-[11px] text-gray-500 border border-gray-300 rounded-full px-2 py-0.5"
+                        >
+                          +{a.tag}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <button className="w-full rounded bg-orange-500 text-white py-2 text-sm">この日に追加</button>
               </form>
             </div>
