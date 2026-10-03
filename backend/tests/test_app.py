@@ -41,6 +41,30 @@ def test_elliott_returns_three_timeframes(monkeypatch):
     assert any(p["confirmed"] for p in tf["pivots"])
 
 
+def test_stoploss_returns_recommendation(monkeypatch):
+    monkeypatch.setattr(app_module, "get_secret", lambda name: "x" if name == "OANDA_API_TOKEN" else None)
+
+    async def fake_fetch(client, token, instrument, granularity, count, price="M"):
+        # 明確な下げ→上げ→下げで買い用のスイング安値ができる系列。
+        return _line([1.2650, 1.2720, 1.2688, 1.2710])
+
+    monkeypatch.setattr(app_module, "fetch_candles", fake_fetch)
+
+    r = client.get("/stoploss/GBP_USD?direction=long&timeframe=1h")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["instrument"] == "GBP_USD"
+    assert body["direction"] == "long"
+    assert body["stopLoss"]["basis"] == "swing_low"
+    assert body["stopLoss"]["price"] < body["entry"]
+    assert body["confidence"]["level"] in {"low", "medium", "high"}
+
+
+def test_stoploss_requires_direction():
+    r = client.get("/stoploss/GBP_USD?timeframe=1h")
+    assert r.status_code == 422  # direction 必須
+
+
 def test_elliott_threshold_override(monkeypatch):
     monkeypatch.setattr(app_module, "get_secret", lambda name: "dummy-token")
 
