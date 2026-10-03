@@ -25,3 +25,9 @@ CREATE TABLE IF NOT EXISTS alerts (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts (created_at);
+
+-- 汎用 key-value。フィード健全性（連続失敗回数・通知済みフラグ）の保持に使う。
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);

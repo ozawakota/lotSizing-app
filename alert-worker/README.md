@@ -31,9 +31,16 @@
 ## セットアップ
 
 ### 1. OANDA practice 口座とトークン
-1. [OANDA fxTrade practice](https://www.oanda.com/) でデモ口座を作成（本人確認あり）。
-2. 管理画面で **Personal Access Token** を発行。
-3. **口座ID**（例 `101-009-xxxxxxx-001`）を控える。
+1. **fxTrade Practice**（v20）のデモ口座を作成。**MT4 デモは選ばない**こと
+   （MT4 サブ口座は無操作90日で閉鎖される。v20 の fxTrade Practice は原則期限なし）。
+2. [hub.oanda.com](https://hub.oanda.com) → My Account → My Services → **Manage API Access**
+   で **Personal Access Token** を発行（1度しか表示されないので即コピー）。
+3. **口座ID**（デモは先頭 `101-`、例 `101-009-xxxxxxx-001`）を控える。
+   `curl -H "Authorization: Bearer <TOKEN>" https://api-fxpractice.oanda.com/v3/accounts` でも確認可。
+
+> 本 Worker は毎分 API を叩くため「無操作」にならず、デモ口座は実質失効しない。
+> 万一トークン失効/口座閉鎖で取得が連続失敗した場合は、**健全性通知（"データ取得に失敗
+> しています"）を自分にプッシュ**するので、無言停止には気づける（`FEED_FAIL_ALERT_AFTER`）。
 
 ### 2. VAPID 鍵を生成
 ```bash

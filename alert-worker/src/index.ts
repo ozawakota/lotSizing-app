@@ -31,6 +31,9 @@ interface Env {
 }
 
 const RECENT_WINDOW_MS = 2 * 60 * 1000; // /recent が返す直近アラートの範囲
+// OANDA 取得がこの回数（分）連続で失敗したら「健全性通知」を一度だけ送る。
+// 単発の瞬断で誤報しないよう、まとまった障害のみを対象にする。
+const FEED_FAIL_ALERT_AFTER = 10;
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -81,7 +84,18 @@ interface PairStateRow {
 
 const runDetection = async (env: Env): Promise<void> => {
   const now = Date.now();
-  const bids = await fetchBids(env);
+
+  // OANDA 取得失敗（401/ネットワーク等）は健全性通知の対象。成功したら失敗状態を解除。
+  // 取得は成功したが全ペア非 tradeable（週末）は「失敗」ではないので対象外。
+  let bids: Partial<Record<AlertPair, number>>;
+  try {
+    bids = await fetchBids(env);
+  } catch (e) {
+    await recordFeedFailure(env, String(e));
+    throw e;
+  }
+  await clearFeedFailure(env);
+
   let anyTriggered = false;
 
   for (const pair of ALERT_PAIRS) {
@@ -113,6 +127,46 @@ const runDetection = async (env: Env): Promise<void> => {
   }
 
   if (anyTriggered) await sendPushToAll(env);
+};
+
+// ---------------------------------------------------------------------------
+// フィード健全性（連続失敗の検知 → 自分へ通知）。meta テーブルに状態を保持。
+// ---------------------------------------------------------------------------
+const getMeta = async (env: Env, key: string): Promise<string | null> => {
+  const row = await env.DB.prepare('SELECT value FROM meta WHERE key = ?').bind(key).first<{ value: string }>();
+  return row ? row.value : null;
+};
+
+const setMeta = async (env: Env, key: string, value: string): Promise<void> => {
+  await env.DB.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .bind(key, value)
+    .run();
+};
+
+// 取得失敗を記録。連続 FEED_FAIL_ALERT_AFTER 回で健全性通知を一度だけ送る。
+const recordFeedFailure = async (env: Env, detail: string): Promise<void> => {
+  const count = Number((await getMeta(env, 'feed_fail_count')) ?? '0') + 1;
+  await setMeta(env, 'feed_fail_count', String(count));
+  const alerted = (await getMeta(env, 'feed_alerted')) === '1';
+  if (count >= FEED_FAIL_ALERT_AFTER && !alerted) {
+    await env.DB.prepare('INSERT INTO alerts (pair, body, created_at) VALUES (?, ?, ?)')
+      .bind(
+        'system',
+        '相場変動通知のデータ取得に失敗しています。OANDA のトークン/口座設定を確認してください。',
+        Date.now(),
+      )
+      .run();
+    await sendPushToAll(env);
+    await setMeta(env, 'feed_alerted', '1');
+  }
+  console.error(`OANDA 取得失敗（${count}回連続）: ${detail}`);
+};
+
+// 取得成功時に失敗状態をリセット（不要な書込は避ける）。
+const clearFeedFailure = async (env: Env): Promise<void> => {
+  const count = await getMeta(env, 'feed_fail_count');
+  if (count && count !== '0') await setMeta(env, 'feed_fail_count', '0');
+  if ((await getMeta(env, 'feed_alerted')) === '1') await setMeta(env, 'feed_alerted', '0');
 };
 
 // ---------------------------------------------------------------------------
