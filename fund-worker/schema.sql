@@ -12,12 +12,9 @@ CREATE TABLE IF NOT EXISTS trades (
   id         TEXT PRIMARY KEY,
   user_id    TEXT NOT NULL,
   date       TEXT NOT NULL,          -- "YYYY-MM-DD"
-  instrument TEXT NOT NULL,
-  direction  TEXT NOT NULL,          -- long | short
-  lot        REAL NOT NULL,
-  entry      REAL,
-  exit       REAL,
-  pnl        REAL NOT NULL,          -- 口座通貨の符号付き損益
+  invested   REAL NOT NULL,          -- 投資金額
+  recovered  REAL NOT NULL,          -- 回収金額（損益 = 回収 − 投資）
+  tags       TEXT NOT NULL DEFAULT '[]', -- タグの JSON 配列（店舗/機種/レート等）
   note       TEXT,
   created_at INTEGER NOT NULL
 );

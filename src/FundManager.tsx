@@ -1,14 +1,15 @@
-// 資金管理（トレードジャーナル）ページ。Google サインイン → fund-worker(Turso) と連携。
+// 資金管理（MAXBET 型・収支記録）ページ。Google サインイン → fund-worker(Turso) と連携。
+// 1件 = 日付 + 投資 + 回収 + タグ。損益=回収−投資、回収率=回収÷投資。
+// 月間損益カレンダー・エクイティ曲線・タグ絞り込みに対応。
 // VITE_GOOGLE_CLIENT_ID / VITE_FUND_URL 未設定時は案内のみ表示。
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Menu } from 'lucide-react';
-import type { Cashflow, FundSummary, Trade } from '@/lib/fund';
+import { aggregateByTag, computeSummary, pnlOf, type Cashflow, type FundSettings, type Trade } from '@/lib/fund';
 import TradeCalendar from './TradeCalendar';
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 const FUND_URL = import.meta.env.VITE_FUND_URL as string | undefined;
 
-// GIS の最小型。
 interface GoogleId {
   accounts: {
     id: {
@@ -25,17 +26,17 @@ declare global {
 
 const decodeEmail = (idToken: string): string => {
   try {
-    const payload = JSON.parse(atob(idToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-    return payload.email ?? '';
+    return JSON.parse(atob(idToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).email ?? '';
   } catch {
     return '';
   }
 };
 
 const today = () => new Date().toISOString().slice(0, 10);
+const yen = (n: number) => n.toLocaleString();
 
-function EquityCurve({ summary }: { summary: FundSummary }) {
-  const points = [summary.startingBalance, ...summary.equityCurve.map((p) => p.balance)];
+function EquityCurve({ startingBalance, balances }: { startingBalance: number; balances: number[] }) {
+  const points = [startingBalance, ...balances];
   if (points.length < 2) return null;
   const w = 300;
   const h = 60;
@@ -43,11 +44,7 @@ function EquityCurve({ summary }: { summary: FundSummary }) {
   const max = Math.max(...points);
   const span = max - min || 1;
   const d = points
-    .map((b, i) => {
-      const x = (i / (points.length - 1)) * w;
-      const y = h - ((b - min) / span) * h;
-      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
-    })
+    .map((b, i) => `${i === 0 ? 'M' : 'L'}${((i / (points.length - 1)) * w).toFixed(1)},${(h - ((b - min) / span) * h).toFixed(1)}`)
     .join(' ');
   const up = points[points.length - 1] >= points[0];
   return (
@@ -60,10 +57,11 @@ function EquityCurve({ summary }: { summary: FundSummary }) {
 export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) {
   const [idToken, setIdToken] = useState('');
   const [email, setEmail] = useState('');
-  const [summary, setSummary] = useState<FundSummary | null>(null);
+  const [settings, setSettings] = useState<FundSettings>({ startingBalance: 0, currency: 'JPY' });
   const [trades, setTrades] = useState<Trade[]>([]);
   const [cashflows, setCashflows] = useState<Cashflow[]>([]);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [error, setError] = useState('');
   const btnRef = useRef<HTMLDivElement>(null);
 
@@ -89,8 +87,8 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
   const reload = useCallback(async () => {
     setError('');
     try {
-      const [s, t, c] = await Promise.all([api('/summary'), api('/trades'), api('/cashflows')]);
-      setSummary(s);
+      const [s, t, c] = await Promise.all([api('/settings'), api('/trades'), api('/cashflows')]);
+      setSettings(s);
       setTrades(t);
       setCashflows(c);
     } catch (e) {
@@ -98,7 +96,6 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
     }
   }, [api]);
 
-  // GIS 初期化・ボタン描画（未ログイン時）。
   useEffect(() => {
     if (!configured || idToken) return;
     const init = () => {
@@ -127,6 +124,20 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
     if (idToken) reload();
   }, [idToken, reload]);
 
+  // タグ絞り込み中はそのタグを含むトレードだけを対象にする。
+  const viewTrades = useMemo(
+    () => (selectedTag ? trades.filter((t) => t.tags.includes(selectedTag)) : trades),
+    [trades, selectedTag],
+  );
+  const summary = useMemo(() => computeSummary(settings, viewTrades, cashflows), [settings, viewTrades, cashflows]);
+  const tagAggs = useMemo(() => aggregateByTag(trades).sort((a, b) => b.count - a.count), [trades]);
+
+  const parseTags = (raw: string): string[] =>
+    raw
+      .split(/[,、\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
   const addTrade = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
@@ -135,10 +146,9 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
         method: 'POST',
         body: JSON.stringify({
           date: f.get('date'),
-          instrument: f.get('instrument'),
-          direction: f.get('direction'),
-          lot: Number(f.get('lot')),
-          pnl: Number(f.get('pnl')),
+          invested: Number(f.get('invested')),
+          recovered: Number(f.get('recovered')),
+          tags: parseTags(String(f.get('tags') ?? '')),
           note: f.get('note') || undefined,
         }),
       });
@@ -188,6 +198,7 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
   };
 
   const inputCls = 'rounded border border-gray-300 px-2 py-1 text-sm bg-white w-full';
+  const dayTrades = selectedDate ? viewTrades.filter((t) => t.date === selectedDate) : [];
 
   return (
     <>
@@ -218,49 +229,121 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
           <p className="text-[11px] text-gray-400 text-right">{email}</p>
           {error && <p className="text-sm text-red-600">{error}</p>}
 
-          {/* サマリー */}
-          {summary && (
-            <div className="bg-blue-50 rounded-md p-3 border border-blue-200">
-              <div className="flex justify-between items-baseline">
-                <p className="text-sm text-gray-600">残高</p>
-                <p className="text-2xl font-bold text-blue-700">
-                  {summary.balance.toLocaleString()} {summary.currency}
-                </p>
-              </div>
-              <EquityCurve summary={summary} />
-              <div className="grid grid-cols-3 gap-2 text-center text-xs mt-1">
-                <div>
-                  <p className="text-gray-500">累計損益</p>
-                  <p className={`font-bold ${summary.cumulativePnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {summary.cumulativePnl.toLocaleString()}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-gray-500">勝率</p>
-                  <p className="font-bold">{(summary.winRate * 100).toFixed(0)}%（{summary.wins}/{summary.wins + summary.losses}）</p>
-                </div>
-                <div>
-                  <p className="text-gray-500">最大DD</p>
-                  <p className="font-bold text-red-600">{summary.maxDrawdown.toLocaleString()}</p>
-                </div>
-              </div>
+          {/* タグフィルタ */}
+          {tagAggs.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              <button
+                type="button"
+                onClick={() => setSelectedTag(null)}
+                className={`text-xs px-2 py-0.5 rounded-full border ${selectedTag === null ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-gray-600 border-gray-300'}`}
+              >
+                すべて
+              </button>
+              {tagAggs.map((a) => (
+                <button
+                  key={a.tag}
+                  type="button"
+                  onClick={() => setSelectedTag(a.tag === selectedTag ? null : a.tag)}
+                  className={`text-xs px-2 py-0.5 rounded-full border ${selectedTag === a.tag ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-gray-600 border-gray-300'}`}
+                >
+                  {a.tag}
+                </button>
+              ))}
             </div>
           )}
 
+          {/* サマリー */}
+          <div className="bg-blue-50 rounded-md p-3 border border-blue-200">
+            <div className="flex justify-between items-baseline">
+              <p className="text-sm text-gray-600">{selectedTag ? `「${selectedTag}」収支` : '残高'}</p>
+              <p className="text-2xl font-bold text-blue-700">
+                {selectedTag ? (
+                  <span className={summary.cumulativePnl >= 0 ? 'text-green-600' : 'text-red-600'}>
+                    {summary.cumulativePnl >= 0 ? '+' : ''}
+                    {yen(summary.cumulativePnl)}
+                  </span>
+                ) : (
+                  <>{yen(summary.balance)} {summary.currency}</>
+                )}
+              </p>
+            </div>
+            {!selectedTag && <EquityCurve startingBalance={summary.startingBalance} balances={summary.equityCurve.map((p) => p.balance)} />}
+            <div className="grid grid-cols-3 gap-2 text-center text-xs mt-1">
+              <div>
+                <p className="text-gray-500">回収率</p>
+                <p className={`font-bold ${summary.recoveryRate >= 1 ? 'text-green-600' : 'text-red-600'}`}>
+                  {(summary.recoveryRate * 100).toFixed(0)}%
+                </p>
+              </div>
+              <div>
+                <p className="text-gray-500">勝率</p>
+                <p className="font-bold">
+                  {(summary.winRate * 100).toFixed(0)}%（{summary.wins}/{summary.wins + summary.losses}）
+                </p>
+              </div>
+              <div>
+                <p className="text-gray-500">投資/回収</p>
+                <p className="font-bold">{yen(summary.totalInvested)}→{yen(summary.totalRecovered)}</p>
+              </div>
+            </div>
+          </div>
+
           {/* 月間損益カレンダー */}
-          <TradeCalendar trades={trades} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
+          <TradeCalendar trades={viewTrades} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
+
+          {/* 記録追加（1タップ入力） */}
+          <form key={selectedDate ?? 'new'} onSubmit={addTrade} className="bg-white rounded-md p-3 border border-gray-200 space-y-2">
+            <p className="text-sm font-bold text-gray-700">記録を追加</p>
+            <div className="grid grid-cols-2 gap-2">
+              <input name="date" type="date" defaultValue={selectedDate ?? today()} className={inputCls} required />
+              <input name="tags" placeholder="タグ（例: 店A 20スロ）" list="tag-suggest" className={inputCls} />
+              <input name="invested" inputMode="decimal" placeholder="投資金額" className={inputCls} required />
+              <input name="recovered" inputMode="decimal" placeholder="回収金額" className={inputCls} required />
+              <input name="note" placeholder="メモ(任意)" className={`${inputCls} col-span-2`} />
+            </div>
+            <datalist id="tag-suggest">
+              {tagAggs.map((a) => (
+                <option key={a.tag} value={a.tag} />
+              ))}
+            </datalist>
+            <button className="w-full rounded bg-orange-500 text-white py-1.5 text-sm">追加</button>
+          </form>
+
+          {/* 選択日の記録 */}
+          {selectedDate && (
+            <div className="bg-white rounded-md border border-gray-200">
+              <p className="px-3 py-1.5 text-xs font-bold text-gray-700 border-b">{selectedDate} の記録</p>
+              {dayTrades.length === 0 ? (
+                <p className="px-3 py-2 text-xs text-gray-400">記録なし</p>
+              ) : (
+                <div className="divide-y">
+                  {dayTrades.map((t) => (
+                    <div key={t.id} className="flex items-center justify-between px-3 py-1.5 text-xs gap-2">
+                      <span className="text-gray-500 shrink-0">投{yen(t.invested)}→回{yen(t.recovered)}</span>
+                      <span className="flex-1 truncate text-gray-400">{t.tags.join(' ')}</span>
+                      <span className={pnlOf(t) >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>
+                        {pnlOf(t) >= 0 ? '+' : ''}
+                        {yen(pnlOf(t))}
+                      </span>
+                      <button onClick={() => del('trades', t.id)} className="text-gray-400 hover:text-red-500">×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* 設定 */}
           <form onSubmit={saveSettings} className="bg-gray-50 rounded-md p-3 border border-gray-200">
             <p className="text-sm font-bold text-gray-700 mb-1">初期設定</p>
             <div className="grid grid-cols-3 gap-2 items-end">
-              <label className="text-xs text-gray-600 col-span-1">
+              <label className="text-xs text-gray-600">
                 初期残高
-                <input name="startingBalance" inputMode="decimal" defaultValue={summary?.startingBalance ?? 0} className={inputCls} />
+                <input name="startingBalance" inputMode="decimal" defaultValue={settings.startingBalance} className={inputCls} />
               </label>
               <label className="text-xs text-gray-600">
                 通貨
-                <select name="currency" defaultValue={summary?.currency ?? 'JPY'} className={inputCls}>
+                <select name="currency" defaultValue={settings.currency} className={inputCls}>
                   <option>JPY</option>
                   <option>USD</option>
                 </select>
@@ -269,48 +352,7 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
             </div>
           </form>
 
-          {/* トレード追加 */}
-          <form key={selectedDate ?? 'new'} onSubmit={addTrade} className="bg-white rounded-md p-3 border border-gray-200 space-y-2">
-            <p className="text-sm font-bold text-gray-700">トレード追加</p>
-            <div className="grid grid-cols-2 gap-2">
-              <input name="date" type="date" defaultValue={selectedDate ?? today()} className={inputCls} required />
-              <input name="instrument" placeholder="USD_JPY" className={inputCls} required />
-              <select name="direction" className={inputCls}>
-                <option value="long">買い</option>
-                <option value="short">売り</option>
-              </select>
-              <input name="lot" inputMode="decimal" placeholder="ロット" className={inputCls} required />
-              <input name="pnl" inputMode="decimal" placeholder="損益(±)" className={inputCls} required />
-              <input name="note" placeholder="メモ(任意)" className={inputCls} />
-            </div>
-            <button className="w-full rounded bg-orange-500 text-white py-1.5 text-sm">追加</button>
-          </form>
-
-          {/* 選択日のトレード */}
-          {selectedDate && (
-            <div className="bg-white rounded-md border border-gray-200">
-              <p className="px-3 py-1.5 text-xs font-bold text-gray-700 border-b">{selectedDate} のトレード</p>
-              {trades.filter((t) => t.date === selectedDate).length === 0 ? (
-                <p className="px-3 py-2 text-xs text-gray-400">記録なし</p>
-              ) : (
-                <div className="divide-y">
-                  {trades
-                    .filter((t) => t.date === selectedDate)
-                    .map((t) => (
-                      <div key={t.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
-                        <span>{t.instrument} {t.direction === 'long' ? '買' : '売'} {t.lot}</span>
-                        <span className={t.pnl >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>
-                          {t.pnl.toLocaleString()}
-                        </span>
-                        <button onClick={() => del('trades', t.id)} className="text-gray-400 hover:text-red-500">×</button>
-                      </div>
-                    ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* 入出金追加 */}
+          {/* 入出金 */}
           <form onSubmit={addCashflow} className="bg-white rounded-md p-3 border border-gray-200 space-y-2">
             <p className="text-sm font-bold text-gray-700">入出金</p>
             <div className="grid grid-cols-3 gap-2">
@@ -330,7 +372,7 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
                 <div key={c.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
                   <span className="text-gray-500">{c.date}</span>
                   <span>{c.type === 'deposit' ? '入金' : '出金'}</span>
-                  <span className="font-bold">{c.amount.toLocaleString()}</span>
+                  <span className="font-bold">{yen(c.amount)}</span>
                   <button onClick={() => del('cashflows', c.id)} className="text-gray-400 hover:text-red-500">×</button>
                 </div>
               ))}

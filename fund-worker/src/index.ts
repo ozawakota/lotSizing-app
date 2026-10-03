@@ -124,15 +124,21 @@ const dbClient = (env: Env): Client =>
 
 type Row = Record<string, unknown>;
 
+const parseTags = (v: unknown): string[] => {
+  try {
+    const arr = JSON.parse(String(v ?? '[]'));
+    return Array.isArray(arr) ? arr.map(String) : [];
+  } catch {
+    return [];
+  }
+};
+
 const rowToTrade = (r: Row): Trade => ({
   id: String(r.id),
   date: String(r.date),
-  instrument: String(r.instrument),
-  direction: r.direction === 'short' ? 'short' : 'long',
-  lot: Number(r.lot),
-  entry: r.entry == null ? null : Number(r.entry),
-  exit: r.exit == null ? null : Number(r.exit),
-  pnl: Number(r.pnl),
+  invested: Number(r.invested),
+  recovered: Number(r.recovered),
+  tags: parseTags(r.tags),
   note: r.note == null ? undefined : String(r.note),
 });
 
@@ -168,19 +174,16 @@ const handleGetTrades = async (db: Client, userId: string): Promise<Response> =>
 
 const handlePostTrade = async (db: Client, userId: string, body: Row): Promise<Response> => {
   const id = crypto.randomUUID();
-  const direction = body.direction === 'short' ? 'short' : 'long';
+  const tags = Array.isArray(body.tags) ? body.tags.map(String) : [];
   await db.execute({
-    sql: 'INSERT INTO trades (id, user_id, date, instrument, direction, lot, entry, exit, pnl, note, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+    sql: 'INSERT INTO trades (id, user_id, date, invested, recovered, tags, note, created_at) VALUES (?,?,?,?,?,?,?,?)',
     args: [
       id,
       userId,
       String(body.date ?? ''),
-      String(body.instrument ?? ''),
-      direction,
-      Number(body.lot ?? 0),
-      body.entry == null ? null : Number(body.entry),
-      body.exit == null ? null : Number(body.exit),
-      Number(body.pnl ?? 0),
+      Number(body.invested ?? 0),
+      Number(body.recovered ?? 0),
+      JSON.stringify(tags),
       body.note == null ? null : String(body.note),
       Date.now(),
     ],
