@@ -1,0 +1,14 @@
+{
+  "name": "lotsizing-alert-worker",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240909.0",
+    "wrangler": "^4.0.0"
+  }
+}

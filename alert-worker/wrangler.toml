@@ -1,0 +1,34 @@
+# 相場変動通知 Alert Worker 設定
+# 役割: 毎分 OANDA practice から4ペアの Bid を取得し、15分/25pips を判定して
+#       Web Push（ペイロードレス・VAPID署名）を配信する。検知ロジックは
+#       ../src/lib/alert.ts をフロント/テストと共有。
+#
+# 既存の currency-strength Worker とは別 Worker。無料枠の Cron はアカウント合計5本
+# （currency-strength が3本 + 本Workerの1本 = 4本）で収まる。
+name = "lotsizing-alert"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+# 毎分実行（Cron の最短間隔）。15分窓に対し約15サンプルを確保する。
+[triggers]
+crons = ["* * * * *"]
+
+# D1: 購読・ペア状態・直近アラートを保存。
+#   npx wrangler d1 create lotsizing-alert   で作成し、出力の database_id を貼る。
+#   スキーマ投入: npx wrangler d1 execute lotsizing-alert --remote --file=./schema.sql
+[[d1_databases]]
+binding = "DB"
+database_name = "lotsizing-alert"
+database_id = "<D1 を作成して database_id を貼る>"
+
+# 公開してよい設定は vars、秘匿情報は `wrangler secret put` で登録する。
+#   VAPID_SUBJECT     … 連絡先（例 mailto:you@example.com）
+#   VAPID_PUBLIC_KEY  … VAPID 公開鍵（base64url, 65バイト非圧縮点）。クライアントにも同値を渡す。
+[vars]
+VAPID_SUBJECT = "mailto:you@example.com"
+VAPID_PUBLIC_KEY = "<`npx web-push generate-vapid-keys` の publicKey>"
+
+# secret（`wrangler secret put <NAME>` で登録。ここには書かない）:
+#   OANDA_API_TOKEN   … OANDA practice の個人アクセストークン
+#   OANDA_ACCOUNT_ID  … OANDA practice の口座ID（例 101-009-xxxxxxx-001）
+#   VAPID_PRIVATE_KEY … VAPID 秘密鍵（base64url, 32バイト d 値）

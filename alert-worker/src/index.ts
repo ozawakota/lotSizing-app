@@ -1,0 +1,266 @@
+/// <reference types="@cloudflare/workers-types" />
+// 相場変動通知 Alert Worker（外貨ex 準拠）。
+//
+// - scheduled(): 毎分 OANDA practice から4ペアの Bid を取得し、ペアごとに
+//   15分/25pips を判定（判定ロジックは ../../src/lib/alert.ts を共有）。発火したら
+//   alerts に記録し、全購読へ「ペイロードレス Web Push」を送る。
+// - fetch(): クライアント向け API。
+//     POST /subscribe   … 購読を登録
+//     POST /unsubscribe … 購読を解除
+//     GET  /recent      … 直近2分のアラート（SW が push 受信時に引く）
+//     GET  /vapidPublicKey … VAPID 公開鍵（任意・デバッグ用）
+//
+// Web Push はペイロード暗号化(RFC8291)を避け、空ボディ＋VAPID署名のみで送信する。
+// SW は push 受信をトリガに /recent を取得し、tag=ペア で重複を排除して通知表示する。
+import {
+  ALERT_PAIRS,
+  OANDA_INSTRUMENT,
+  evaluate,
+  formatAlertBody,
+  type AlertPair,
+  type Sample,
+} from '../../src/lib/alert';
+
+interface Env {
+  DB: D1Database;
+  OANDA_API_TOKEN: string; // secret
+  OANDA_ACCOUNT_ID: string; // secret
+  VAPID_PUBLIC_KEY: string; // var（base64url, 65バイト非圧縮点）
+  VAPID_PRIVATE_KEY: string; // secret（base64url, 32バイト d 値）
+  VAPID_SUBJECT: string; // var（例 mailto:you@example.com）
+}
+
+const RECENT_WINDOW_MS = 2 * 60 * 1000; // /recent が返す直近アラートの範囲
+
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Content-Type': 'application/json; charset=utf-8',
+  'Cache-Control': 'no-store',
+};
+
+// ---------------------------------------------------------------------------
+// OANDA practice: 4ペアの Bid を一括取得（tradeable のもののみ）。
+// ---------------------------------------------------------------------------
+interface OandaPrice {
+  instrument: string;
+  status: string;
+  bids?: { price: string }[];
+}
+
+const fetchBids = async (env: Env): Promise<Partial<Record<AlertPair, number>>> => {
+  const instruments = ALERT_PAIRS.map((p) => OANDA_INSTRUMENT[p]).join(',');
+  const url =
+    `https://api-fxpractice.oanda.com/v3/accounts/${env.OANDA_ACCOUNT_ID}/pricing` +
+    `?instruments=${encodeURIComponent(instruments)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${env.OANDA_API_TOKEN}` },
+  });
+  if (!res.ok) throw new Error(`OANDA HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const data = (await res.json()) as { prices?: OandaPrice[] };
+
+  const byInstrument = new Map<string, AlertPair>(ALERT_PAIRS.map((p) => [OANDA_INSTRUMENT[p], p]));
+  const out: Partial<Record<AlertPair, number>> = {};
+  for (const price of data.prices ?? []) {
+    if (price.status !== 'tradeable') continue; // 市場休止中は無視
+    const pair = byInstrument.get(price.instrument);
+    const bid = Number(price.bids?.[0]?.price);
+    if (pair && !Number.isNaN(bid)) out[pair] = bid;
+  }
+  return out;
+};
+
+// ---------------------------------------------------------------------------
+// 毎分の検知。失敗したペアは状態を更新せず前回値を保持。
+// ---------------------------------------------------------------------------
+interface PairStateRow {
+  samples: string;
+  cooldown_until: number | null;
+}
+
+const runDetection = async (env: Env): Promise<void> => {
+  const now = Date.now();
+  const bids = await fetchBids(env);
+  let anyTriggered = false;
+
+  for (const pair of ALERT_PAIRS) {
+    const bid = bids[pair];
+    if (bid == null) continue; // 取得失敗/市場休止 → 状態維持
+
+    const row = await env.DB.prepare('SELECT samples, cooldown_until FROM pair_state WHERE pair = ?')
+      .bind(pair)
+      .first<PairStateRow>();
+    const samples: Sample[] = row ? (JSON.parse(row.samples) as Sample[]) : [];
+    const cooldownUntil = row ? row.cooldown_until : null;
+
+    const r = evaluate({ pair, samples, newSample: { ts: now, bid }, cooldownUntil, now });
+
+    await env.DB.prepare(
+      'INSERT INTO pair_state (pair, samples, cooldown_until) VALUES (?, ?, ?) ' +
+        'ON CONFLICT(pair) DO UPDATE SET samples = excluded.samples, cooldown_until = excluded.cooldown_until',
+    )
+      .bind(pair, JSON.stringify(r.samples), r.cooldownUntil)
+      .run();
+
+    if (r.triggered) {
+      const body = formatAlertBody(pair, r.high, r.low);
+      await env.DB.prepare('INSERT INTO alerts (pair, body, created_at) VALUES (?, ?, ?)')
+        .bind(pair, body, now)
+        .run();
+      anyTriggered = true;
+    }
+  }
+
+  if (anyTriggered) await sendPushToAll(env);
+};
+
+// ---------------------------------------------------------------------------
+// Web Push（ペイロードレス・VAPID署名）。失効した購読は削除する。
+// ---------------------------------------------------------------------------
+interface SubscriptionRow {
+  endpoint: string;
+}
+
+const sendPushToAll = async (env: Env): Promise<void> => {
+  const subs = await env.DB.prepare('SELECT endpoint FROM subscriptions').all<SubscriptionRow>();
+  for (const sub of subs.results ?? []) {
+    try {
+      const aud = new URL(sub.endpoint).origin;
+      const jwt = await makeVapidJwt(env, aud);
+      const res = await fetch(sub.endpoint, {
+        method: 'POST',
+        headers: {
+          TTL: '120',
+          Authorization: `vapid t=${jwt}, k=${env.VAPID_PUBLIC_KEY}`,
+        },
+      });
+      if (res.status === 404 || res.status === 410) {
+        await env.DB.prepare('DELETE FROM subscriptions WHERE endpoint = ?').bind(sub.endpoint).run();
+      }
+    } catch (e) {
+      console.error('push 送信失敗:', e);
+    }
+  }
+};
+
+// VAPID の ES256 JWT を Web Crypto で署名して返す。
+const makeVapidJwt = async (env: Env, audience: string): Promise<string> => {
+  const header = strToB64url(JSON.stringify({ typ: 'JWT', alg: 'ES256' }));
+  const payload = strToB64url(
+    JSON.stringify({
+      aud: audience,
+      exp: Math.floor(Date.now() / 1000) + 12 * 3600,
+      sub: env.VAPID_SUBJECT,
+    }),
+  );
+  const unsigned = `${header}.${payload}`;
+  const key = await importVapidPrivateKey(env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY);
+  const sig = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    key,
+    new TextEncoder().encode(unsigned),
+  );
+  // Web Crypto の ECDSA 署名は raw r||s（64バイト）＝ JWT が要求する形式そのまま。
+  return `${unsigned}.${bytesToB64url(new Uint8Array(sig))}`;
+};
+
+// web-push 形式の鍵（公開=65バイト非圧縮点, 秘密=32バイト d）を JWK にして取り込む。
+const importVapidPrivateKey = (publicB64: string, privateB64: string): Promise<CryptoKey> => {
+  const pub = b64urlToBytes(publicB64); // 0x04 || X(32) || Y(32)
+  const d = privateB64;
+  const x = bytesToB64url(pub.slice(1, 33));
+  const y = bytesToB64url(pub.slice(33, 65));
+  return crypto.subtle.importKey(
+    'jwk',
+    { kty: 'EC', crv: 'P-256', x, y, d, ext: true },
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign'],
+  );
+};
+
+// ---------------------------------------------------------------------------
+// base64url ヘルパ
+// ---------------------------------------------------------------------------
+const b64urlToBytes = (input: string): Uint8Array => {
+  let s = input.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = s.length % 4;
+  if (pad) s += '='.repeat(4 - pad);
+  const bin = atob(s);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+};
+
+const bytesToB64url = (bytes: Uint8Array): string => {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+
+const strToB64url = (str: string): string => bytesToB64url(new TextEncoder().encode(str));
+
+// ---------------------------------------------------------------------------
+// クライアント向け API
+// ---------------------------------------------------------------------------
+interface SubscribeBody {
+  endpoint?: string;
+  keys?: { p256dh?: string; auth?: string };
+}
+
+const handleSubscribe = async (req: Request, env: Env): Promise<Response> => {
+  const body = (await req.json()) as SubscribeBody;
+  if (!body.endpoint || !body.keys?.p256dh || !body.keys?.auth) {
+    return new Response(JSON.stringify({ error: 'invalid subscription' }), { status: 400, headers: CORS_HEADERS });
+  }
+  await env.DB.prepare(
+    'INSERT INTO subscriptions (endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?) ' +
+      'ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth',
+  )
+    .bind(body.endpoint, body.keys.p256dh, body.keys.auth, Date.now())
+    .run();
+  return new Response(JSON.stringify({ ok: true }), { headers: CORS_HEADERS });
+};
+
+const handleUnsubscribe = async (req: Request, env: Env): Promise<Response> => {
+  const body = (await req.json()) as { endpoint?: string };
+  if (!body.endpoint) {
+    return new Response(JSON.stringify({ error: 'endpoint required' }), { status: 400, headers: CORS_HEADERS });
+  }
+  await env.DB.prepare('DELETE FROM subscriptions WHERE endpoint = ?').bind(body.endpoint).run();
+  return new Response(JSON.stringify({ ok: true }), { headers: CORS_HEADERS });
+};
+
+const handleRecent = async (env: Env): Promise<Response> => {
+  const since = Date.now() - RECENT_WINDOW_MS;
+  const rows = await env.DB.prepare(
+    'SELECT id, pair, body FROM alerts WHERE created_at >= ? ORDER BY created_at ASC',
+  )
+    .bind(since)
+    .all<{ id: number; pair: string; body: string }>();
+  return new Response(JSON.stringify(rows.results ?? []), { headers: CORS_HEADERS });
+};
+
+export default {
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      runDetection(env).catch((e) => {
+        console.error('検知 失敗（前回状態を保持）:', e);
+      }),
+    );
+  },
+
+  async fetch(req: Request, env: Env): Promise<Response> {
+    if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
+    const { pathname } = new URL(req.url);
+
+    if (req.method === 'POST' && pathname === '/subscribe') return handleSubscribe(req, env);
+    if (req.method === 'POST' && pathname === '/unsubscribe') return handleUnsubscribe(req, env);
+    if (req.method === 'GET' && pathname === '/recent') return handleRecent(env);
+    if (req.method === 'GET' && pathname === '/vapidPublicKey') {
+      return new Response(JSON.stringify({ publicKey: env.VAPID_PUBLIC_KEY }), { headers: CORS_HEADERS });
+    }
+    return new Response(JSON.stringify({ error: 'not found' }), { status: 404, headers: CORS_HEADERS });
+  },
+};

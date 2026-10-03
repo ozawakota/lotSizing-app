@@ -5,6 +5,7 @@ import { FC, useState, useEffect } from 'react';
 import HelpModal from './HelpModal'; // 前提：別ファイルに作成済み
 import DstInfoModal from './DstInfoModal'; // 夏時間/冬時間の説明モーダル
 import CurrencyStrengthMeter from './CurrencyStrengthMeter';
+import MarketAlertCard from './MarketAlertCard'; // 相場変動通知の ON/OFF カード
 import OrderFlow from './OrderFlow'; // 取引量・センチメント ページ
 import { Menu } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetClose } from '@/components/ui/sheet';
@@ -850,6 +851,8 @@ const App: FC = () => {
         <WorldClock />
         {/* 通貨強弱（毎時・折りたたみ式） */}
         <CurrencyStrengthMeter />
+        {/* 相場変動通知（ON/OFF。env 未設定なら非表示） */}
+        <MarketAlertCard />
         {/* 夏時間/冬時間の説明ボタン */}
         <button
           type="button"
