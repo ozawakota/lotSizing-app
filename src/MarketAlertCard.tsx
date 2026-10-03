@@ -1,5 +1,5 @@
 // 相場変動通知の ON/OFF カード（計算機ページに配置）。
-// 外貨ex 準拠: 対象4ペアの Bid が15分で25pips以上変動したらプッシュ通知。
+// 外貨ex 準拠: 対象ペアの Bid が15分で大きく変動（FX=25pips / XAU/JPY=1000円）したらプッシュ通知。
 // 検知/送信は Alert Worker が担い、本カードは購読の登録/解除と状態表示のみ。
 import { useEffect, useState } from 'react';
 import {
@@ -51,7 +51,7 @@ export default function MarketAlertCard() {
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-sm font-bold text-gray-700">相場変動通知</p>
-          <p className="text-xs text-gray-500">4ペアが15分で25pips変動したら通知</p>
+          <p className="text-xs text-gray-500">対象ペアが15分で急変動したら通知</p>
         </div>
         <button
           type="button"

@@ -16,47 +16,55 @@ describe('pruneWindow', () => {
   it('窓より古いサンプルを落とす', () => {
     const now = T0 + min(20);
     const samples: Sample[] = [
-      { ts: T0, bid: 150.0 }, // 20分前 → 落ちる
-      { ts: T0 + min(6), bid: 150.1 }, // 14分前 → 残る
-      { ts: T0 + min(20), bid: 150.2 }, // 今 → 残る
+      { ts: T0, bid: 190.0 }, // 20分前 → 落ちる
+      { ts: T0 + min(6), bid: 190.1 }, // 14分前 → 残る
+      { ts: T0 + min(20), bid: 190.2 }, // 今 → 残る
     ];
     expect(pruneWindow(samples, now)).toHaveLength(2);
   });
 
   it('ちょうど15分前は窓内に含む（境界）', () => {
     const now = T0 + WINDOW_MS;
-    expect(pruneWindow([{ ts: T0, bid: 150 }], now)).toHaveLength(1);
+    expect(pruneWindow([{ ts: T0, bid: 190 }], now)).toHaveLength(1);
   });
 });
 
 describe('rangePips', () => {
   it('JPYクロスは 0.01 を 1pip として換算', () => {
     const samples: Sample[] = [
-      { ts: T0, bid: 150.0 },
-      { ts: T0 + 1, bid: 150.25 },
+      { ts: T0, bid: 190.0 },
+      { ts: T0 + 1, bid: 190.25 },
     ];
-    expect(rangePips(samples, 'USD/JPY')).toBeCloseTo(25, 6);
+    expect(rangePips(samples, 'GBP/JPY')).toBeCloseTo(25, 6);
   });
 
-  it('EUR/USD は 0.0001 を 1pip として換算', () => {
+  it('ドルストレートは 0.0001 を 1pip として換算', () => {
     const samples: Sample[] = [
-      { ts: T0, bid: 1.1 },
-      { ts: T0 + 1, bid: 1.1025 },
+      { ts: T0, bid: 1.27 },
+      { ts: T0 + 1, bid: 1.2725 },
     ];
-    expect(rangePips(samples, 'EUR/USD')).toBeCloseTo(25, 6);
+    expect(rangePips(samples, 'GBP/USD')).toBeCloseTo(25, 6);
+  });
+
+  it('XAU/JPY は 1円 を 1単位として換算', () => {
+    const samples: Sample[] = [
+      { ts: T0, bid: 390000 },
+      { ts: T0 + 1, bid: 391000 },
+    ];
+    expect(rangePips(samples, 'XAU/JPY')).toBeCloseTo(1000, 6);
   });
 
   it('サンプルが1つなら 0', () => {
-    expect(rangePips([{ ts: T0, bid: 150 }], 'USD/JPY')).toBe(0);
+    expect(rangePips([{ ts: T0, bid: 190 }], 'GBP/JPY')).toBe(0);
   });
 });
 
 describe('evaluate', () => {
   it('25pips未満なら発火せず窓に追加する', () => {
     const r = evaluate({
-      pair: 'USD/JPY',
-      samples: [{ ts: T0, bid: 150.0 }],
-      newSample: { ts: T0 + min(1), bid: 150.1 },
+      pair: 'GBP/JPY',
+      samples: [{ ts: T0, bid: 190.0 }],
+      newSample: { ts: T0 + min(1), bid: 190.1 },
       cooldownUntil: null,
       now: T0 + min(1),
     });
@@ -68,9 +76,9 @@ describe('evaluate', () => {
   it('15分窓内で25pips以上なら発火しクールダウンを開始・窓リセット', () => {
     const now = T0 + min(10);
     const r = evaluate({
-      pair: 'USD/JPY',
-      samples: [{ ts: T0, bid: 150.0 }],
-      newSample: { ts: now, bid: 150.25 },
+      pair: 'GBP/JPY',
+      samples: [{ ts: T0, bid: 190.0 }],
+      newSample: { ts: now, bid: 190.25 },
       cooldownUntil: null,
       now,
     });
@@ -80,12 +88,37 @@ describe('evaluate', () => {
     expect(r.samples).toEqual([]);
   });
 
+  it('XAU/JPY は 15分で1000円以上動いたら発火する', () => {
+    const now = T0 + min(5);
+    const r = evaluate({
+      pair: 'XAU/JPY',
+      samples: [{ ts: T0, bid: 390000 }],
+      newSample: { ts: now, bid: 391000 },
+      cooldownUntil: null,
+      now,
+    });
+    expect(r.triggered).toBe(true);
+    expect(r.rangePips).toBeCloseTo(1000, 6);
+  });
+
+  it('XAU/JPY は 1000円未満では発火しない', () => {
+    const now = T0 + min(5);
+    const r = evaluate({
+      pair: 'XAU/JPY',
+      samples: [{ ts: T0, bid: 390000 }],
+      newSample: { ts: now, bid: 390500 },
+      cooldownUntil: null,
+      now,
+    });
+    expect(r.triggered).toBe(false);
+  });
+
   it('古い高値が窓から外れると発火しない', () => {
     const now = T0 + min(20);
     const r = evaluate({
-      pair: 'USD/JPY',
-      samples: [{ ts: T0, bid: 150.3 }], // 20分前の高値 → 窓外
-      newSample: { ts: now, bid: 150.0 },
+      pair: 'GBP/JPY',
+      samples: [{ ts: T0, bid: 190.3 }], // 20分前の高値 → 窓外
+      newSample: { ts: now, bid: 190.0 },
       cooldownUntil: null,
       now,
     });
@@ -96,9 +129,9 @@ describe('evaluate', () => {
   it('クールダウン中は測定休止（サンプルを捨て発火しない）', () => {
     const now = T0 + min(5);
     const r = evaluate({
-      pair: 'USD/JPY',
+      pair: 'GBP/JPY',
       samples: [],
-      newSample: { ts: now, bid: 150.9 },
+      newSample: { ts: now, bid: 190.9 },
       cooldownUntil: T0 + COOLDOWN_MS, // まだ明けていない
       now,
     });
@@ -110,9 +143,9 @@ describe('evaluate', () => {
   it('クールダウン明け後は通常測定を再開する', () => {
     const now = T0 + COOLDOWN_MS + min(1);
     const r = evaluate({
-      pair: 'USD/JPY',
+      pair: 'GBP/JPY',
       samples: [],
-      newSample: { ts: now, bid: 150.0 },
+      newSample: { ts: now, bid: 190.0 },
       cooldownUntil: T0 + COOLDOWN_MS,
       now,
     });
@@ -123,10 +156,14 @@ describe('evaluate', () => {
 
 describe('formatAlertBody', () => {
   it('JPYクロスは小数3桁・pips四捨五入', () => {
-    expect(formatAlertBody('USD/JPY', 150.35, 150.1)).toBe('USD/JPY が15分で25pips変動（150.100 → 150.350）');
+    expect(formatAlertBody('GBP/JPY', 190.25, 190.1)).toBe('GBP/JPY が15分で15pips変動（190.100 → 190.250）');
   });
 
-  it('EUR/USD は小数5桁', () => {
-    expect(formatAlertBody('EUR/USD', 1.1025, 1.1)).toBe('EUR/USD が15分で25pips変動（1.10000 → 1.10250）');
+  it('ドルストレートは小数5桁', () => {
+    expect(formatAlertBody('GBP/USD', 1.2725, 1.27)).toBe('GBP/USD が15分で25pips変動（1.27000 → 1.27250）');
+  });
+
+  it('XAU/JPY は円単位・小数なし', () => {
+    expect(formatAlertBody('XAU/JPY', 391000, 390000)).toBe('XAU/JPY が15分で1000円変動（390000 → 391000）');
   });
 });

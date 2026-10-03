@@ -1,5 +1,5 @@
 # 相場変動通知 Alert Worker 設定
-# 役割: 毎分 OANDA practice から4ペアの Bid を取得し、15分/25pips を判定して
+# 役割: 毎分 OANDA practice から4ペアの Bid を取得し、15分の急変動を判定して
 #       Web Push（ペイロードレス・VAPID署名）を配信する。検知ロジックは
 #       ../src/lib/alert.ts をフロント/テストと共有。
 #
