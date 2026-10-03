@@ -19,14 +19,14 @@ crons = ["* * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "lotsizing-alert"
-database_id = "<D1 を作成して database_id を貼る>"
+database_id = "b4241ad7-0761-4025-b881-b32519f6cfa8"
 
 # 公開してよい設定は vars、秘匿情報は `wrangler secret put` で登録する。
 #   VAPID_SUBJECT     … 連絡先（例 mailto:you@example.com）
 #   VAPID_PUBLIC_KEY  … VAPID 公開鍵（base64url, 65バイト非圧縮点）。クライアントにも同値を渡す。
 [vars]
-VAPID_SUBJECT = "mailto:you@example.com"
-VAPID_PUBLIC_KEY = "<`npx web-push generate-vapid-keys` の publicKey>"
+VAPID_SUBJECT = "mailto:ozawa19890413@gmail.com"
+VAPID_PUBLIC_KEY = "BDMQvoZB44nljNEEXuR3OAB-cvo6jhjTZVO0C8XAn3MtRkM8M7tv4KAeHAz1_aKQytj_zs9heXVZ9SUoPvPVhto"
 
 # secret（`wrangler secret put <NAME>` で登録。ここには書かない）:
 #   OANDA_API_TOKEN   … OANDA practice の個人アクセストークン

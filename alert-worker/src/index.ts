@@ -85,6 +85,13 @@ interface PairStateRow {
 const runDetection = async (env: Env): Promise<void> => {
   const now = Date.now();
 
+  // OANDA の認証情報が未設定の間（口座審査中など）は検知をスキップ。
+  // 「取得失敗」扱いにしないことで、誤った健全性通知を防ぐ。
+  if (!env.OANDA_API_TOKEN || !env.OANDA_ACCOUNT_ID) {
+    console.log('OANDA 未設定のため検知をスキップ');
+    return;
+  }
+
   // OANDA 取得失敗（401/ネットワーク等）は健全性通知の対象。成功したら失敗状態を解除。
   // 取得は成功したが全ペア非 tradeable（週末）は「失敗」ではないので対象外。
   let bids: Partial<Record<AlertPair, number>>;
