@@ -1,0 +1,5 @@
+fastapi
+httpx
+# ローカル開発用（CF 本番では不要）
+uvicorn
+pytest
