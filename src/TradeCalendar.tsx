@@ -17,6 +17,8 @@ export default function TradeCalendar({
 }) {
   const now = new Date();
   const [cursor, setCursor] = useState({ y: now.getFullYear(), m: now.getMonth() + 1 });
+  // 今日（ローカル日付 "YYYY-MM-DD"）。カレンダーのセルと比較してアクティブ表示する。
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
   const pnl = dailyPnl(trades);
   const weeks = monthGrid(cursor.y, cursor.m);
@@ -63,6 +65,7 @@ export default function TradeCalendar({
           const p = pnl[date];
           const day = Number(date.slice(8));
           const selected = date === selectedDate;
+          const isToday = date === todayStr;
           const bg = p == null ? 'bg-gray-50' : p > 0 ? 'bg-green-50' : p < 0 ? 'bg-red-50' : 'bg-gray-50';
           const ring = selected ? 'ring-2 ring-orange-400' : 'border border-transparent';
           return (
@@ -72,7 +75,13 @@ export default function TradeCalendar({
               onClick={() => onSelectDate(date)}
               className={`rounded ${bg} ${ring} h-11 flex flex-col items-center justify-center leading-none`}
             >
-              <span className="text-[10px] text-gray-500">{day}</span>
+              {isToday ? (
+                <span className="text-[10px] font-bold text-white bg-orange-500 rounded-full h-4 w-4 flex items-center justify-center">
+                  {day}
+                </span>
+              ) : (
+                <span className="text-[10px] text-gray-500">{day}</span>
+              )}
               {p != null && (
                 <span className={`text-[10px] font-bold ${p >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                   {p >= 0 ? '+' : ''}
