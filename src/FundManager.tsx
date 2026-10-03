@@ -4,7 +4,6 @@
 // VITE_GOOGLE_CLIENT_ID / VITE_FUND_URL 未設定時は案内のみ表示。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Popup } from '@mobiscroll/react';
-import { Menu } from 'lucide-react';
 import { aggregateByTag, computeSummary, pnlOf, type Cashflow, type FundSettings, type Trade } from '@/lib/fund';
 import TradeCalendar from './TradeCalendar';
 
@@ -67,7 +66,7 @@ function EquityCurve({ startingBalance, balances }: { startingBalance: number; b
   );
 }
 
-export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) {
+export default function FundManager() {
   const [idToken, setIdToken] = useState(storedToken); // 有効な保存トークンがあれば復元
   const [email, setEmail] = useState(() => (storedToken() ? decodeEmail(storedToken()) : ''));
   const [settings, setSettings] = useState<FundSettings>({ startingBalance: 0, currency: 'JPY' });
@@ -233,18 +232,6 @@ export default function FundManager({ onOpenMenu }: { onOpenMenu: () => void }) 
 
   return (
     <>
-      <div className="relative">
-        <h1 className="text-center text-base! font-bold lh-base">資金管理</h1>
-        <button
-          type="button"
-          aria-label="メニュー"
-          className="absolute top-0 right-3 text-gray-600 rounded-full h-8 w-8 flex items-center justify-center border border-gray-300"
-          onClick={onOpenMenu}
-        >
-          <Menu className="h-4 w-4" />
-        </button>
-      </div>
-
       {!configured ? (
         <div className="mx-3 my-3 p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700">
           未設定です。<code>VITE_GOOGLE_CLIENT_ID</code> と <code>VITE_FUND_URL</code> を設定すると使えます。

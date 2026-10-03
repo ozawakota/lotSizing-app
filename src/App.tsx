@@ -5,12 +5,19 @@ import { FC, useState, useEffect } from 'react';
 import HelpModal from './HelpModal'; // 前提：別ファイルに作成済み
 import DstInfoModal from './DstInfoModal'; // 夏時間/冬時間の説明モーダル
 import CurrencyStrengthMeter from './CurrencyStrengthMeter';
-import MarketAlertCard from './MarketAlertCard'; // 相場変動通知の ON/OFF カード
+import AlertBell from './AlertBell'; // ヘッダーの相場変動通知ベル
+import AppHeader from './components/AppHeader';
+import BottomTabBar, { type AppView } from './components/BottomTabBar';
 import OrderFlow from './OrderFlow'; // 取引量・センチメント ページ
 import StopLossTool from './StopLossTool'; // 損切り提案 ページ
 import FundManager from './FundManager'; // 資金管理（トレードジャーナル）ページ
-import { Menu } from 'lucide-react';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetClose } from '@/components/ui/sheet';
+// 各ページのタイトル（共通ヘッダーに表示）。
+const VIEW_TITLES: Record<AppView, string> = {
+  calculator: 'ロット計算',
+  flow: '取引量・センチメント',
+  stoploss: '損切り提案',
+  fund: '資金管理',
+};
 
 setOptions({
   locale: localeJa,
@@ -215,8 +222,7 @@ const WorldClock: FC = () => {
 
 const App: FC = () => {
   // 表示中のページ（ロット計算 / 取引量・センチメント）とハンバーガーメニューの開閉。
-  const [view, setView] = useState<'calculator' | 'flow' | 'stoploss' | 'fund'>('calculator');
-  const [menuOpen, setMenuOpen] = useState<boolean>(false);
+  const [view, setView] = useState<AppView>('calculator');
   const validCurrencies: CurrencyCode[] = ['JPY', 'USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
   const [currency, setCurrency] = useState<CurrencyCode>(() => {
     const saved = localStorage.getItem('currency') as CurrencyCode | null;
@@ -816,75 +822,45 @@ const App: FC = () => {
 
   return (
     <Page>
-      <div className='lg:w-150 lg:mx-auto pb-3'>
+      <div className='lg:w-150 lg:mx-auto min-h-screen bg-gray-50'>
 
-      {/* ハンバーガーメニュー本体（開閉は menuOpen で制御。トリガは各ページのアイコン群に配置） */}
-      <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-        <SheetContent side="left" className="w-64">
-          <SheetHeader>
-            <SheetTitle>メニュー</SheetTitle>
-          </SheetHeader>
-          <nav className="flex flex-col gap-1 px-2">
-            {([['calculator', 'ロット計算'], ['flow', '取引量・センチメント'], ['stoploss', '損切り提案'], ['fund', '資金管理']] as const).map(([key, label]) => (
-              <SheetClose asChild key={key}>
-                <button
-                  type="button"
-                  onClick={() => setView(key)}
-                  className={`rounded px-3 py-2 text-left text-sm ${
-                    view === key ? 'bg-orange-50 text-orange-600 font-medium' : 'text-gray-700'
-                  }`}
-                >
-                  {label}
-                </button>
-              </SheetClose>
-            ))}
-          </nav>
-        </SheetContent>
-      </Sheet>
+      {/* 共通ヘッダー（タイトル + 通知ベル。計算ページのみヘルプ/夏時間を表示） */}
+      <AppHeader title={VIEW_TITLES[view]}>
+        <AlertBell />
+        {view === 'calculator' && (
+          <>
+            <button
+              type="button"
+              aria-label="夏時間・冬時間について"
+              className="text-sky-500 rounded-full h-8 w-8 flex items-center justify-center border border-sky-500"
+              onClick={openDstModal}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="9" strokeWidth="2" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 7v5l3 2" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              aria-label="ヘルプ"
+              className="text-orange-500 font-bold rounded-full h-8 w-8 flex items-center justify-center border border-orange-500"
+              onClick={openHelpModal}
+            >
+              ?
+            </button>
+          </>
+        )}
+      </AppHeader>
+
+      {/* コンテンツ（下部タブバー分の余白を確保） */}
+      <div className="pb-20 pt-2">
 
       {view === 'calculator' ? (
       <>
-      {/* ヘッダー部分 */}
-      <div className="relative">
-        {/* mobiscroll のグローバル見出しスタイルに font-size を奪われ肥大化するため、
-            text-base!（important）で 16px に強制し、取引量ページの見出しと大きさを揃える。 */}
-        <h1 className='text-center text-base! font-bold lh-base'>FX</h1>
-        {/* 時間 */}
-        <WorldClock />
-        {/* 通貨強弱（毎時・折りたたみ式） */}
-        <CurrencyStrengthMeter />
-        {/* 相場変動通知（ON/OFF。env 未設定なら非表示） */}
-        <MarketAlertCard />
-        {/* 夏時間/冬時間の説明ボタン */}
-        <button
-          type="button"
-          aria-label="夏時間・冬時間について"
-          className="absolute top-0 right-21 text-sky-500 rounded-full h-8 w-8 flex items-center justify-center border border-sky-500"
-          onClick={openDstModal}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="9" strokeWidth="2" />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 7v5l3 2" />
-          </svg>
-        </button>
-        {/* ヘルプボタン */}
-        <button
-          aria-label="ヘルプ"
-          className="absolute top-0 right-12 text-orange-500 font-bold rounded-full h-8 w-8 flex items-center justify-center border border-orange-500"
-          onClick={openHelpModal}
-        >
-          ?
-        </button>
-        {/* ハンバーガーメニュー（ヘルプボタンの右隣） */}
-        <button
-          type="button"
-          aria-label="メニュー"
-          className="absolute top-0 right-3 text-gray-600 rounded-full h-8 w-8 flex items-center justify-center border border-gray-300"
-          onClick={() => setMenuOpen(true)}
-        >
-          <Menu className="h-4 w-4" />
-        </button>
-      </div>
+      {/* 時間 */}
+      <WorldClock />
+      {/* 通貨強弱（毎時・折りたたみ式） */}
+      <CurrencyStrengthMeter />
 
       {/* エラーメッセージ表示 */}
       {errorMessage && (
@@ -1152,12 +1128,15 @@ const App: FC = () => {
       />
       </>
       ) : view === 'flow' ? (
-        <OrderFlow onOpenMenu={() => setMenuOpen(true)} />
+        <OrderFlow />
       ) : view === 'stoploss' ? (
-        <StopLossTool onOpenMenu={() => setMenuOpen(true)} />
+        <StopLossTool />
       ) : (
-        <FundManager onOpenMenu={() => setMenuOpen(true)} />
+        <FundManager />
       )}
+      </div>
+
+      <BottomTabBar view={view} onChange={setView} />
       </div>
     </Page>
   );

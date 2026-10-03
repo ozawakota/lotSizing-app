@@ -2,7 +2,6 @@
 // ペア+方向+足を選ぶと、backend(/stoploss) が構造(ZigZag/Fib)で損切り価格を決め、
 // 通貨強弱・取引量を確信度として返す。VITE_BACKEND_URL 未設定なら案内のみ表示。
 import { useState } from 'react';
-import { Menu } from 'lucide-react';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL as string | undefined;
 
@@ -53,7 +52,7 @@ const CONFIDENCE_STYLE: Record<string, string> = {
 };
 const CONFIDENCE_LABEL: Record<string, string> = { high: '高', medium: '中', low: '低' };
 
-export default function StopLossTool({ onOpenMenu }: { onOpenMenu: () => void }) {
+export default function StopLossTool() {
   const [instrument, setInstrument] = useState('GBP_USD');
   const [direction, setDirection] = useState<'long' | 'short'>('long');
   const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>('1h');
@@ -88,18 +87,6 @@ export default function StopLossTool({ onOpenMenu }: { onOpenMenu: () => void })
 
   return (
     <>
-      <div className="relative">
-        <h1 className="text-center text-base! font-bold lh-base">損切り提案</h1>
-        <button
-          type="button"
-          aria-label="メニュー"
-          className="absolute top-0 right-3 text-gray-600 rounded-full h-8 w-8 flex items-center justify-center border border-gray-300"
-          onClick={onOpenMenu}
-        >
-          <Menu className="h-4 w-4" />
-        </button>
-      </div>
-
       {!BACKEND_URL ? (
         <div className="mx-3 my-3 p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700">
           バックエンド未設定です。<code>VITE_BACKEND_URL</code> を設定すると損切り提案が使えます。

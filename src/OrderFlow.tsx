@@ -4,7 +4,7 @@
 // 行はドラッグ&ドロップで並び替え可能（@dnd-kit）。順序は localStorage に保存し、
 // ページ遷移・リロード後も維持する。クライアントはKVキャッシュを読むだけ。
 import { FC, useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronRight, GripVertical, Info, Menu, Minus, TrendingDown, TrendingUp, type LucideIcon } from 'lucide-react';
+import { ChevronRight, GripVertical, Info, Minus, TrendingDown, TrendingUp, type LucideIcon } from 'lucide-react';
 import {
   DndContext,
   KeyboardSensor,
@@ -166,7 +166,7 @@ const SortablePairRow: FC<{ pair: FlowPair; flow?: PairFlow }> = ({ pair, flow }
   );
 };
 
-const OrderFlow: FC<{ onOpenMenu?: () => void }> = ({ onOpenMenu }) => {
+const OrderFlow: FC = () => {
   const [data, setData] = useState<FlowSnapshot | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
@@ -221,31 +221,15 @@ const OrderFlow: FC<{ onOpenMenu?: () => void }> = ({ onOpenMenu }) => {
 
   return (
     <div className="px-3 pb-6">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        {/* mobiscroll のグローバル見出しスタイル（詳細度が高い）に font-size を奪われ 34px に
-            肥大化し、nowrap でボタンを画面外へ押し出していた。text-base! で意図通り 16px に強制し、
-            min-w-0 truncate で万一長くてもボタンを押し出さないようにする。 */}
-        <h2 className="min-w-0 truncate text-base! font-bold">取引量・センチメント</h2>
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={loadFlow}
-            disabled={loading}
-            className="rounded-full border border-orange-500 px-3 py-1 text-xs text-orange-600 disabled:opacity-50"
-          >
-            {loading ? '取得中…' : data ? '更新' : '表示'}
-          </button>
-          {onOpenMenu && (
-            <button
-              type="button"
-              aria-label="メニュー"
-              onClick={onOpenMenu}
-              className="rounded-full border border-gray-300 h-8 w-8 flex items-center justify-center text-gray-600"
-            >
-              <Menu className="h-4 w-4" />
-            </button>
-          )}
-        </div>
+      <div className="mb-3 flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={loadFlow}
+          disabled={loading}
+          className="rounded-full border border-orange-500 px-3 py-1 text-xs text-orange-600 disabled:opacity-50"
+        >
+          {loading ? '取得中…' : data ? '更新' : '表示'}
+        </button>
       </div>
 
       {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
