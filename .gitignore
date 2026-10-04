@@ -34,3 +34,6 @@ worker/.wrangler/
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright/ブラウザ確認の一時出力
+screenshots/

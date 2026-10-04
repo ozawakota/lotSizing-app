@@ -921,17 +921,6 @@ const App: FC = () => {
       </div>
 
       <div className='flex gap-2 px-3 mb-2 justify-center'>
-        <div className='w-55'>
-          <p className='text-center mb-1'>ストップ幅（pips）</p>
-          <Input
-            type="number"
-            value={stopLossPips}
-            onChange={handleStopLossChange}
-            placeholder="損切り幅を入力"
-            inputStyle="box"
-            labelStyle="stacked"
-          />
-        </div>
         <div className='w-45'>
           <p className='text-center'>リスク%</p>
           <Select
@@ -946,29 +935,43 @@ const App: FC = () => {
             labelStyle="stacked"
           />
         </div>
+        <div className='w-55'>
+          <p className='text-center mb-1'>ストップ幅（pips）</p>
+          <Input
+            type="number"
+            value={stopLossPips}
+            onChange={handleStopLossChange}
+            placeholder="損切り幅を入力"
+            inputStyle="box"
+            labelStyle="stacked"
+          />
+        </div>
       </div>
 
       {/* 証拠金入力フィールド + 設定確認ボタン */}
-      <div className='flex gap-2 px-3 mb-2 items-center'>
+      <div className='flex flex-row-reverse gap-2 px-3 mb-2 items-center'>
         <div className='flex-1'>
           <p className='text-center mb-1'>
             証拠金額 ({balanceCurrency === 'JPY' ? '円' : 'USD'})
           </p>
-          <Input
-            type={balanceCurrency === 'USD' ? 'tel' : 'text'} // USDの場合はtelタイプを使用
-            value={inputBalance} // 編集中の入力値を使用
-            onChange={handleAccountBalanceChange}
-            placeholder={balanceCurrency === 'JPY' ? "証拠金額を入力" : "証拠金額を入力 (例: 1000.50)"}
-            inputStyle="box"
-            labelStyle="stacked"
-          />
-          <div className='flex justify-end mt-1'>
-            <button
-              onClick={handleClearBalance}
-              className="text-xs px-3 py-1 rounded-full border border-red-300 text-red-400 hover:bg-red-50 hover:border-red-400 hover:text-red-600 transition-all duration-150"
-            >
-              ✕ クリア
-            </button>
+          <div className='relative'>
+            <Input
+              type={balanceCurrency === 'USD' ? 'tel' : 'text'} // USDの場合はtelタイプを使用
+              value={inputBalance} // 編集中の入力値を使用
+              onChange={handleAccountBalanceChange}
+              placeholder={balanceCurrency === 'JPY' ? "証拠金額を入力" : "証拠金額を入力 (例: 1000.50)"}
+              inputStyle="box"
+              labelStyle="stacked"
+            />
+            {inputBalance && (
+              <button
+                onClick={handleClearBalance}
+                aria-label="証拠金額をクリア"
+                className="absolute right-6 top-1/2 -translate-y-1/2 flex items-center justify-center h-5 w-5 rounded-full bg-gray-300 text-white text-xs leading-none hover:bg-red-400 transition-colors duration-150"
+              >
+                ✕
+              </button>
+            )}
           </div>
           <div className='text-xs text-gray-500 text-center mt-1'>
             {/* 証拠金の換算表示 */}
