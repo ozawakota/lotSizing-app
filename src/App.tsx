@@ -26,7 +26,12 @@ setOptions({
 });
 
 // 通貨コード型を定義
-type CurrencyCode = 'JPY' | 'USD' | 'EUR' | 'GBP' | 'AUD' | 'NZD' | 'CAD' | 'CHF';
+type CurrencyCode = 'JPY' | 'USD' | 'EUR' | 'GBP' | 'AUD' | 'NZD' | 'CAD' | 'CHF' | 'XAU';
+
+// ゴールド(XAU/USD)の計算定数
+const GOLD_CONTRACT_SIZE = 100; // 1ロット = 100オンス（標準）
+const GOLD_PIP_SIZE = 0.1; // 1pip = 0.1ドル変動
+const GOLD_PIP_VALUE_USD = GOLD_CONTRACT_SIZE * GOLD_PIP_SIZE; // = $10/lot/pip（金価格に非依存）
 // 証拠金通貨単位
 type BalanceCurrency = 'JPY' | 'USD';
 
@@ -223,7 +228,7 @@ const WorldClock: FC = () => {
 const App: FC = () => {
   // 表示中のページ（ロット計算 / 取引量・センチメント）とハンバーガーメニューの開閉。
   const [view, setView] = useState<AppView>('calculator');
-  const validCurrencies: CurrencyCode[] = ['JPY', 'USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
+  const validCurrencies: CurrencyCode[] = ['JPY', 'USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF', 'XAU'];
   const [currency, setCurrency] = useState<CurrencyCode>(() => {
     const saved = localStorage.getItem('currency') as CurrencyCode | null;
     return saved && validCurrencies.includes(saved) ? saved : 'JPY';
@@ -269,7 +274,8 @@ const App: FC = () => {
     'AUD': '96.38',
     'NZD': '89.72',
     'CAD': '108.34',
-    'CHF': '163.91'
+    'CHF': '163.91',
+    'XAU': '4164.40' // ゴールド価格(USD/oz) — 他通貨はXXX/JPYレートだがXAUのみ金価格を保持
   });
 
   // 基軸通貨データ
@@ -281,7 +287,8 @@ const App: FC = () => {
     { text: 'AUD', value: 'AUD' },
     { text: 'NZD', value: 'NZD' },
     { text: 'CAD', value: 'CAD' },
-    { text: 'CHF', value: 'CHF' }
+    { text: 'CHF', value: 'CHF' },
+    { text: 'ゴールド(XAU/USD)', value: 'XAU' }
   ];
 
   // 証拠金通貨データ
@@ -367,6 +374,16 @@ const App: FC = () => {
     });
   };
 
+  // ゴールド価格(XAU/USD, USD/oz)を取得（キーレス・無料API）
+  const fetchGoldPrice = async (): Promise<string | null> => {
+    const response = await fetch('https://api.gold-api.com/price/XAU');
+    if (!response.ok) throw new Error(`GoldAPI HTTP ${response.status}`);
+    const data = await response.json();
+    const price = parseFloat(data?.price);
+    if (!Number.isFinite(price) || price <= 0) throw new Error('GoldAPI: 価格が不正です');
+    return price.toFixed(2);
+  };
+
   // レートを一括取得する関数（GAS優先、失敗時はExchangeRate-APIにフォールバック）
   const fetchCurrencyRates = async () => {
     setIsLoading(true);
@@ -393,6 +410,14 @@ const App: FC = () => {
 
       if (Object.keys(fetched).length === 0) {
         throw new Error('レート取得に失敗しました（0件）');
+      }
+
+      // ゴールド価格は別API（失敗してもFXレートには影響させない）
+      try {
+        const gold = await fetchGoldPrice();
+        if (gold) fetched.XAU = gold;
+      } catch (e) {
+        console.warn('ゴールド価格の取得に失敗（既存値を維持）:', e);
       }
 
       // 既存の値を保持しつつ取得したキーのみ上書き（マージ）
@@ -645,7 +670,22 @@ const App: FC = () => {
     const risk = riskPercentage / 100;
     const stopLoss = parseInt(stopLossPips);
     const riskAmount = balance * risk;
-    
+
+    // ゴールド(XAU/USD)の場合: pip価値 = 100oz × 0.1ドル = $10/lot/pip（金価格に非依存）
+    if (currency === 'XAU') {
+      if (balanceCurrency === 'USD') {
+        // USD口座: リスク額(USD) ÷ (SL幅 × $10)
+        const lotSize = riskAmount / (stopLoss * GOLD_PIP_VALUE_USD);
+        return lotSize.toFixed(2);
+      } else {
+        // JPY口座: pip価値(円) = $10 × USD/JPYレート
+        const usdJpyRate = parseFloat(currencyPrices['USD']);
+        const pipValueJPY = GOLD_PIP_VALUE_USD * usdJpyRate;
+        const lotSize = riskAmount / (stopLoss * pipValueJPY);
+        return lotSize.toFixed(2);
+      }
+    }
+
     // 証拠金がUSDの場合
     if (balanceCurrency === 'USD') {
       // このアプリのペアはすべて XXX/JPY
@@ -685,16 +725,27 @@ const App: FC = () => {
   // 最大ロットサイズを計算（レバレッジ考慮）
   const calculateMaxLotSize = (): string => {
     if (currency === 'JPY') return '0.00'; // JPYの場合は計算不要
-    
+
     const balance = parseFloat(accountBalance.replace(/,/g, ''));
-    
+
+    // ゴールド(XAU/USD)の場合: 建玉価値(USD) = lot × 100oz × 金価格
+    if (currency === 'XAU') {
+      const goldPrice = parseFloat(currencyPrices['XAU']);
+      // USD口座はそのまま、JPY口座はUSD換算した残高で計算
+      const balanceUSD = balanceCurrency === 'USD'
+        ? balance
+        : balance / parseFloat(currencyPrices['USD']);
+      const maxLotSize = (balanceUSD * leverage) / (GOLD_CONTRACT_SIZE * goldPrice);
+      return maxLotSize.toFixed(2);
+    }
+
     // 証拠金がUSDの場合
     if (balanceCurrency === 'USD') {
       // USD建ての計算
       // 最大ロット = (証拠金 × レバレッジ) ÷ 100000
       const maxLotSize = (balance * leverage) / 100000;
       return maxLotSize.toFixed(2);
-    } 
+    }
     // 証拠金がJPYの場合
     else {
       const rate = parseFloat(currencyPrice);
@@ -762,7 +813,18 @@ const App: FC = () => {
     const balance = parseFloat(accountBalance.replace(/,/g, ''));
     const lotSize = parseFloat(calculatedLot);
     const rate = parseFloat(currencyPrice);
-    
+
+    // ゴールド(XAU/USD)の場合: 必要証拠金(USD) = lot × 100oz × 金価格 ÷ レバレッジ
+    if (currency === 'XAU') {
+      const goldPrice = parseFloat(currencyPrices['XAU']);
+      const requiredMarginUSD = (lotSize * GOLD_CONTRACT_SIZE * goldPrice) / leverage;
+      const balanceUSD = balanceCurrency === 'USD'
+        ? balance
+        : balance / parseFloat(currencyPrices['USD']);
+      const ratio = (balanceUSD / requiredMarginUSD) * 100;
+      return ratio.toFixed(2);
+    }
+
     // ポジションサイズ（通貨単位）：1ロット = 100,000通貨単位
     const positionSize = lotSize * 100000;
     
@@ -935,7 +997,7 @@ const App: FC = () => {
             labelStyle="stacked"
           />
         </div>
-        <div className='w-55'>
+        <div className='w-55 mb-0'>
           <p className='text-center mb-1'>ストップ幅（pips）</p>
           <Input
             type="number"
@@ -944,7 +1006,9 @@ const App: FC = () => {
             placeholder="損切り幅を入力"
             inputStyle="box"
             labelStyle="stacked"
+            className='mb-0'
           />
+          <p className='text-center'><small>ゴールドは1Points = 10pips</small></p>
         </div>
       </div>
 
@@ -1005,8 +1069,10 @@ const App: FC = () => {
             <div className="bg-gray-100 rounded-full text-center">
               <p className='font-bold'>通貨ベース（価格）</p>
               <p className="text-center font-semibold">
-                {currency === 'JPY' 
-                  ? `${currency} = ${currencyPrice}` 
+                {currency === 'JPY'
+                  ? `${currency} = ${currencyPrice}`
+                  : currency === 'XAU'
+                  ? `XAU/USD = ${currencyPrice}`
                   : `${currency}/JPY = ${currencyPrice}`}
               </p>
             </div>
@@ -1071,7 +1137,7 @@ const App: FC = () => {
               : `$${parseFloat(accountBalance).toFixed(2)}`}
           </strong></p>
           <p className="mb-3">証拠金通貨: <strong>{balanceCurrency}</strong></p>
-          <p className="mb-3">基軸通貨: <strong>{currency}</strong> {currency !== 'JPY' && `(${currencyPrice}円)`}</p>
+          <p className="mb-3">基軸通貨: <strong>{currency}</strong> {currency === 'XAU' ? `($${currencyPrice}/oz)` : currency !== 'JPY' && `(${currencyPrice}円)`}</p>
           <p className="mb-3">リスク％: <strong>{riskPercentage.toFixed(1)}%</strong></p>
           <p className="mb-3">損切り幅: <strong>{stopLossPips} pips</strong></p>
           <p className="mb-3">レバレッジ: <strong>{leverage}倍</strong></p>

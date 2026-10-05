@@ -67,9 +67,46 @@ const HelpModal: FC<HelpModalProps> = ({ isOpen, onClose }) => {
             最大取引可能ロット = (証拠金 × レバレッジ) ÷ (通貨価格 × 10000)
           </p>
 
-          
+
         </div>
-        
+
+        <h4 className="font-bold mt-4 mb-2">ゴールド（XAU/USD）の計算式:</h4>
+
+        <p className="mb-2">
+          ゴールドはFX通貨ペアと「pip」や契約サイズの定義が異なるため、専用の計算式を使用します。基軸通貨で「ゴールド(XAU/USD)」を選ぶと自動的に切り替わります。
+        </p>
+
+        <ul className="list-disc pl-5 mb-3">
+          <li className="mb-2">
+            <span className="font-semibold">契約サイズ</span>: 1ロット = 100オンス（標準）
+          </li>
+          <li className="mb-2">
+            <span className="font-semibold">pipの定義</span>: 1pip = 0.1ドルの価格変動（1ドル変動 = 10pips）
+          </li>
+          <li className="mb-2">
+            <span className="font-semibold">1pipあたりの価値</span>: 100オンス × 0.1ドル = <strong>10ドル/ロット</strong>（金価格に関係なく一定）
+          </li>
+        </ul>
+
+        <div className="bg-gray-800 p-3 rounded mb-3">
+          <p className="text-white">
+            適正ロット（USD口座） = (残高 × リスク%) ÷ (ストップ幅(pips) × 10ドル)
+          </p>
+          <p className="text-white mt-2">
+            適正ロット（円口座） = (残高 × リスク%) ÷ (ストップ幅(pips) × 10ドル × USD/JPYレート)
+          </p>
+          <p className="text-white mt-2">
+            最大取引可能ロット = (残高(USD換算) × レバレッジ) ÷ (100オンス × 金価格)
+          </p>
+          <p className="text-white mt-2">
+            証拠金維持率 = 残高(USD換算) ÷ (ロット × 100オンス × 金価格 ÷ レバレッジ) × 100
+          </p>
+        </div>
+
+        <p className="text-sm text-gray-500 mb-3">
+          ※金価格はロット計算自体には影響しません（1pip価値が一定のため）。金価格は最大取引可能ロットと証拠金維持率の計算にのみ使用されます。
+        </p>
+
         <h4 className="font-bold mt-4 mb-2">注意事項:</h4>
         <ul className="list-disc pl-5 mb-3">
           <li className="mb-2">
@@ -84,6 +121,9 @@ const HelpModal: FC<HelpModalProps> = ({ isOpen, onClose }) => {
         <ul className="list-disc pl-5 mb-3">
           <li className="mb-2">
             <span className="font-semibold">レート取得元</span>: 「レート更新」ボタン押下時に外部APIへ通信します。優先順位は (1) Google Apps Script 経由の Google Finance、(2) ExchangeRate-API（フォールバック）です。利用したソースは「価格更新日時」末尾に <code>(GAS)</code> や <code>(ExchangeRate)</code> として表示されます。
+          </li>
+          <li className="mb-2">
+            <span className="font-semibold">金価格の取得元</span>: ゴールド(XAU/USD)の価格は無料の <code>gold-api.com</code> から取得します（USD/オンス）。為替レートとは別に取得し、金価格の取得に失敗しても為替レートの計算には影響しません。
           </li>
           <li className="mb-2">
             <span className="font-semibold">取得頻度の目安</span>: 無料APIにはリクエスト数の上限があります。レートは数分〜数十分単位の更新で十分なため、必要なときのみ手動更新することを推奨します。
