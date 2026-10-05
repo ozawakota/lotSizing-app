@@ -5,8 +5,27 @@ import type { RateSeries } from './strength';
 import type { NewsItem } from './news';
 
 // シグナル対象ペア（直近トレンドを intraday シリーズから得られるものを既定とする）。
-export type SignalPair = 'USD/JPY' | 'GBP/JPY' | 'AUD/JPY' | 'XAU/USD';
-export const SIGNAL_PAIRS: SignalPair[] = ['USD/JPY', 'GBP/JPY', 'AUD/JPY', 'XAU/USD'];
+export type SignalPair =
+  | 'USD/JPY'
+  | 'EUR/JPY'
+  | 'GBP/JPY'
+  | 'AUD/JPY'
+  | 'NZD/JPY'
+  | 'CAD/JPY'
+  | 'EUR/USD'
+  | 'GBP/USD'
+  | 'XAU/USD';
+export const SIGNAL_PAIRS: SignalPair[] = [
+  'USD/JPY',
+  'EUR/JPY',
+  'GBP/JPY',
+  'AUD/JPY',
+  'NZD/JPY',
+  'CAD/JPY',
+  'EUR/USD',
+  'GBP/USD',
+  'XAU/USD',
+];
 
 // トレンドの継続 / 反転 / 中立。
 export type TrendLabel = 'continuation' | 'reversal' | 'neutral';
@@ -30,18 +49,31 @@ export interface PairTrend {
 
 const clamp = (n: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, n));
 
-// RateSeries から各シグナルペアの価格系列を取り出す（XAU/USD は XAU/JPY ÷ USD/JPY で復元）。
+// RateSeries から各シグナルペアの価格系列を取り出す。
+// 対円はそのまま、ドルストレートは X/JPY ÷ USD/JPY、XAU/USD は XAU/JPY ÷ USD/JPY で復元。
 function pairSeries(series: RateSeries, pair: SignalPair): number[] | null {
   const r = series.rates;
+  const cross = (a?: number[], b?: number[]): number[] | null =>
+    a && b ? a.map((v, i) => v / b[i]) : null;
   switch (pair) {
     case 'USD/JPY':
       return r.USD ?? null;
+    case 'EUR/JPY':
+      return r.EUR ?? null;
     case 'GBP/JPY':
       return r.GBP ?? null;
     case 'AUD/JPY':
       return r.AUD ?? null;
+    case 'NZD/JPY':
+      return r.NZD ?? null;
+    case 'CAD/JPY':
+      return r.CAD ?? null;
+    case 'EUR/USD':
+      return cross(r.EUR, r.USD);
+    case 'GBP/USD':
+      return cross(r.GBP, r.USD);
     case 'XAU/USD':
-      return r.XAU && r.USD ? r.XAU.map((x, i) => x / r.USD[i]) : null;
+      return cross(r.XAU, r.USD);
   }
 }
 
