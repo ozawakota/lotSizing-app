@@ -21,7 +21,7 @@ const FlowInfoModal: FC<FlowInfoModalProps> = ({ isOpen, onClose }) => {
         },
       ]}
     >
-      <div className="p-4 text-sm leading-relaxed">
+      <div className="max-h-[75vh] overflow-y-auto overscroll-contain p-4 text-sm leading-relaxed">
         <h3 className="mb-3 font-bold">表示の見方</h3>
 
         <p className="mb-4">
