@@ -6,6 +6,7 @@ import {
   formatWindowLabel,
   findStartIndex,
   computeCumulativeStrength,
+  computeGoldLine,
   type StrengthScore,
   type StrengthSnapshot,
   type RateSeries,
@@ -157,5 +158,62 @@ describe('computeCumulativeStrength', () => {
     const res = computeCumulativeStrength(series, 1);
     expect(res.datetimes).toEqual(['b', 'c']);
     for (const c of CURRENCIES) expect(res.series[c][0]).toBeCloseTo(0, 9); // baseline at index 1
+  });
+});
+
+describe('computeGoldLine', () => {
+  // XAU/JPY の合成系列を付与したシリーズを作る。
+  const withXau = (base: RateSeries, xau: number[]): RateSeries => ({
+    ...base,
+    rates: { ...base.rates, XAU: xau },
+  });
+
+  it('returns null when the series carries no XAU data', () => {
+    const series = makeSeries('15min', [
+      { dt: 'a', rates: { ...flatRow } },
+      { dt: 'b', rates: { ...flatRow } },
+    ]);
+    expect(computeGoldLine(series, 0)).toBeNull();
+  });
+
+  it('starts at 0 and is positive when gold rises against a flat basket', () => {
+    const base = makeSeries('15min', [
+      { dt: 'a', rates: { ...flatRow } },
+      { dt: 'b', rates: { ...flatRow } },
+      { dt: 'c', rates: { ...flatRow } },
+    ]);
+    // ゴールドは +1% ずつ上昇、法定通貨は全て不変。
+    const series = withXau(base, [2000, 2020, 2040.2]);
+    const line = computeGoldLine(series, 0)!;
+
+    expect(line).toHaveLength(3);
+    expect(line[0]).toBeCloseTo(0, 9); // 起点は0
+    // 期待値 = 8 × ln(XAU_i/XAU_0) × 100（バスケットは0）。
+    expect(line[1]).toBeCloseTo(8 * Math.log(2020 / 2000) * 100, 6);
+    expect(line[2]).toBeGreaterThan(line[1]);
+  });
+
+  it('honors the start index (0 at the chosen baseline)', () => {
+    const base = makeSeries('15min', [
+      { dt: 'a', rates: { ...flatRow } },
+      { dt: 'b', rates: { ...flatRow } },
+      { dt: 'c', rates: { ...flatRow } },
+    ]);
+    const series = withXau(base, [2000, 2020, 2040]);
+    const line = computeGoldLine(series, 1)!;
+    expect(line).toHaveLength(2);
+    expect(line[0]).toBeCloseTo(0, 9); // 起点(index=1)で0
+  });
+
+  it('does not change the 8-currency strength when XAU is present', () => {
+    const points = [
+      { dt: 'a', rates: { ...flatRow } },
+      { dt: 'b', rates: { ...flatRow, USD: 101 } },
+    ];
+    const without = computeCumulativeStrength(makeSeries('15min', points), 0);
+    const withGold = computeCumulativeStrength(withXau(makeSeries('15min', points), [2000, 2100]), 0);
+    for (const c of CURRENCIES) {
+      expect(withGold.series[c]).toEqual(without.series[c]);
+    }
   });
 });

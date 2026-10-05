@@ -9,8 +9,8 @@ import {
   RateSeries,
   StrengthRange,
   computeCumulativeStrength,
+  computeGoldLine,
   findStartIndex,
-  sortScores,
 } from '@/lib/strength';
 
 interface StrengthData {
@@ -38,6 +38,18 @@ const CURRENCY_COLORS: Record<CurrencyCode, string> = {
   CAD: '#ca8a04',
   NZD: '#0d9488',
 };
+
+// 独立したゴールド線（8通貨の強弱には含めず、別線として重ねて表示する）。
+const GOLD_COLOR = '#d4af37';
+const GOLD_LABEL = 'XAU';
+
+// 凡例/一覧の1項目（8通貨とゴールドを統一的に扱う）。
+interface LegendItem {
+  key: string;
+  label: string;
+  color: string;
+  changePct: number;
+}
 
 const fetchStrength = async (): Promise<StrengthData> => {
   const url = import.meta.env.VITE_STRENGTH_URL as string | undefined;
@@ -75,16 +87,35 @@ const CurrencyStrengthMeter: FC = () => {
     return () => clearInterval(id);
   }, [loadStrength]);
 
-  // 選択された起点で累積強弱を計算
-  const cumulative = useMemo(() => {
+  // 選択された起点で、8通貨の累積強弱と独立したゴールド線を同じ起点で計算
+  const computed = useMemo(() => {
     if (!data) return null;
     const source = range === 'year' ? data.daily : data.intraday;
     if (!source || source.datetimes.length < 2) return null;
     const startIndex = findStartIndex(source.datetimes, range, new Date());
-    return computeCumulativeStrength(source, startIndex);
+    return {
+      cumulative: computeCumulativeStrength(source, startIndex),
+      goldLine: computeGoldLine(source, startIndex), // XAU 無し（旧キャッシュ等）なら null
+    };
   }, [data, range]);
 
-  const legend = cumulative ? sortScores(cumulative.latest) : [];
+  const cumulative = computed?.cumulative ?? null;
+  const goldLine = computed?.goldLine ?? null;
+
+  // 凡例/一覧：8通貨＋（あれば）ゴールドを結合し、値の強い順に並べる。
+  const legend: LegendItem[] = cumulative
+    ? [
+        ...cumulative.latest.map((s) => ({
+          key: s.currency,
+          label: s.currency,
+          color: CURRENCY_COLORS[s.currency],
+          changePct: s.changePct,
+        })),
+        ...(goldLine && goldLine.length > 0
+          ? [{ key: GOLD_LABEL, label: GOLD_LABEL, color: GOLD_COLOR, changePct: goldLine[goldLine.length - 1] }]
+          : []),
+      ].sort((a, b) => b.changePct - a.changePct)
+    : [];
 
   return (
     <div className="mt-2 text-xs">
@@ -126,17 +157,17 @@ const CurrencyStrengthMeter: FC = () => {
       {cumulative && cumulative.datetimes.length >= 2 && (
         <div className="mx-auto mt-2 max-w-md">
           <div className="px-2">
-            <StrengthChart cumulative={cumulative} />
+            <StrengthChart cumulative={cumulative} goldLine={goldLine} />
           </div>
           <div className="mt-2 grid grid-cols-4 gap-x-3 gap-y-1 px-2">
             {legend.map((s) => (
-              <div key={s.currency} className="flex items-center gap-1">
+              <div key={s.key} className="flex items-center gap-1">
                 <span
                   className="inline-block h-2 w-2 rounded-full"
-                  style={{ backgroundColor: CURRENCY_COLORS[s.currency] }}
+                  style={{ backgroundColor: s.color }}
                   aria-hidden="true"
                 />
-                <span className="font-mono">{s.currency}</span>
+                <span className="font-mono">{s.label}</span>
                 <span className={`ml-auto tabular-nums ${s.changePct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                   {s.changePct >= 0 ? '+' : ''}
                   {s.changePct.toFixed(2)}
@@ -146,6 +177,12 @@ const CurrencyStrengthMeter: FC = () => {
           </div>
           <p className="mt-1 text-center text-[10px] text-gray-400">
             {RANGE_LABELS[range]}起点・0基準の累積対数強弱（＋:買われ強い ／ −:売られ弱い）
+            {goldLine && goldLine.length > 0 && (
+              <>
+                <br />
+                破線（{GOLD_LABEL}）はゴールドの対通貨バスケット強弱（参考・8通貨の値には非影響）
+              </>
+            )}
           </p>
         </div>
       )}
@@ -153,8 +190,12 @@ const CurrencyStrengthMeter: FC = () => {
   );
 };
 
-// 8通貨の累積強弱を0基準の折れ線で描く軽量SVGチャート（依存なし）
-const StrengthChart: FC<{ cumulative: ReturnType<typeof computeCumulativeStrength> }> = ({ cumulative }) => {
+// 8通貨の累積強弱を0基準の折れ線で描く軽量SVGチャート（依存なし）。
+// goldLine があれば独立したゴールド線を1本重ねて描く（他通貨の値には影響しない）。
+const StrengthChart: FC<{
+  cumulative: ReturnType<typeof computeCumulativeStrength>;
+  goldLine?: number[] | null;
+}> = ({ cumulative, goldLine }) => {
   const W = 360;
   const H = 180;
   const pad = 6;
@@ -166,6 +207,13 @@ const StrengthChart: FC<{ cumulative: ReturnType<typeof computeCumulativeStrengt
   let max = 0;
   for (const c of currencies) {
     for (const v of series[c]) {
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+  }
+  // ゴールド線も表示範囲に含める（振幅が大きいことがある）。
+  if (goldLine) {
+    for (const v of goldLine) {
       if (v < min) min = v;
       if (v > max) max = v;
     }
@@ -190,6 +238,15 @@ const StrengthChart: FC<{ cumulative: ReturnType<typeof computeCumulativeStrengt
           points={series[c].map((v, i) => `${x(i)},${y(v)}`).join(' ')}
         />
       ))}
+      {goldLine && goldLine.length === len && (
+        <polyline
+          fill="none"
+          stroke={GOLD_COLOR}
+          strokeWidth="2"
+          strokeDasharray="4 2"
+          points={goldLine.map((v, i) => `${x(i)},${y(v)}`).join(' ')}
+        />
+      )}
     </svg>
   );
 };

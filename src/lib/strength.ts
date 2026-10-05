@@ -83,10 +83,12 @@ export function formatWindowLabel(snapshot: StrengthSnapshot): string {
 export type StrengthRange = '1h' | '4h' | 'today' | 'year';
 
 // A time-series of X/JPY closes shared across the 7 pairs, aligned by datetime.
+// `rates.XAU` (optional) is a synthetic XAU/JPY series (= XAU/USD × USD/JPY) used
+// only for the independent gold line; it does NOT affect the 8-currency strength.
 export interface RateSeries {
   interval: string; // e.g. "15min" | "1day"
   datetimes: string[]; // ascending, "YYYY-MM-DD HH:mm:ss" in JST
-  rates: Record<JpyPairCurrency, number[]>; // each aligned to datetimes
+  rates: Record<JpyPairCurrency, number[]> & { XAU?: number[] }; // each aligned to datetimes
 }
 
 // Cumulative strength per currency over time, 0 at the start index.
@@ -167,4 +169,36 @@ export function computeCumulativeStrength(data: RateSeries, startIndex: number):
     changePct: len > 0 ? series[c][len - 1] : 0,
   }));
   return { datetimes, series, latest };
+}
+
+/**
+ * Independent gold line: gold's cumulative log strength vs the 8-currency basket,
+ * 0-based from `startIndex`. For each point i:
+ *   (N · cumXAU_i − Σ_8 cum_i) × 100
+ * where cumXAU = ln(XAU/JPY_i) − ln(XAU/JPY_start), N = CURRENCIES.length (8),
+ * and Σ_8 cum is the sum of the 8 currencies' cumulative log returns (JPY = 0).
+ *
+ * This leaves the 8-currency strength (computeCumulativeStrength) untouched — it is
+ * a separate overlay. Returns null when the series carries no XAU data (e.g. an old
+ * cache or a failed gold fetch), so callers simply omit the gold line.
+ */
+export function computeGoldLine(data: RateSeries, startIndex: number): number[] | null {
+  const xau = data.rates.XAU;
+  const n = data.datetimes.length;
+  if (!xau || xau.length < n || n === 0) return null;
+
+  const start = Math.max(0, Math.min(startIndex, n - 1));
+  const len = n - start;
+  const xauBase = Math.log(xau[start]);
+  const fiatBase: Record<JpyPairCurrency, number> = {} as Record<JpyPairCurrency, number>;
+  for (const p of JPY_PAIRS) fiatBase[p] = Math.log(data.rates[p][start]);
+
+  const out = new Array<number>(len);
+  for (let i = 0; i < len; i++) {
+    const cumXau = Math.log(xau[start + i]) - xauBase;
+    let sumFiat = 0; // Σ cum over the 8 currencies (JPY contributes 0).
+    for (const p of JPY_PAIRS) sumFiat += Math.log(data.rates[p][start + i]) - fiatBase[p];
+    out[i] = (CURRENCIES.length * cumXau - sumFiat) * 100;
+  }
+  return out;
 }

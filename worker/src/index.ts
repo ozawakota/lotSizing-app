@@ -50,9 +50,11 @@ interface TwelveDataNode {
   values?: TwelveDataValue[];
 }
 
-// Twelve Data から7ペアの時系列を一括取得し、datetime で揃えた RateSeries を作る。
+// Twelve Data から7ペア＋XAU/USD の時系列を一括取得し、datetime で揃えた RateSeries を作る。
+// ゴールドは XAU/JPY = XAU/USD × USD/JPY で合成し rates.XAU に格納（独立したゴールド線用）。
+// 7ペアが揃えば成立とし、XAU/USD の欠落時は rates.XAU を省略（7通貨の強弱には影響させない）。
 const fetchSeries = async (env: Env, interval: string, outputsize: number): Promise<RateSeries> => {
-  const symbols = PAIRS.map((c) => `${c}/JPY`);
+  const symbols = [...PAIRS.map((c) => `${c}/JPY`), 'XAU/USD'];
   const url =
     'https://api.twelvedata.com/time_series' +
     `?symbol=${encodeURIComponent(symbols.join(','))}` +
@@ -91,8 +93,36 @@ const fetchSeries = async (env: Env, interval: string, outputsize: number): Prom
     .sort();
   if (datetimes.length < 2) throw new Error('共通の時系列が不足');
 
-  const rates: Record<JpyPairCurrency, number[]> = {} as Record<JpyPairCurrency, number[]>;
+  const rates: Record<JpyPairCurrency, number[]> & { XAU?: number[] } = {} as Record<
+    JpyPairCurrency,
+    number[]
+  >;
   for (const c of PAIRS) rates[c] = datetimes.map((dt) => maps[c].get(dt) as number);
+
+  // ゴールド: XAU/USD を取得できていれば XAU/JPY = XAU/USD × USD/JPY を合成し rates.XAU に格納。
+  // ゴールドと為替は休場日がずれ datetime が完全一致しないため、採用済み datetimes に対して
+  // 前方補完（欠損は直近の既知値、先頭欠損は最初の既知値）して整列する。1つも無ければ省略。
+  const xauNode = parsed['XAU/USD'];
+  if (xauNode && xauNode.status === 'ok' && xauNode.values && xauNode.values.length >= 2) {
+    const xauMap = new Map<string, number>();
+    for (const v of xauNode.values) {
+      const close = parseFloat(v.close);
+      if (!Number.isNaN(close) && close > 0) xauMap.set(v.datetime, close);
+    }
+    // 前方補完：各 datetime に XAU/USD があれば採用、無ければ直近の既知値を引き継ぐ。
+    const xauUsd: (number | null)[] = [];
+    let last: number | null = null;
+    for (const dt of datetimes) {
+      const v = xauMap.get(dt);
+      if (v != null) last = v;
+      xauUsd.push(last);
+    }
+    // 先頭の未確定（最初の既知値より前）を最初の既知値でバックフィル。
+    const firstKnown = xauUsd.find((v) => v != null) ?? null;
+    if (firstKnown != null) {
+      rates.XAU = datetimes.map((_, i) => (xauUsd[i] ?? firstKnown) * rates.USD[i]);
+    }
+  }
 
   return { interval, datetimes, rates };
 };
@@ -301,7 +331,7 @@ export default {
   },
 
   // クライアント向け: KV の intraday/daily を返す。無ければ初回のみ算出（cold-start解消）。
-  // Twelve Data は 8 credits/分の制限があり、7ペア一括=7 credits のため、
+  // Twelve Data は 8 credits/分の制限があり、8シンボル一括(7ペア+XAU/USD)=8 credits のため、
   // 1リクエストで取得するデータセットは最大1つに絞る（intraday優先）。
   async fetch(req: Request, env: Env): Promise<Response> {
     // /flow は取引量・センチメント。それ以外は従来どおり通貨強弱を返す。
@@ -312,9 +342,9 @@ export default {
 
     try {
       if (!intradayRaw) {
-        intradayRaw = JSON.stringify(await updateIntraday(env)); // 7 credits
+        intradayRaw = JSON.stringify(await updateIntraday(env)); // 8 credits
       } else if (!dailyRaw) {
-        dailyRaw = JSON.stringify(await updateDaily(env)); // 7 credits（別リクエストで）
+        dailyRaw = JSON.stringify(await updateDaily(env)); // 8 credits（別リクエストで）
       }
     } catch (e) {
       // lazy取得の失敗（分次レート制限など）は致命的にしない。キャッシュ済み分だけ返す。
