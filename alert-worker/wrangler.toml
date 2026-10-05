@@ -1,7 +1,8 @@
 # 相場変動通知 Alert Worker 設定
-# 役割: 毎分 OANDA practice から4ペアの Bid を取得し、15分の急変動を判定して
-#       Web Push（ペイロードレス・VAPID署名）を配信する。検知ロジックは
-#       ../src/lib/alert.ts をフロント/テストと共有。
+# 役割: 毎分 Yahoo Finance(FX3ペア) と gold-api(XAU/USD) から価格を取得し、
+#       15分の急変動を判定して Web Push（ペイロードレス・VAPID署名）を配信する。
+#       検知ロジックは ../src/lib/alert.ts をフロント/テストと共有。
+#       価格ソースはいずれもキーレス（API トークン・口座不要）。
 #
 # 既存の currency-strength Worker とは別 Worker。無料枠の Cron はアカウント合計5本
 # （currency-strength が3本 + 本Workerの1本 = 4本）で収まる。
@@ -29,6 +30,5 @@ VAPID_SUBJECT = "mailto:ozawa19890413@gmail.com"
 VAPID_PUBLIC_KEY = "BDMQvoZB44nljNEEXuR3OAB-cvo6jhjTZVO0C8XAn3MtRkM8M7tv4KAeHAz1_aKQytj_zs9heXVZ9SUoPvPVhto"
 
 # secret（`wrangler secret put <NAME>` で登録。ここには書かない）:
-#   OANDA_API_TOKEN   … OANDA practice の個人アクセストークン
-#   OANDA_ACCOUNT_ID  … OANDA practice の口座ID（例 101-009-xxxxxxx-001）
 #   VAPID_PRIVATE_KEY … VAPID 秘密鍵（base64url, 32バイト d 値）
+# 価格ソースはキーレスのため OANDA 等の API トークン/口座は不要。

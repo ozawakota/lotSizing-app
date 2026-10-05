@@ -1,8 +1,8 @@
 /// <reference types="@cloudflare/workers-types" />
 // 相場変動通知 Alert Worker（外貨ex 準拠）。
 //
-// - scheduled(): 毎分 OANDA practice から4ペアの Bid を取得し、ペアごとに
-//   15分/25pips を判定（判定ロジックは ../../src/lib/alert.ts を共有）。発火したら
+// - scheduled(): 毎分 Yahoo Finance(FX3ペア) と gold-api(XAU/USD) から価格を取得し、
+//   ペアごとに 15分/25pips を判定（判定ロジックは ../../src/lib/alert.ts を共有）。発火したら
 //   alerts に記録し、全購読へ「ペイロードレス Web Push」を送る。
 // - fetch(): クライアント向け API。
 //     POST /subscribe   … 購読を登録
@@ -14,7 +14,6 @@
 // SW は push 受信をトリガに /recent を取得し、tag=ペア で重複を排除して通知表示する。
 import {
   ALERT_PAIRS,
-  OANDA_INSTRUMENT,
   evaluate,
   formatAlertBody,
   type AlertPair,
@@ -23,15 +22,13 @@ import {
 
 interface Env {
   DB: D1Database;
-  OANDA_API_TOKEN: string; // secret
-  OANDA_ACCOUNT_ID: string; // secret
   VAPID_PUBLIC_KEY: string; // var（base64url, 65バイト非圧縮点）
   VAPID_PRIVATE_KEY: string; // secret（base64url, 32バイト d 値）
   VAPID_SUBJECT: string; // var（例 mailto:you@example.com）
 }
 
 const RECENT_WINDOW_MS = 2 * 60 * 1000; // /recent が返す直近アラートの範囲
-// OANDA 取得がこの回数（分）連続で失敗したら「健全性通知」を一度だけ送る。
+// 価格取得がこの回数（分）連続で失敗したら「健全性通知」を一度だけ送る。
 // 単発の瞬断で誤報しないよう、まとまった障害のみを対象にする。
 const FEED_FAIL_ALERT_AFTER = 10;
 
@@ -44,32 +41,69 @@ const CORS_HEADERS: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// OANDA practice: 4ペアの Bid を一括取得（tradeable のもののみ）。
+// 価格取得（キーレス無料ソースのハイブリッド）:
+//   - FX 3ペア … Yahoo Finance v8/chart の regularMarketPrice（スポット）
+//   - XAU/USD  … gold-api.com のスポット金価格（USD/oz）
+// OANDA の実 Bid から last/spot 価格に変わるが、しきい値（25pips/$5）は
+// スプレッド誤差より十分大きく、変動検知の用途では問題ない。市場休止時は
+// 価格が据え置かれ高安差≒0 となり誤発火しない。
+// 1ソースでも成功すれば部分結果を返し、全滅時のみ throw（健全性通知の対象）。
 // ---------------------------------------------------------------------------
-interface OandaPrice {
-  instrument: string;
-  status: string;
-  bids?: { price: string }[];
-}
+// Yahoo のシンボル（FX のみ。XAU/USD は gold-api を使う）。
+const YAHOO_SYMBOL: Partial<Record<AlertPair, string>> = {
+  'GBP/JPY': 'GBPJPY=X',
+  'AUD/USD': 'AUDUSD=X',
+  'GBP/USD': 'GBPUSD=X',
+};
 
-const fetchBids = async (env: Env): Promise<Partial<Record<AlertPair, number>>> => {
-  const instruments = ALERT_PAIRS.map((p) => OANDA_INSTRUMENT[p]).join(',');
+// Yahoo は既定の fetch UA だと弾かれることがあるためブラウザ UA を付与。
+const UA = 'Mozilla/5.0 (compatible; lotsizing-alert/1.0)';
+
+const fetchYahooPrice = async (symbol: string): Promise<number> => {
   const url =
-    `https://api-fxpractice.oanda.com/v3/accounts/${env.OANDA_ACCOUNT_ID}/pricing` +
-    `?instruments=${encodeURIComponent(instruments)}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${env.OANDA_API_TOKEN}` },
-  });
-  if (!res.ok) throw new Error(`OANDA HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const data = (await res.json()) as { prices?: OandaPrice[] };
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
+    `?interval=1m&range=1d`;
+  const res = await fetch(url, { headers: { 'User-Agent': UA } });
+  if (!res.ok) throw new Error(`Yahoo HTTP ${res.status} (${symbol})`);
+  const data = (await res.json()) as {
+    chart?: { result?: { meta?: { regularMarketPrice?: number } }[] };
+  };
+  const price = data.chart?.result?.[0]?.meta?.regularMarketPrice;
+  if (typeof price !== 'number' || !Number.isFinite(price)) {
+    throw new Error(`Yahoo: price 不正 (${symbol})`);
+  }
+  return price;
+};
 
-  const byInstrument = new Map<string, AlertPair>(ALERT_PAIRS.map((p) => [OANDA_INSTRUMENT[p], p]));
+const fetchGoldPrice = async (): Promise<number> => {
+  const res = await fetch('https://api.gold-api.com/price/XAU');
+  if (!res.ok) throw new Error(`GoldAPI HTTP ${res.status}`);
+  const data = (await res.json()) as { price?: number };
+  const price = Number(data.price);
+  if (!Number.isFinite(price) || price <= 0) throw new Error('GoldAPI: price 不正');
+  return price;
+};
+
+const fetchBids = async (_env: Env): Promise<Partial<Record<AlertPair, number>>> => {
+  // 各ペアを並行取得。1つの失敗が他を巻き込まないよう allSettled で集約。
+  const tasks = ALERT_PAIRS.map(async (pair): Promise<[AlertPair, number]> => {
+    const price = pair === 'XAU/USD'
+      ? await fetchGoldPrice()
+      : await fetchYahooPrice(YAHOO_SYMBOL[pair]!);
+    return [pair, price];
+  });
+  const results = await Promise.allSettled(tasks);
+
   const out: Partial<Record<AlertPair, number>> = {};
-  for (const price of data.prices ?? []) {
-    if (price.status !== 'tradeable') continue; // 市場休止中は無視
-    const pair = byInstrument.get(price.instrument);
-    const bid = Number(price.bids?.[0]?.price);
-    if (pair && !Number.isNaN(bid)) out[pair] = bid;
+  const errors: string[] = [];
+  for (const r of results) {
+    if (r.status === 'fulfilled') out[r.value[0]] = r.value[1];
+    else errors.push(String(r.reason));
+  }
+
+  // 全ペア失敗（ネットワーク断/全ソース障害）のみ throw → 健全性通知の対象。
+  if (Object.keys(out).length === 0) {
+    throw new Error(`価格取得が全滅: ${errors.join(' | ').slice(0, 200)}`);
   }
   return out;
 };
@@ -85,15 +119,8 @@ interface PairStateRow {
 const runDetection = async (env: Env): Promise<void> => {
   const now = Date.now();
 
-  // OANDA の認証情報が未設定の間（口座審査中など）は検知をスキップ。
-  // 「取得失敗」扱いにしないことで、誤った健全性通知を防ぐ。
-  if (!env.OANDA_API_TOKEN || !env.OANDA_ACCOUNT_ID) {
-    console.log('OANDA 未設定のため検知をスキップ');
-    return;
-  }
-
-  // OANDA 取得失敗（401/ネットワーク等）は健全性通知の対象。成功したら失敗状態を解除。
-  // 取得は成功したが全ペア非 tradeable（週末）は「失敗」ではないので対象外。
+  // 価格取得が全滅（ネットワーク断等）した場合のみ健全性通知の対象。
+  // 一部ペアのみ失敗した場合は部分結果で継続し、失敗ペアは状態維持。
   let bids: Partial<Record<AlertPair, number>>;
   try {
     bids = await fetchBids(env);
@@ -159,14 +186,14 @@ const recordFeedFailure = async (env: Env, detail: string): Promise<void> => {
     await env.DB.prepare('INSERT INTO alerts (pair, body, created_at) VALUES (?, ?, ?)')
       .bind(
         'system',
-        '相場変動通知のデータ取得に失敗しています。OANDA のトークン/口座設定を確認してください。',
+        '相場変動通知のデータ取得に失敗しています。価格ソース（Yahoo/gold-api）の稼働状況を確認してください。',
         Date.now(),
       )
       .run();
     await sendPushToAll(env);
     await setMeta(env, 'feed_alerted', '1');
   }
-  console.error(`OANDA 取得失敗（${count}回連続）: ${detail}`);
+  console.error(`価格取得失敗（${count}回連続）: ${detail}`);
 };
 
 // 取得成功時に失敗状態をリセット（不要な書込は避ける）。
