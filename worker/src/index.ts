@@ -13,6 +13,7 @@
 import { computeCumulativeStrength, findStartIndex, type JpyPairCurrency, type RateSeries } from '../../src/lib/strength';
 // AIbot（アプリデータ連携チャット）のロジックもフロントと共有。
 import { buildChatSystemPrompt, buildMarketContext, sanitizeHistory, type MarketContextInput } from '../../src/lib/chat';
+import { sessionStatusText } from '../../src/lib/session';
 // 取引量・センチメント(/flow)のロジック/型もフロントと共有: ../../src/lib/flow.ts
 import { FLOW_PAIRS, computeDelta, toPairFlow, updatePeak, type FlowPair, type PairFlow, type VolumePeak } from '../../src/lib/flow';
 // /news の為替ニュース＋売買シグナルのロジック/型もフロントと共有。
@@ -748,7 +749,8 @@ const handleChat = async (req: Request, env: Env): Promise<Response> => {
     return new Response(JSON.stringify({ error: 'メッセージがありません' }), { headers: CORS_HEADERS });
   }
 
-  const context = await buildChatContext(env);
+  // 市場セッション状況は時間依存のため毎回新鮮に算出し、データ要約(5分キャッシュ)と結合。
+  const context = `${sessionStatusText(new Date())}\n${await buildChatContext(env)}`;
   const messages = [{ role: 'system', content: buildChatSystemPrompt(context) }, ...history];
 
   try {
