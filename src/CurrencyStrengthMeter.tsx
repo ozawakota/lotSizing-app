@@ -65,7 +65,7 @@ const fetchStrength = async (): Promise<StrengthData> => {
 
 const CurrencyStrengthMeter: FC = () => {
   const [data, setData] = useState<StrengthData | null>(null);
-  const [range, setRange] = useState<StrengthRange>('1h');
+  const [range, setRange] = useState<StrengthRange>('4h');
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [infoOpen, setInfoOpen] = useState<boolean>(false);
