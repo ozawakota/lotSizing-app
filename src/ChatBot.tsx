@@ -30,7 +30,14 @@ const ChatBot: FC = () => {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [useJev, setUseJev] = useState<boolean>(() => localStorage.getItem('aibot-usejev') === '1');
   const endRef = useRef<HTMLDivElement>(null);
+
+  const toggleJev = () => {
+    const next = !useJev;
+    setUseJev(next);
+    localStorage.setItem('aibot-usejev', next ? '1' : '0');
+  };
 
   useEffect(() => {
     localStorage.setItem(STORE_KEY, JSON.stringify(messages.slice(-30)));
@@ -49,7 +56,7 @@ const ChatBot: FC = () => {
       const res = await fetch(CHAT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: next.slice(-8) }),
+        body: JSON.stringify({ messages: next.slice(-8), useJev }),
       });
       const data = (await res.json()) as { reply?: string; error?: string };
       if (data.error) throw new Error(data.error);
@@ -84,6 +91,29 @@ const ChatBot: FC = () => {
             会話をクリア
           </button>
         )}
+      </div>
+
+      {/* Jev 判定トグル: ON で売買シグナルを Jev の構造化判定に基づいて回答 */}
+      <div className="mt-1 flex items-center justify-between rounded border border-gray-200 bg-gray-50 px-2 py-1">
+        <div>
+          <span className="text-xs font-semibold text-gray-700">Jev判定を使う</span>
+          <span className="ml-1 text-[10px] text-gray-400">売買/反転継続を Jev の判定に基づいて回答</span>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={useJev}
+          onClick={toggleJev}
+          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+            useJev ? 'bg-orange-500' : 'bg-gray-300'
+          }`}
+        >
+          <span
+            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+              useJev ? 'translate-x-6' : 'translate-x-1'
+            }`}
+          />
+        </button>
       </div>
 
       {/* メッセージ一覧 */}

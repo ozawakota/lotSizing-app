@@ -11,7 +11,7 @@ export interface MarketContextInput {
   strength?: { currency: string; score: number }[]; // 強い順
   flow?: { pair: string; lean: string; longPct: number }[];
   newsSummary?: string;
-  signals?: { pair: string; buyPct: number; trend: string }[];
+  signals?: { pair: string; buyPct: number; trend: string; confidence?: number; trendPct?: number }[];
 }
 
 const TREND_JP: Record<string, string> = {
@@ -41,9 +41,13 @@ export function buildMarketContext(d: MarketContextInput): string {
 
   if (d.signals && d.signals.length > 0) {
     const line = d.signals
-      .map((s) => `${s.pair}:買${s.buyPct}%/${TREND_JP[s.trend] ?? s.trend}`)
+      .map((s) => {
+        const conf = typeof s.confidence === 'number' ? `(確信${s.confidence.toFixed(1)})` : '';
+        const tp = typeof s.trendPct === 'number' ? `${s.trendPct}%` : '';
+        return `${s.pair}:買${s.buyPct}%${conf}/${TREND_JP[s.trend] ?? s.trend}${tp}`;
+      })
       .join(' / ');
-    parts.push(`【売買シグナル(AI推定)】${line}`);
+    parts.push(`【売買シグナル】${line}`);
   }
 
   if (d.newsSummary && d.newsSummary.trim()) {
@@ -53,15 +57,19 @@ export function buildMarketContext(d: MarketContextInput): string {
   return parts.length > 0 ? parts.join('\n') : '（現在データは取得できていません）';
 }
 
-/** システムプロンプト（相場観の前提＋回答方針）。 */
-export function buildChatSystemPrompt(context: string): string {
-  return [
+/** システムプロンプト（相場観の前提＋回答方針）。jevMode=true で Jev 判定を根拠に縛る。 */
+export function buildChatSystemPrompt(context: string, jevMode = false): string {
+  const lines = [
     'あなたはこのFXアプリのアシスタントです。以下の「現在の相場データ」に基づき、日本語で簡潔に回答してください。',
     'データで答えられないことは一般論であると明示し、断定や投資助言は避けてください（最終判断はユーザー）。',
-    '',
-    '# 現在の相場データ',
-    context,
-  ].join('\n');
+  ];
+  if (jevMode) {
+    lines.push(
+      '「売買シグナル」は Jev（構造化意思決定AI）の判定です。売買の方向とトレンドの継続/反転は、この数値（確率・確信度）を根拠にし、推測で覆さないでください。回答末尾に「Jevの判定に基づく」と添えてください。',
+    );
+  }
+  lines.push('', '# 現在の相場データ', context);
+  return lines.join('\n');
 }
 
 /** クライアント履歴を検証・整形（role/内容の健全化、直近 maxHistory 件に制限）。 */

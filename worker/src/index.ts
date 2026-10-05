@@ -726,7 +726,13 @@ const buildChatContext = async (env: Env): Promise<string> => {
     if (raw) {
       const n = JSON.parse(raw) as NewsPayload;
       input.newsSummary = n.summary;
-      input.signals = n.signals.map((s) => ({ pair: s.pair, buyPct: s.buyPct, trend: s.trend }));
+      input.signals = n.signals.map((s) => ({
+        pair: s.pair,
+        buyPct: s.buyPct,
+        trend: s.trend,
+        confidence: s.confidence,
+        trendPct: s.trendPct,
+      }));
     }
   } catch (e) {
     console.error('/chat ニュースコンテキスト失敗:', e);
@@ -749,13 +755,19 @@ const handleChat = async (req: Request, env: Env): Promise<Response> => {
     return new Response(JSON.stringify({ error: 'メッセージがありません' }), { headers: CORS_HEADERS });
   }
 
+  // Jevトグル: ON かつ シグナルが Jev 由来(SIGNAL_ENGINE=jev)のとき、売買シグナルの
+  // 構造化判定を根拠に縛る。チャット文自体は Jev では書けないため Workers AI が文章化する。
+  const useJev = (body as { useJev?: unknown }).useJev === true && env.SIGNAL_ENGINE === 'jev';
+
   // 市場セッション状況は時間依存のため毎回新鮮に算出し、データ要約(5分キャッシュ)と結合。
   const context = `${sessionStatusText(new Date())}\n${await buildChatContext(env)}`;
-  const messages = [{ role: 'system', content: buildChatSystemPrompt(context) }, ...history];
+  const messages = [{ role: 'system', content: buildChatSystemPrompt(context, useJev) }, ...history];
 
   try {
     const r = await env.AI.run(CHAT_MODEL, { messages });
-    return new Response(JSON.stringify({ reply: aiText(r).trim() }), { headers: CORS_HEADERS });
+    return new Response(JSON.stringify({ reply: aiText(r).trim(), engine: useJev ? 'jev' : 'workers-ai' }), {
+      headers: CORS_HEADERS,
+    });
   } catch (e) {
     console.error('/chat 応答生成失敗:', e);
     return new Response(JSON.stringify({ error: '応答の生成に失敗しました。少し待って再試行してください' }), {
