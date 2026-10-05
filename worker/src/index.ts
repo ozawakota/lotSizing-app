@@ -10,7 +10,9 @@
 //   起点を選んで累積対数強弱を計算・折れ線表示する。
 //
 // 強弱の計算式はフロントと共有: ../../src/lib/strength.ts（computeCumulativeStrength）
-import type { JpyPairCurrency, RateSeries } from '../../src/lib/strength';
+import { computeCumulativeStrength, findStartIndex, type JpyPairCurrency, type RateSeries } from '../../src/lib/strength';
+// AIbot（アプリデータ連携チャット）のロジックもフロントと共有。
+import { buildChatSystemPrompt, buildMarketContext, sanitizeHistory, type MarketContextInput } from '../../src/lib/chat';
 // 取引量・センチメント(/flow)のロジック/型もフロントと共有: ../../src/lib/flow.ts
 import { FLOW_PAIRS, computeDelta, toPairFlow, updatePeak, type FlowPair, type PairFlow, type VolumePeak } from '../../src/lib/flow';
 // /news の為替ニュース＋売買シグナルのロジック/型もフロントと共有。
@@ -71,6 +73,8 @@ const MAX_RATE_FETCH = 7;
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
   'Content-Type': 'application/json; charset=utf-8',
   'Cache-Control': 'no-store',
 };
@@ -670,6 +674,94 @@ const handleStopLoss = async (env: Env, url: URL): Promise<Response> => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// /chat: AIbot（アプリデータ連携チャット）。KV の強弱/センチメント/ニュースを
+// コンパクトなコンテキストにまとめ、Workers AI に履歴とともに渡して日本語で回答。
+// ---------------------------------------------------------------------------
+const CHAT_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+const KV_CHAT_CTX = 'chat_ctx';
+const CHAT_CTX_TTL_MS = 5 * 60 * 1000; // 5分
+
+// 現在の相場データからコンテキスト文字列を作る（5分 TTL キャッシュ）。
+const buildChatContext = async (env: Env): Promise<string> => {
+  const cached = await env.STRENGTH_KV.get(KV_CHAT_CTX);
+  if (cached) {
+    try {
+      const c = JSON.parse(cached) as { at: number; context: string };
+      if (Date.now() - c.at < CHAT_CTX_TTL_MS) return c.context;
+    } catch {
+      // 作り直す
+    }
+  }
+
+  const input: MarketContextInput = {};
+  // 通貨強弱（当日起点の最新を強い順に）
+  try {
+    const raw = await env.STRENGTH_KV.get(KV_INTRADAY);
+    if (raw) {
+      const series = JSON.parse(raw) as RateSeries;
+      const idx = findStartIndex(series.datetimes, 'today', new Date());
+      const cum = computeCumulativeStrength(series, idx);
+      input.strength = [...cum.latest]
+        .sort((a, b) => b.changePct - a.changePct)
+        .map((s) => ({ currency: s.currency, score: s.changePct }));
+    }
+  } catch (e) {
+    console.error('/chat 強弱コンテキスト失敗:', e);
+  }
+  // 取引量センチメント
+  try {
+    const raw = await env.STRENGTH_KV.get(KV_FLOW);
+    if (raw) {
+      const pairs = JSON.parse(raw) as PairFlow[];
+      input.flow = pairs.map((p) => ({ pair: p.pair, lean: p.dominant, longPct: p.longPct }));
+    }
+  } catch (e) {
+    console.error('/chat センチメントコンテキスト失敗:', e);
+  }
+  // ニュース要約＋売買シグナル
+  try {
+    const raw = await env.STRENGTH_KV.get(KV_NEWS);
+    if (raw) {
+      const n = JSON.parse(raw) as NewsPayload;
+      input.newsSummary = n.summary;
+      input.signals = n.signals.map((s) => ({ pair: s.pair, buyPct: s.buyPct, trend: s.trend }));
+    }
+  } catch (e) {
+    console.error('/chat ニュースコンテキスト失敗:', e);
+  }
+
+  const context = buildMarketContext(input);
+  await env.STRENGTH_KV.put(KV_CHAT_CTX, JSON.stringify({ at: Date.now(), context }));
+  return context;
+};
+
+const handleChat = async (req: Request, env: Env): Promise<Response> => {
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return new Response(JSON.stringify({ error: 'リクエストが不正です' }), { headers: CORS_HEADERS });
+  }
+  const history = sanitizeHistory((body as { messages?: unknown }).messages);
+  if (history.length === 0) {
+    return new Response(JSON.stringify({ error: 'メッセージがありません' }), { headers: CORS_HEADERS });
+  }
+
+  const context = await buildChatContext(env);
+  const messages = [{ role: 'system', content: buildChatSystemPrompt(context) }, ...history];
+
+  try {
+    const r = await env.AI.run(CHAT_MODEL, { messages });
+    return new Response(JSON.stringify({ reply: aiText(r).trim() }), { headers: CORS_HEADERS });
+  } catch (e) {
+    console.error('/chat 応答生成失敗:', e);
+    return new Response(JSON.stringify({ error: '応答の生成に失敗しました。少し待って再試行してください' }), {
+      headers: CORS_HEADERS,
+    });
+  }
+};
+
 export default {
   // Cron: event.cron でジョブを出し分け。失敗時は前回値を保持。
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -695,12 +787,15 @@ export default {
   // Twelve Data は 8 credits/分の制限があり、8シンボル一括(7ペア+XAU/USD)=8 credits のため、
   // 1リクエストで取得するデータセットは最大1つに絞る（intraday優先）。
   async fetch(req: Request, env: Env): Promise<Response> {
-    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、他=通貨強弱。
+    // CORS プリフライト（POST /chat 用）。
+    if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
+    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、/chat=AIbot、他=通貨強弱。
     const reqUrl = new URL(req.url);
     const pathname = reqUrl.pathname;
     if (pathname === '/flow') return handleFlow(env);
     if (pathname === '/news') return handleNews(env);
     if (pathname === '/stoploss') return handleStopLoss(env, reqUrl);
+    if (req.method === 'POST' && pathname === '/chat') return handleChat(req, env);
 
     let intradayRaw = await env.STRENGTH_KV.get(KV_INTRADAY);
     let dailyRaw = await env.STRENGTH_KV.get(KV_DAILY);
