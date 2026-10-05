@@ -15,9 +15,10 @@ const StrengthInfoModal: FC<StrengthInfoModalProps> = ({ isOpen, onClose }) => {
       isOpen={isOpen}
       onClose={onClose}
       headerText="通貨強弱の見方"
+      maxHeight="80vh"
       buttons={[{ text: '閉じる', handler: onClose }]}
     >
-      <div className="max-h-[75vh] overflow-y-auto overscroll-contain p-4 text-sm leading-relaxed">
+      <div className="p-4 text-sm leading-relaxed">
         <p className="mb-4">
           主要8通貨（JPY・USD・EUR・GBP・AUD・NZD・CAD・CHF）が、選んだ起点から
           <span className="font-semibold">どれだけ買われた／売られたか</span>を相対的に比べる指標です。

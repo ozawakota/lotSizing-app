@@ -12,6 +12,7 @@ const DstInfoModal: FC<DstInfoModalProps> = ({ isOpen, onClose }) => {
     <Popup
       isOpen={isOpen}
       onClose={onClose}
+      maxHeight="80vh"
       buttons={[
         {
           text: '閉じる',
@@ -19,7 +20,7 @@ const DstInfoModal: FC<DstInfoModalProps> = ({ isOpen, onClose }) => {
         }
       ]}
     >
-      <div className="max-h-[75vh] overflow-y-auto overscroll-contain p-4">
+      <div className="p-4">
         <h3 className="font-bold mb-3">夏時間（サマータイム）と冬時間について</h3>
 
         <p className="mb-3">

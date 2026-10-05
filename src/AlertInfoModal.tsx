@@ -15,9 +15,10 @@ const AlertInfoModal: FC<AlertInfoModalProps> = ({ isOpen, onClose }) => {
       isOpen={isOpen}
       onClose={onClose}
       headerText="相場変動通知とは"
+      maxHeight="80vh"
       buttons={[{ text: '閉じる', handler: onClose }]}
     >
-      <div className="max-h-[75vh] overflow-y-auto overscroll-contain p-4 text-sm leading-relaxed">
+      <div className="p-4 text-sm leading-relaxed">
         <p className="mb-4">
           対象ペアの価格が<span className="font-semibold">直近15分で大きく動いた</span>ときに、
           スマホへ<span className="font-semibold">プッシュ通知</span>でお知らせする機能です。
