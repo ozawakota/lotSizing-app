@@ -4,6 +4,7 @@
 // 選択した起点(4時間前/当日/年初)から 0 ベースで各通貨の累積対数強弱を計算・表示する。
 // マウント時＋1時間ごとに自動再取得。取得失敗は電卓本体を妨げない。
 import { FC, useCallback, useEffect, useMemo, useState } from 'react';
+import { HelpCircle } from 'lucide-react';
 import {
   CurrencyCode,
   RateSeries,
@@ -12,6 +13,7 @@ import {
   computeGoldLine,
   findStartIndex,
 } from '@/lib/strength';
+import StrengthInfoModal from './StrengthInfoModal';
 
 interface StrengthData {
   computedAt: number;
@@ -66,6 +68,7 @@ const CurrencyStrengthMeter: FC = () => {
   const [range, setRange] = useState<StrengthRange>('today');
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
+  const [infoOpen, setInfoOpen] = useState<boolean>(false);
 
   const loadStrength = useCallback(async () => {
     setLoading(true);
@@ -144,7 +147,17 @@ const CurrencyStrengthMeter: FC = () => {
             ))}
           </div>
         )}
+        <button
+          type="button"
+          aria-label="通貨強弱の見方"
+          onClick={() => setInfoOpen(true)}
+          className="text-gray-400 hover:text-gray-600"
+        >
+          <HelpCircle className="h-4 w-4" />
+        </button>
       </div>
+
+      <StrengthInfoModal isOpen={infoOpen} onClose={() => setInfoOpen(false)} />
 
       {error && <p className="mt-1 text-center text-red-600">{error}</p>}
 
