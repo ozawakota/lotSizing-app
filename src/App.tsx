@@ -12,6 +12,7 @@ import OrderFlow from './OrderFlow'; // 取引量・センチメント ページ
 import ChatBot from './ChatBot'; // AIbot（アプリデータ連携チャット）ページ
 import FundManager from './FundManager'; // 資金管理（トレードジャーナル）ページ
 import NewsSummary from './NewsSummary'; // 為替ニュース要約＋売買シグナル ページ
+import AlertToast from './AlertToast'; // 相場変動の in-app トースト通知
 // 各ページのタイトル（共通ヘッダーに表示）。
 const VIEW_TITLES: Record<AppView, string> = {
   calculator: 'ロット計算',
@@ -886,6 +887,7 @@ const App: FC = () => {
 
   return (
     <Page>
+      <AlertToast />
       <div className='lg:w-150 lg:mx-auto min-h-screen bg-gray-50'>
 
       {/* 共通ヘッダー（タイトル + 通知ベル。計算ページのみヘルプ/夏時間を表示） */}

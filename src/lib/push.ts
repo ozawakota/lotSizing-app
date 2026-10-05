@@ -66,6 +66,11 @@ export async function fetchAlertHistory(limit = 30): Promise<AlertHistoryItem[]>
   return (await res.json()) as AlertHistoryItem[];
 }
 
+// lastSeenId より新しいアラートを古い順に返す（in-app トースト用）。
+export function pickNewAlerts(alerts: AlertHistoryItem[], lastSeenId: number): AlertHistoryItem[] {
+  return alerts.filter((a) => a.id > lastSeenId).sort((a, b) => a.id - b.id);
+}
+
 // 現在この端末が購読中かどうか。
 export async function isSubscribed(): Promise<boolean> {
   if (!isPushSupported()) return false;
