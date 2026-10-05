@@ -25,6 +25,24 @@ import {
   type PairSignal,
   type PairTrend,
 } from '../../src/lib/signal';
+// 損切り提案のロジック/型もフロントと共有。
+import {
+  SL_TIMEFRAMES,
+  YAHOO_INTERVAL,
+  YAHOO_SYMBOL,
+  buildPaJevRequest,
+  buildPaPrompt,
+  computeStopLoss,
+  computeStructure,
+  parsePaAi,
+  parsePaJev,
+  type Candle,
+  type PaResult,
+  type SlDirection,
+  type SlStructure,
+  type SlSuggestion,
+  type SlTimeframe,
+} from '../../src/lib/stoploss';
 
 interface Env {
   TWELVE_DATA_API_KEY: string;
@@ -489,6 +507,169 @@ const handleNews = async (env: Env): Promise<Response> => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// /stoploss: 損切り位置提案＋プライスアクション判定（Yahoo足＋Workers AI＋Jev）
+// ---------------------------------------------------------------------------
+// Yahoo v8/chart で OHLC ロウソク足＋現在レートを取得→構造(スイング高安/トレンド)から
+// 損切り価格を機械算出。プライスアクション分類(反転/戻り売り/押し目買い/レンジ)は Jev、
+// 失敗時は Workers AI。相場解説(日本語)は Workers AI。PA＋解説は (ペア,足) 単位で TTL キャッシュ。
+const KV_SL_PREFIX = 'sl:';
+const SL_TTL_MS = 10 * 60 * 1000; // 10分
+
+interface StopLossPayload {
+  instrument: string;
+  direction: SlDirection;
+  timeframe: SlTimeframe;
+  currentRate: number;
+  entry: number | null;
+  structure: SlStructure;
+  stopLoss: SlSuggestion;
+  pa: PaResult;
+  paEngine: string; // 'jev' | 'workers-ai'
+  comment: string;
+  generatedAt: number;
+}
+
+interface YahooChart {
+  chart?: {
+    result?: {
+      meta?: { regularMarketPrice?: number };
+      indicators?: { quote?: { high?: (number | null)[]; low?: (number | null)[]; close?: (number | null)[] }[] };
+    }[];
+  };
+}
+
+const fetchYahooCandles = async (symbol: string, interval: string): Promise<{ candles: Candle[]; currentRate: number }> => {
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
+    `?interval=${encodeURIComponent(interval)}&range=1mo`;
+  const res = await fetch(url, { headers: { 'User-Agent': NEWS_UA } });
+  if (!res.ok) throw new Error(`Yahoo HTTP ${res.status}`);
+  const r = ((await res.json()) as YahooChart).chart?.result?.[0];
+  const q = r?.indicators?.quote?.[0];
+  const highs = q?.high ?? [];
+  const lows = q?.low ?? [];
+  const closes = q?.close ?? [];
+  const candles: Candle[] = [];
+  for (let i = 0; i < closes.length; i++) {
+    const h = highs[i];
+    const l = lows[i];
+    const c = closes[i];
+    if (typeof h === 'number' && typeof l === 'number' && typeof c === 'number') candles.push({ high: h, low: l, close: c });
+  }
+  const currentRate = Number(r?.meta?.regularMarketPrice);
+  if (candles.length === 0 || !Number.isFinite(currentRate)) throw new Error('Yahoo: ロウソク足データが不足');
+  return { candles, currentRate };
+};
+
+// プライスアクション分類（Jev 優先、失敗で Workers AI）＋ 日本語の相場解説。
+const computeMarketRead = async (
+  env: Env,
+  structure: SlStructure,
+  recentCloses: number[],
+): Promise<{ pa: PaResult; paEngine: string; comment: string }> => {
+  let pa: PaResult;
+  let paEngine = 'jev';
+  try {
+    if (!env.TYPESAFE_API_KEY) throw new Error('TYPESAFE_API_KEY 未設定');
+    const body = { model: 'jev-latest', ...buildPaJevRequest(structure, recentCloses) };
+    const res = await fetch(JEV_ENDPOINT, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.TYPESAFE_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`Jev HTTP ${res.status}: ${(await res.text()).slice(0, 150)}`);
+    const data = (await res.json()) as { answers?: Record<string, { choice?: string; probabilities?: Record<string, number>; confidence?: number }> };
+    pa = parsePaJev(data.answers);
+  } catch (e) {
+    console.error('SL プライスアクション Jev 失敗 → Workers AI:', e);
+    paEngine = 'workers-ai';
+    const r = await env.AI.run(SIGNAL_MODEL, {
+      messages: [
+        { role: 'system', content: 'あなたは相場のプライスアクション分類器です。指示されたJSONのみ返します。' },
+        { role: 'user', content: buildPaPrompt(structure, recentCloses) },
+      ],
+    });
+    pa = parsePaAi((r as { response?: unknown }).response);
+  }
+
+  let comment = '';
+  try {
+    const r = await env.AI.run(SUMMARY_MODEL, {
+      messages: [
+        { role: 'system', content: 'あなたは日本語で簡潔に相場解説するFXアナリストです。' },
+        {
+          role: 'user',
+          content:
+            `トレンド:${structure.trend} / 現在値:${structure.currentRate} / 直近高値:${structure.swingHigh} / 直近安値:${structure.swingLow} / プライスアクション:${pa.pa}。` +
+            'この相場観と、損切り設定の考え方（どこまで動いたら想定が崩れ撤退すべきか）を3〜4行の日本語で解説してください。断定や投資助言は避け、参考情報として。',
+        },
+      ],
+    });
+    comment = aiText(r).trim();
+  } catch (e) {
+    console.error('SL 解説生成 失敗:', e);
+  }
+  return { pa, paEngine, comment };
+};
+
+const handleStopLoss = async (env: Env, url: URL): Promise<Response> => {
+  const p = url.searchParams;
+  const instrument = p.get('instrument') || 'GBP_USD';
+  const direction: SlDirection = p.get('direction') === 'short' ? 'short' : 'long';
+  const tfRaw = p.get('timeframe') as SlTimeframe | null;
+  const timeframe: SlTimeframe = tfRaw && SL_TIMEFRAMES.includes(tfRaw) ? tfRaw : '1h';
+  const entryRaw = parseFloat(p.get('entry') || '');
+  const entry = Number.isFinite(entryRaw) && entryRaw > 0 ? entryRaw : null;
+
+  const symbol = YAHOO_SYMBOL[instrument];
+  if (!symbol) return new Response(JSON.stringify({ error: '未対応のペアです' }), { headers: CORS_HEADERS });
+
+  try {
+    const { candles, currentRate } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[timeframe]);
+    const structure = computeStructure(candles, currentRate);
+    const stopLoss = computeStopLoss(structure, direction, entry, instrument);
+    const recentCloses = candles.slice(-12).map((c) => c.close);
+
+    // PA＋解説は (ペア,足) 単位でキャッシュ（Jev/AI 呼び出しを抑制）。SL・現在値は毎回新鮮。
+    const key = `${KV_SL_PREFIX}${instrument}:${timeframe}`;
+    let read: { pa: PaResult; paEngine: string; comment: string } | null = null;
+    const cached = await env.STRENGTH_KV.get(key);
+    if (cached) {
+      try {
+        const c = JSON.parse(cached) as { at: number; read: { pa: PaResult; paEngine: string; comment: string } };
+        if (Date.now() - c.at < SL_TTL_MS) read = c.read;
+      } catch {
+        // 無視して作り直す
+      }
+    }
+    if (!read) {
+      read = await computeMarketRead(env, structure, recentCloses);
+      await env.STRENGTH_KV.put(key, JSON.stringify({ at: Date.now(), read }));
+    }
+
+    const payload: StopLossPayload = {
+      instrument,
+      direction,
+      timeframe,
+      currentRate,
+      entry,
+      structure,
+      stopLoss,
+      pa: read.pa,
+      paEngine: read.paEngine,
+      comment: read.comment,
+      generatedAt: Date.now(),
+    };
+    return new Response(JSON.stringify(payload), { headers: CORS_HEADERS });
+  } catch (e) {
+    console.error('/stoploss 失敗:', e);
+    return new Response(JSON.stringify({ error: 'データ取得に失敗しました。少し待って再試行してください' }), {
+      headers: CORS_HEADERS,
+    });
+  }
+};
+
 export default {
   // Cron: event.cron でジョブを出し分け。失敗時は前回値を保持。
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -514,10 +695,12 @@ export default {
   // Twelve Data は 8 credits/分の制限があり、8シンボル一括(7ペア+XAU/USD)=8 credits のため、
   // 1リクエストで取得するデータセットは最大1つに絞る（intraday優先）。
   async fetch(req: Request, env: Env): Promise<Response> {
-    // ルーティング: /flow=取引量・センチメント、/news=ニュース要約＋シグナル、他=通貨強弱。
-    const pathname = new URL(req.url).pathname;
+    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、他=通貨強弱。
+    const reqUrl = new URL(req.url);
+    const pathname = reqUrl.pathname;
     if (pathname === '/flow') return handleFlow(env);
     if (pathname === '/news') return handleNews(env);
+    if (pathname === '/stoploss') return handleStopLoss(env, reqUrl);
 
     let intradayRaw = await env.STRENGTH_KV.get(KV_INTRADAY);
     let dailyRaw = await env.STRENGTH_KV.get(KV_DAILY);
