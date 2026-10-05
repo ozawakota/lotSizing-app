@@ -11,12 +11,14 @@ import BottomTabBar, { type AppView } from './components/BottomTabBar';
 import OrderFlow from './OrderFlow'; // 取引量・センチメント ページ
 import StopLossTool from './StopLossTool'; // 損切り提案 ページ
 import FundManager from './FundManager'; // 資金管理（トレードジャーナル）ページ
+import NewsSummary from './NewsSummary'; // 為替ニュース要約＋売買シグナル ページ
 // 各ページのタイトル（共通ヘッダーに表示）。
 const VIEW_TITLES: Record<AppView, string> = {
   calculator: 'ロット計算',
   flow: '取引量・センチメント',
   stoploss: '損切り提案',
   fund: '資金管理',
+  news: '為替ニュース',
 };
 
 setOptions({
@@ -1194,6 +1196,8 @@ const App: FC = () => {
       </>
       ) : view === 'flow' ? (
         <OrderFlow />
+      ) : view === 'news' ? (
+        <NewsSummary />
       ) : view === 'stoploss' ? (
         <StopLossTool />
       ) : (

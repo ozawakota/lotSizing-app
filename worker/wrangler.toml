@@ -18,7 +18,17 @@ crons = ["0 */2 * * *", "30 0 * * *", "15 * * * *"]
 binding = "STRENGTH_KV"
 id = "2bf5986d239e492ab68449b7df253ec4"
 
+# Workers AI（/news の要約・シグナル用）。無料枠 10,000 Neurons/日。
+[ai]
+binding = "AI"
+
 # 秘匿情報はここに書かず、`wrangler secret put <NAME>` で登録する:
 #   TWELVE_DATA_API_KEY = <Twelve Data の APIキー>
 #   MYFXBOOK_EMAIL      = <Myfxbook 無料アカウントのメール>   … /flow センチメント用
 #   MYFXBOOK_PASSWORD   = <Myfxbook 無料アカウントのパスワード> … /flow センチメント用
+#   TYPESAFE_API_KEY    = <Jev(typesafe.ai) の APIキー>       … SIGNAL_ENGINE=jev 時のみ
+#
+# シグナルのエンジン切替（公開変数）: "jev" で Jev(typesafe.ai) を使用（TYPESAFE_API_KEY 必須）。
+# Jev 失敗時は自動で Workers AI にフォールバックする。
+[vars]
+SIGNAL_ENGINE = "jev"

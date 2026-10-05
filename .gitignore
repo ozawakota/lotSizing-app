@@ -37,3 +37,4 @@ worker/.wrangler/
 
 # Playwright/ブラウザ確認の一時出力
 screenshots/
+.dev.vars

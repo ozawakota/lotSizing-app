@@ -13,6 +13,18 @@
 import type { JpyPairCurrency, RateSeries } from '../../src/lib/strength';
 // 取引量・センチメント(/flow)のロジック/型もフロントと共有: ../../src/lib/flow.ts
 import { FLOW_PAIRS, computeDelta, toPairFlow, updatePeak, type FlowPair, type PairFlow, type VolumePeak } from '../../src/lib/flow';
+// /news の為替ニュース＋売買シグナルのロジック/型もフロントと共有。
+import { parseRssItems, type NewsItem } from '../../src/lib/news';
+import {
+  SIGNAL_PAIRS,
+  buildJevRequest,
+  buildSignalPrompt,
+  computeRecentTrend,
+  parseJevAnswers,
+  parseSignalResponse,
+  type PairSignal,
+  type PairTrend,
+} from '../../src/lib/signal';
 
 interface Env {
   TWELVE_DATA_API_KEY: string;
@@ -20,6 +32,11 @@ interface Env {
   // /flow のリテールセンチメント用（Myfxbook 無料アカウント）。wrangler secret で登録。
   MYFXBOOK_EMAIL: string;
   MYFXBOOK_PASSWORD: string;
+  // /news の要約・シグナル用。Workers AI バインディング（無料枠 10k Neurons/日）。
+  AI: Ai;
+  // シグナル算出エンジン切替: 未設定/"workers-ai" で Workers AI、"jev" で Jev(typesafe.ai)。
+  SIGNAL_ENGINE?: string;
+  TYPESAFE_API_KEY?: string; // Jev 利用時のみ（wrangler secret）
 }
 
 const PAIRS: JpyPairCurrency[] = ['USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
@@ -309,6 +326,169 @@ const handleFlow = async (env: Env): Promise<Response> => {
   return new Response(body, { headers: CORS_HEADERS });
 };
 
+// ---------------------------------------------------------------------------
+// /news: 為替ニュースの日本語要約＋売買シグナル%（＋反転/継続）
+// ---------------------------------------------------------------------------
+// FXStreet RSS（主）/ Investing.com（予備）→ Workers AI で要約＆シグナル。
+// オンデマンド＋KVに TTL キャッシュ（新 Cron なし）。シグナルはエンジン切替可能。
+const KV_NEWS = 'news';
+const NEWS_TTL_MS = 60 * 60 * 1000; // 60分
+const SUMMARY_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+const SIGNAL_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+const RSS_FEEDS = ['https://www.fxstreet.com/rss/news', 'https://www.investing.com/rss/forex.rss'];
+const NEWS_UA = 'Mozilla/5.0 (compatible; lotsizing-news/1.0)';
+
+interface NewsPayload {
+  generatedAt: number;
+  engine: string; // 'workers-ai' | 'jev'
+  summary: string;
+  signals: PairSignal[];
+  items: { title: string; link: string; pubDate: string }[];
+}
+
+// RSS を主→予備の順に取得。最初に項目が取れたフィードを採用。
+const fetchNewsItems = async (): Promise<NewsItem[]> => {
+  for (const url of RSS_FEEDS) {
+    try {
+      const res = await fetch(url, { headers: { 'User-Agent': NEWS_UA } });
+      if (!res.ok) continue;
+      const items = parseRssItems(await res.text(), 10);
+      if (items.length > 0) return items;
+    } catch {
+      // 次のフィードへ
+    }
+  }
+  throw new Error('ニュースRSSの取得に失敗しました');
+};
+
+// Workers AI の応答 response を文字列化（string はそのまま、object は JSON 文字列に）。
+const aiText = (r: unknown): string => {
+  const resp = (r as { response?: unknown })?.response;
+  if (typeof resp === 'string') return resp;
+  if (resp == null) return '';
+  try {
+    return JSON.stringify(resp);
+  } catch {
+    return '';
+  }
+};
+
+// Workers AI で日本語要約。
+const summarizeNews = async (env: Env, items: NewsItem[]): Promise<string> => {
+  const list = items.map((it, i) => `${i + 1}. ${it.title} — ${it.description}`).join('\n');
+  const r = await env.AI.run(SUMMARY_MODEL, {
+    messages: [
+      { role: 'system', content: 'あなたはFXアナリストです。英語の為替ニュースを日本語で簡潔に要約します。' },
+      {
+        role: 'user',
+        content:
+          '次の為替ニュースを日本語で要約してください。全体トレンドを2〜3行、続けて主要トピックを3〜5個の箇条書きで。断定的な予測は避け、事実ベースで。\n\n' +
+          list,
+      },
+    ],
+  });
+  return aiText(r).trim();
+};
+
+// シグナル算出（Workers AI）: 厳密JSONを要求し、string/object どちらの応答でもパース。
+const computeSignalsWorkersAI = async (env: Env, items: NewsItem[], trends: PairTrend[]): Promise<PairSignal[]> => {
+  const r = await env.AI.run(SIGNAL_MODEL, {
+    messages: [
+      { role: 'system', content: 'あなたはFXの短期シグナル推定器です。指示されたJSONのみを厳密に返します。' },
+      { role: 'user', content: buildSignalPrompt(items, trends) },
+    ],
+  });
+  // response は文字列・オブジェクトどちらでも来得るため、そのまま parse に委ねる。
+  return parseSignalResponse((r as { response?: unknown }).response);
+};
+
+// シグナル算出（Jev / typesafe.ai）: 1リクエストに state と全ペア×2問(買い/反転継続)を詰める。
+// 買い%=Choice{buy,sell} の buy 確率、反転継続=Choice{continuation,reversal,neutral}。
+const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
+
+const computeSignalsJev = async (env: Env, items: NewsItem[], trends: PairTrend[]): Promise<PairSignal[]> => {
+  if (!env.TYPESAFE_API_KEY) throw new Error('SIGNAL_ENGINE=jev ですが TYPESAFE_API_KEY が未設定です');
+  const body = { model: 'jev-latest', ...buildJevRequest(items, trends) };
+  const res = await fetch(JEV_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.TYPESAFE_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Jev HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const data = (await res.json()) as { answers?: Record<string, { choice?: string; probabilities?: Record<string, number>; confidence?: number }> };
+  return parseJevAnswers(data.answers);
+};
+
+// エンジン切替。SIGNAL_ENGINE=jev のときは Jev を使い、失敗時は Workers AI にフォールバック。
+const computeSignals = async (env: Env, items: NewsItem[], trends: PairTrend[]): Promise<PairSignal[]> => {
+  if (env.SIGNAL_ENGINE === 'jev') {
+    try {
+      return await computeSignalsJev(env, items, trends);
+    } catch (e) {
+      console.error('Jev 失敗 → Workers AI にフォールバック:', e);
+    }
+  }
+  return computeSignalsWorkersAI(env, items, trends);
+};
+
+// ニュース取得→要約＆シグナルを算出して KV に保存。
+const buildNews = async (env: Env): Promise<NewsPayload> => {
+  const items = await fetchNewsItems();
+
+  // 反転/継続判定用の直近トレンドは、強弱用に取得済みの intraday シリーズから求める。
+  const intradayRaw = await env.STRENGTH_KV.get(KV_INTRADAY);
+  const series = intradayRaw ? (JSON.parse(intradayRaw) as RateSeries) : null;
+  const trends = SIGNAL_PAIRS.map((p) => computeRecentTrend(series, p));
+
+  // 要約とシグナルは独立コール（シグナルだけ後で Jev に差替え可能）。失敗は安全側に倒す。
+  const [summary, signals] = await Promise.all([
+    summarizeNews(env, items).catch((e) => {
+      console.error('/news 要約失敗:', e);
+      return '';
+    }),
+    computeSignals(env, items, trends).catch((e) => {
+      console.error('/news シグナル失敗:', e);
+      return parseSignalResponse(''); // 全ペア中立で返す
+    }),
+  ]);
+
+  const payload: NewsPayload = {
+    generatedAt: Date.now(),
+    engine: env.SIGNAL_ENGINE === 'jev' ? 'jev' : 'workers-ai',
+    summary,
+    signals,
+    items: items.map((it) => ({ title: it.title, link: it.link, pubDate: it.pubDate })),
+  };
+  await env.STRENGTH_KV.put(KV_NEWS, JSON.stringify(payload));
+  return payload;
+};
+
+// /news: KV が新しければ返す。古い/無ければ再生成。失敗時は古いキャッシュで代替。
+const handleNews = async (env: Env): Promise<Response> => {
+  const cached = await env.STRENGTH_KV.get(KV_NEWS);
+  if (cached) {
+    try {
+      const p = JSON.parse(cached) as NewsPayload;
+      if (Date.now() - p.generatedAt < NEWS_TTL_MS) return new Response(cached, { headers: CORS_HEADERS });
+    } catch {
+      // 壊れていれば作り直す
+    }
+  }
+  try {
+    const payload = await buildNews(env);
+    return new Response(JSON.stringify(payload), { headers: CORS_HEADERS });
+  } catch (e) {
+    console.error('/news 生成失敗:', e);
+    if (cached) return new Response(cached, { headers: CORS_HEADERS }); // 古くても返す
+    return new Response(JSON.stringify({ error: 'ニュースを準備中です。少し待って更新してください' }), {
+      headers: CORS_HEADERS,
+    });
+  }
+};
+
 export default {
   // Cron: event.cron でジョブを出し分け。失敗時は前回値を保持。
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -334,8 +514,10 @@ export default {
   // Twelve Data は 8 credits/分の制限があり、8シンボル一括(7ペア+XAU/USD)=8 credits のため、
   // 1リクエストで取得するデータセットは最大1つに絞る（intraday優先）。
   async fetch(req: Request, env: Env): Promise<Response> {
-    // /flow は取引量・センチメント。それ以外は従来どおり通貨強弱を返す。
-    if (new URL(req.url).pathname === '/flow') return handleFlow(env);
+    // ルーティング: /flow=取引量・センチメント、/news=ニュース要約＋シグナル、他=通貨強弱。
+    const pathname = new URL(req.url).pathname;
+    if (pathname === '/flow') return handleFlow(env);
+    if (pathname === '/news') return handleNews(env);
 
     let intradayRaw = await env.STRENGTH_KV.get(KV_INTRADAY);
     let dailyRaw = await env.STRENGTH_KV.get(KV_DAILY);
