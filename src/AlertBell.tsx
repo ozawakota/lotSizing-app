@@ -19,15 +19,18 @@ export default function AlertBell() {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
-  const configured = isPushConfigured() && isPushSupported();
+  const supported = isPushConfigured() && isPushSupported();
+  const needsInstall = isIosNeedsInstall();
+  // iOS Safari（ホーム画面に未追加）は PushManager/Notification が未公開のため
+  // isPushSupported() が false になるが、インストール案内を見せるために
+  // ベルは表示する。実際の購読操作は supported のときのみ有効。
+  const visible = supported || (isPushConfigured() && needsInstall);
 
   useEffect(() => {
-    if (configured) isSubscribed().then(setOn);
-  }, [configured]);
+    if (supported) isSubscribed().then(setOn);
+  }, [supported]);
 
-  if (!configured) return null;
-
-  const needsInstall = isIosNeedsInstall();
+  if (!visible) return null;
 
   const toggle = async () => {
     setBusy(true);
