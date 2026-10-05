@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS pair_state (
 CREATE TABLE IF NOT EXISTS alerts (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   pair       TEXT NOT NULL,
+  title      TEXT,            -- 通知タイトル（例「GBP/JPY 急変動 25pips」）。既存DBは ALTER で追加。
   body       TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );

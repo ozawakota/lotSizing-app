@@ -4,6 +4,7 @@ import {
   WINDOW_MS,
   evaluate,
   formatAlertBody,
+  formatAlertTitle,
   pruneWindow,
   rangePips,
   type Sample,
@@ -165,5 +166,14 @@ describe('formatAlertBody', () => {
 
   it('XAU/USD はドル単位・小数2桁', () => {
     expect(formatAlertBody('XAU/USD', 2655, 2650)).toBe('XAU/USD が15分で5ドル変動（2650.00 → 2655.00）');
+  });
+});
+
+describe('formatAlertTitle', () => {
+  it('ペア＋急変動＋変動量（pips）', () => {
+    expect(formatAlertTitle('GBP/JPY', 190.25, 190.1)).toBe('GBP/JPY 急変動 15pips');
+  });
+  it('XAU/USD はドル単位', () => {
+    expect(formatAlertTitle('XAU/USD', 2655, 2650)).toBe('XAU/USD 急変動 5ドル');
   });
 });

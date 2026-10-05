@@ -6,12 +6,27 @@ import { Popup } from '@mobiscroll/react';
 import {
   disableAlerts,
   enableAlerts,
+  fetchAlertHistory,
   isIosNeedsInstall,
   isPushConfigured,
   isPushSupported,
   isSubscribed,
+  type AlertHistoryItem,
 } from '@/lib/push';
 import AlertInfoModal from './AlertInfoModal';
+
+const CLEARED_KEY = 'alertsClearedAt';
+
+// created_at(ms) を「◯分前 / ◯時間前 / 日付」の相対表記にする。
+const relativeTime = (ms: number): string => {
+  const diff = Date.now() - ms;
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'たった今';
+  if (min < 60) return `${min}分前`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h}時間前`;
+  return new Date(ms).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
+};
 
 export default function AlertBell() {
   const [open, setOpen] = useState(false);
@@ -19,6 +34,8 @@ export default function AlertBell() {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [history, setHistory] = useState<AlertHistoryItem[]>([]);
+  const [clearedAt, setClearedAt] = useState<number>(() => Number(localStorage.getItem(CLEARED_KEY)) || 0);
   const supported = isPushConfigured() && isPushSupported();
   const needsInstall = isIosNeedsInstall();
   // iOS Safari（ホーム画面に未追加）は PushManager/Notification が未公開のため
@@ -30,7 +47,25 @@ export default function AlertBell() {
     if (supported) isSubscribed().then(setOn);
   }, [supported]);
 
+  // ポップアップを開いたら最近のアラート履歴を取得。
+  useEffect(() => {
+    if (open && isPushConfigured()) {
+      fetchAlertHistory(30)
+        .then(setHistory)
+        .catch(() => setHistory([]));
+    }
+  }, [open]);
+
   if (!visible) return null;
+
+  // クリア時刻より新しいアラートだけ表示（非破壊・端末ごと）。
+  const shownHistory = history.filter((a) => a.created_at > clearedAt);
+
+  const clearHistory = () => {
+    const now = Date.now();
+    localStorage.setItem(CLEARED_KEY, String(now));
+    setClearedAt(now);
+  };
 
   const toggle = async () => {
     setBusy(true);
@@ -108,6 +143,33 @@ export default function AlertBell() {
             </p>
           )}
           {message && <p className="text-xs text-red-600">{message}</p>}
+
+          {/* 最近のアラート（何が動いたかの履歴） */}
+          <div className="border-t border-gray-100 pt-2">
+            <div className="mb-1 flex items-center justify-between">
+              <p className="text-xs font-bold text-gray-700">最近のアラート</p>
+              {shownHistory.length > 0 && (
+                <button type="button" onClick={clearHistory} className="text-[11px] text-gray-400 hover:text-gray-600">
+                  クリア
+                </button>
+              )}
+            </div>
+            {shownHistory.length === 0 ? (
+              <p className="text-[11px] text-gray-400">まだありません</p>
+            ) : (
+              <ul className="max-h-48 space-y-1 overflow-y-auto">
+                {shownHistory.map((a) => (
+                  <li key={a.id} className="rounded bg-gray-50 px-2 py-1">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-xs font-semibold text-gray-700">{a.title || a.pair}</span>
+                      <span className="shrink-0 text-[10px] text-gray-400">{relativeTime(a.created_at)}</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500">{a.body}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
       </Popup>
 

@@ -49,6 +49,23 @@ async function storeAlertUrl(): Promise<void> {
   await cache.put('alert-url', new Response(ALERT_URL));
 }
 
+// アプリ内「最近のアラート」履歴の1件。
+export interface AlertHistoryItem {
+  id: number;
+  pair: string;
+  title: string | null;
+  body: string;
+  created_at: number;
+}
+
+// Alert Worker の /alerts から直近アラート履歴を取得（新しい順）。未設定なら空配列。
+export async function fetchAlertHistory(limit = 30): Promise<AlertHistoryItem[]> {
+  if (!ALERT_URL) return [];
+  const res = await fetch(`${ALERT_URL}/alerts?limit=${limit}`);
+  if (!res.ok) throw new Error(`アラート履歴 HTTP ${res.status}`);
+  return (await res.json()) as AlertHistoryItem[];
+}
+
 // 現在この端末が購読中かどうか。
 export async function isSubscribed(): Promise<boolean> {
   if (!isPushSupported()) return false;

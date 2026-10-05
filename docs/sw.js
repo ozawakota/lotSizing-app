@@ -27,11 +27,12 @@ self.addEventListener('push', (event) => {
         if (res.ok) alerts = await res.json();
       } catch (e) {
         // 取得失敗時は汎用文言で1件だけ出す。
-        alerts = [{ pair: 'market', body: '相場が大きく変動しました' }];
+        alerts = [{ pair: 'market', title: '相場変動通知', body: '相場が大きく変動しました' }];
       }
       await Promise.all(
         alerts.map((a) =>
-          self.registration.showNotification('相場変動通知', {
+          // タイトルにペア＋変動（例「GBP/JPY 急変動 25pips」）。古い通知/取得失敗は pair かフォールバック。
+          self.registration.showNotification(a.title || a.pair || '相場変動通知', {
             body: a.body,
             tag: a.pair, // 同一ペアは置き換え（重複防止）
             renotify: true,

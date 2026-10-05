@@ -8,6 +8,7 @@
 //     POST /subscribe   … 購読を登録
 //     POST /unsubscribe … 購読を解除
 //     GET  /recent      … 直近2分のアラート（SW が push 受信時に引く）
+//     GET  /alerts?limit=30 … アプリ内「最近のアラート」履歴（新しい順）
 //     GET  /vapidPublicKey … VAPID 公開鍵（任意・デバッグ用）
 //
 // Web Push はペイロード暗号化(RFC8291)を避け、空ボディ＋VAPID署名のみで送信する。
@@ -16,6 +17,7 @@ import {
   ALERT_PAIRS,
   evaluate,
   formatAlertBody,
+  formatAlertTitle,
   type AlertPair,
   type Sample,
 } from '../../src/lib/alert';
@@ -152,9 +154,10 @@ const runDetection = async (env: Env): Promise<void> => {
       .run();
 
     if (r.triggered) {
+      const title = formatAlertTitle(pair, r.high, r.low);
       const body = formatAlertBody(pair, r.high, r.low);
-      await env.DB.prepare('INSERT INTO alerts (pair, body, created_at) VALUES (?, ?, ?)')
-        .bind(pair, body, now)
+      await env.DB.prepare('INSERT INTO alerts (pair, title, body, created_at) VALUES (?, ?, ?, ?)')
+        .bind(pair, title, body, now)
         .run();
       anyTriggered = true;
     }
@@ -183,9 +186,10 @@ const recordFeedFailure = async (env: Env, detail: string): Promise<void> => {
   await setMeta(env, 'feed_fail_count', String(count));
   const alerted = (await getMeta(env, 'feed_alerted')) === '1';
   if (count >= FEED_FAIL_ALERT_AFTER && !alerted) {
-    await env.DB.prepare('INSERT INTO alerts (pair, body, created_at) VALUES (?, ?, ?)')
+    await env.DB.prepare('INSERT INTO alerts (pair, title, body, created_at) VALUES (?, ?, ?, ?)')
       .bind(
         'system',
+        '通知システムの不調',
         '相場変動通知のデータ取得に失敗しています。価格ソース（Yahoo/gold-api）の稼働状況を確認してください。',
         Date.now(),
       )
@@ -323,10 +327,21 @@ const handleUnsubscribe = async (req: Request, env: Env): Promise<Response> => {
 const handleRecent = async (env: Env): Promise<Response> => {
   const since = Date.now() - RECENT_WINDOW_MS;
   const rows = await env.DB.prepare(
-    'SELECT id, pair, body FROM alerts WHERE created_at >= ? ORDER BY created_at ASC',
+    'SELECT id, pair, title, body FROM alerts WHERE created_at >= ? ORDER BY created_at ASC',
   )
     .bind(since)
-    .all<{ id: number; pair: string; body: string }>();
+    .all<{ id: number; pair: string; title: string | null; body: string }>();
+  return new Response(JSON.stringify(rows.results ?? []), { headers: CORS_HEADERS });
+};
+
+// アプリ内「最近のアラート」履歴。新しい順に最大 limit 件（既定30・上限100）。
+const handleAlerts = async (env: Env, url: URL): Promise<Response> => {
+  const n = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '30', 10) || 30, 1), 100);
+  const rows = await env.DB.prepare(
+    'SELECT id, pair, title, body, created_at FROM alerts ORDER BY created_at DESC LIMIT ?',
+  )
+    .bind(n)
+    .all<{ id: number; pair: string; title: string | null; body: string; created_at: number }>();
   return new Response(JSON.stringify(rows.results ?? []), { headers: CORS_HEADERS });
 };
 
@@ -346,6 +361,7 @@ export default {
     if (req.method === 'POST' && pathname === '/subscribe') return handleSubscribe(req, env);
     if (req.method === 'POST' && pathname === '/unsubscribe') return handleUnsubscribe(req, env);
     if (req.method === 'GET' && pathname === '/recent') return handleRecent(env);
+    if (req.method === 'GET' && pathname === '/alerts') return handleAlerts(env, new URL(req.url));
     if (req.method === 'GET' && pathname === '/vapidPublicKey') {
       return new Response(JSON.stringify({ publicKey: env.VAPID_PUBLIC_KEY }), { headers: CORS_HEADERS });
     }

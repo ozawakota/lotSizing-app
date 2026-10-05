@@ -116,3 +116,11 @@ export function formatAlertBody(pair: AlertPair, high: number, low: number): str
   const amount = Math.round((high - low) / cfg.pipSize);
   return `${pair} が15分で${amount}${cfg.unit}変動（${low.toFixed(cfg.digits)} → ${high.toFixed(cfg.digits)}）`;
 }
+
+// 通知タイトル。ロック画面で一目で「どのペアがどれだけ動いたか」分かるようにする。
+//   例: "GBP/JPY 急変動 25pips" / "XAU/USD 急変動 5ドル"
+export function formatAlertTitle(pair: AlertPair, high: number, low: number): string {
+  const cfg = PAIR_CONFIG[pair];
+  const amount = Math.round((high - low) / cfg.pipSize);
+  return `${pair} 急変動 ${amount}${cfg.unit}`;
+}
