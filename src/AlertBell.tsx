@@ -1,7 +1,7 @@
 // ヘッダーの通知ベル。タップでポップアップを開き、相場変動通知の ON/OFF を切り替える。
 // （旧 MarketAlertCard のロジックをヘッダー用に移設。env 未設定/非対応なら非表示。）
 import { useEffect, useState } from 'react';
-import { Bell, HelpCircle } from 'lucide-react';
+import { Bell } from 'lucide-react';
 import { Popup } from '@mobiscroll/react';
 import {
   disableAlerts,
@@ -13,7 +13,7 @@ import {
   isSubscribed,
   type AlertHistoryItem,
 } from '@/lib/push';
-import AlertInfoModal from './AlertInfoModal';
+import { ALERT_PAIRS, PAIR_CONFIG } from '@/lib/alert';
 
 const CLEARED_KEY = 'alertsClearedAt';
 
@@ -30,7 +30,6 @@ const relativeTime = (ms: number): string => {
 
 export default function AlertBell() {
   const [open, setOpen] = useState(false);
-  const [infoOpen, setInfoOpen] = useState(false);
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -107,18 +106,8 @@ export default function AlertBell() {
         <div className="p-4 min-w-[260px] space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="flex items-center gap-1">
-                <p className="text-sm font-bold text-gray-700">相場変動通知</p>
-                <button
-                  type="button"
-                  aria-label="相場変動通知の説明"
-                  onClick={() => setInfoOpen(true)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <HelpCircle className="h-4 w-4" />
-                </button>
-              </div>
-              <p className="text-xs text-gray-500">対象ペアが15分で急変動したら通知</p>
+              <p className="text-sm font-bold text-gray-700">相場変動通知</p>
+              <p className="text-xs text-gray-500">下記ペアが15分で急変動したら通知</p>
             </div>
             <button
               type="button"
@@ -136,6 +125,19 @@ export default function AlertBell() {
                 }`}
               />
             </button>
+          </div>
+
+          {/* 対象通貨としきい値（監視中のペアが一目で分かる） */}
+          <div className="flex flex-wrap gap-1">
+            {ALERT_PAIRS.map((p) => (
+              <span key={p} className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-700">
+                <span className="font-mono font-semibold">{p}</span>{' '}
+                <span className="text-gray-400">
+                  {PAIR_CONFIG[p].thresholdPips}
+                  {PAIR_CONFIG[p].unit}
+                </span>
+              </span>
+            ))}
           </div>
           {needsInstall && (
             <p className="text-xs text-amber-700">
@@ -172,8 +174,6 @@ export default function AlertBell() {
           </div>
         </div>
       </Popup>
-
-      <AlertInfoModal isOpen={infoOpen} onClose={() => setInfoOpen(false)} />
     </>
   );
 }
