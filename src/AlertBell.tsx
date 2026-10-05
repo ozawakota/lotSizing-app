@@ -1,7 +1,7 @@
 // ヘッダーの通知ベル。タップでポップアップを開き、相場変動通知の ON/OFF を切り替える。
 // （旧 MarketAlertCard のロジックをヘッダー用に移設。env 未設定/非対応なら非表示。）
 import { useEffect, useState } from 'react';
-import { Bell } from 'lucide-react';
+import { Bell, HelpCircle } from 'lucide-react';
 import { Popup } from '@mobiscroll/react';
 import {
   disableAlerts,
@@ -11,9 +11,11 @@ import {
   isPushSupported,
   isSubscribed,
 } from '@/lib/push';
+import AlertInfoModal from './AlertInfoModal';
 
 export default function AlertBell() {
   const [open, setOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -67,7 +69,17 @@ export default function AlertBell() {
         <div className="p-4 min-w-[260px] space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-sm font-bold text-gray-700">相場変動通知</p>
+              <div className="flex items-center gap-1">
+                <p className="text-sm font-bold text-gray-700">相場変動通知</p>
+                <button
+                  type="button"
+                  aria-label="相場変動通知の説明"
+                  onClick={() => setInfoOpen(true)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <HelpCircle className="h-4 w-4" />
+                </button>
+              </div>
               <p className="text-xs text-gray-500">対象ペアが15分で急変動したら通知</p>
             </div>
             <button
@@ -95,6 +107,8 @@ export default function AlertBell() {
           {message && <p className="text-xs text-red-600">{message}</p>}
         </div>
       </Popup>
+
+      <AlertInfoModal isOpen={infoOpen} onClose={() => setInfoOpen(false)} />
     </>
   );
 }
