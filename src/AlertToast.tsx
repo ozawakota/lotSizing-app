@@ -74,24 +74,73 @@ export default function AlertToast() {
   return (
     <div className="fixed inset-x-0 top-2 z-50 flex flex-col items-center gap-1 px-3">
       {toasts.map((t) => (
-        <div
-          key={t.id}
-          className="flex w-full max-w-md items-start gap-2 rounded-lg border-l-4 border-orange-500 bg-white px-3 py-2 shadow-lg"
-        >
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-bold text-gray-800">{t.title || t.pair}</p>
-            <p className="text-xs text-gray-600">{t.body}</p>
-          </div>
-          <button
-            type="button"
-            aria-label="閉じる"
-            onClick={() => dismiss(t.id)}
-            className="shrink-0 text-gray-400 hover:text-gray-600"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+        <ToastItem key={t.id} toast={t} onDismiss={() => dismiss(t.id)} />
       ))}
+    </div>
+  );
+}
+
+// 上方向のスワイプ（タッチ/ドラッグ）で閉じられる1件のトースト。
+// 指の移動に追従し、一定距離を超えたら消す。未達ならスナップで戻す。X ボタンも併用可。
+const SWIPE_DISMISS_PX = 40; // この距離だけ上に動かしたら閉じる
+
+function ToastItem({ toast, onDismiss }: { toast: AlertHistoryItem; onDismiss: () => void }) {
+  const [dragY, setDragY] = useState(0); // 上方向は負
+  const [dragging, setDragging] = useState(false);
+  const startY = useRef<number | null>(null);
+
+  const begin = (y: number) => {
+    startY.current = y;
+    setDragging(true);
+  };
+  const move = (y: number) => {
+    if (startY.current === null) return;
+    const dy = Math.min(0, y - startY.current); // 上方向のみ追従（下は0でクランプ）
+    setDragY(Math.max(dy, -200));
+  };
+  const end = () => {
+    if (startY.current === null) return;
+    startY.current = null;
+    setDragging(false);
+    if (dragY <= -SWIPE_DISMISS_PX) onDismiss();
+    else setDragY(0); // しきい値未満はスナップで戻す
+  };
+
+  const opacity = Math.max(0, 1 + dragY / 120); // 上に動くほど薄く
+
+  return (
+    <div
+      className="flex w-full max-w-md touch-none items-start gap-2 rounded-lg border-l-4 border-orange-500 bg-white px-3 py-2 shadow-lg"
+      style={{
+        transform: `translateY(${dragY}px)`,
+        opacity,
+        transition: dragging ? 'none' : 'transform 150ms ease-out, opacity 150ms ease-out',
+      }}
+      onTouchStart={(e) => begin(e.touches[0].clientY)}
+      onTouchMove={(e) => move(e.touches[0].clientY)}
+      onTouchEnd={end}
+      onPointerDown={(e) => {
+        if (e.pointerType !== 'touch') begin(e.clientY); // マウス/ペンのドラッグも許可
+      }}
+      onPointerMove={(e) => {
+        if (e.pointerType !== 'touch' && dragging) move(e.clientY);
+      }}
+      onPointerUp={(e) => {
+        if (e.pointerType !== 'touch') end();
+      }}
+    >
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-bold text-gray-800">{toast.title || toast.pair}</p>
+        <p className="text-xs text-gray-600">{toast.body}</p>
+      </div>
+      <button
+        type="button"
+        aria-label="閉じる"
+        onClick={onDismiss}
+        className="shrink-0 text-gray-400 hover:text-gray-600"
+      >
+        <X className="h-4 w-4" />
+      </button>
     </div>
   );
 }
