@@ -41,6 +41,14 @@ export const PA_CRITERIA: Record<PaClass, string> = {
   range: '明確な方向感の無いレンジ/中立',
 };
 
+// レンジ(直近スイング高安)を次の数本でどう抜けるかの3択。/mtf のブレイク確率判定に使用。
+export type BreakoutClass = 'break_up' | 'break_down' | 'stay_range';
+export const BREAKOUT_CRITERIA: Record<BreakoutClass, string> = {
+  break_up: '現在のレンジ上限(直近スイング高値)を次の数本で上抜ける',
+  break_down: '現在のレンジ下限(直近スイング安値)を次の数本で下抜ける',
+  stay_range: 'スイング高安の内側に留まりレンジ継続',
+};
+
 export interface SlStructure {
   trend: 'up' | 'down' | 'range';
   swingHigh: number;
@@ -147,8 +155,36 @@ export function buildPaJevRequest(structure: SlStructure, recentCloses: number[]
           '直近のトレンド・スイング高安・現在値・最近の終値列から、現在の相場のプライスアクションを分類してください。',
         criteria: PA_CRITERIA,
       },
+      breakout: {
+        type: 'choice',
+        instructions:
+          '現在値・スイング高安・トレンド・最近の終値列から、現在のレンジ(スイング高安)を次の数本でどう抜けるかを判定してください。',
+        criteria: BREAKOUT_CRITERIA,
+      },
     },
   };
+}
+
+/** 各方向のブレイク確率(0-100, 合計100)。/mtf で各TFの判定に使う。 */
+export interface BreakoutProb {
+  up: number; // 上抜け
+  down: number; // 下抜け
+  range: number; // レンジ継続
+}
+
+/** Jev の answers からブレイク確率を取り出す。設問欠損/確率なしは null（＝判定不可）。 */
+export function parseBreakoutJev(answers: Record<string, JevChoiceAnswer> | undefined): BreakoutProb | null {
+  const probs = (answers ?? {}).breakout?.probabilities;
+  if (!probs) return null;
+  const rawUp = Number(probs.break_up) || 0;
+  const rawDown = Number(probs.break_down) || 0;
+  const rawRange = Number(probs.stay_range) || 0;
+  const sum = rawUp + rawDown + rawRange;
+  if (sum <= 0) return null;
+  const up = Math.round((rawUp / sum) * 100);
+  const down = Math.round((rawDown / sum) * 100);
+  const range = Math.max(0, 100 - up - down); // 丸め誤差を継続側に寄せ合計100を保証
+  return { up, down, range };
 }
 
 interface JevChoiceAnswer {

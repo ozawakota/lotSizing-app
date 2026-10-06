@@ -38,8 +38,10 @@ import {
   buildPaPrompt,
   computeStopLoss,
   computeStructure,
+  parseBreakoutJev,
   parsePaAi,
   parsePaJev,
+  type BreakoutProb,
   type Candle,
   type PaResult,
   type SlDirection,
@@ -573,7 +575,7 @@ const classifyPa = async (
   env: Env,
   structure: SlStructure,
   recentCloses: number[],
-): Promise<{ pa: PaResult; paEngine: string }> => {
+): Promise<{ pa: PaResult; breakout: BreakoutProb | null; paEngine: string }> => {
   try {
     if (!env.TYPESAFE_API_KEY) throw new Error('TYPESAFE_API_KEY 未設定');
     const body = { model: 'jev-latest', ...buildPaJevRequest(structure, recentCloses) };
@@ -584,7 +586,8 @@ const classifyPa = async (
     });
     if (!res.ok) throw new Error(`Jev HTTP ${res.status}: ${(await res.text()).slice(0, 150)}`);
     const data = (await res.json()) as { answers?: Record<string, { choice?: string; probabilities?: Record<string, number>; confidence?: number }> };
-    return { pa: parsePaJev(data.answers), paEngine: 'jev' };
+    // ブレイク確率は Jev のみ（失敗時は null＝判定不可）。
+    return { pa: parsePaJev(data.answers), breakout: parseBreakoutJev(data.answers), paEngine: 'jev' };
   } catch (e) {
     console.error('プライスアクション Jev 失敗 → Workers AI:', e);
     const r = await env.AI.run(SIGNAL_MODEL, {
@@ -593,7 +596,7 @@ const classifyPa = async (
         { role: 'user', content: buildPaPrompt(structure, recentCloses) },
       ],
     });
-    return { pa: parsePaAi((r as { response?: unknown }).response), paEngine: 'workers-ai' };
+    return { pa: parsePaAi((r as { response?: unknown }).response), breakout: null, paEngine: 'workers-ai' };
   }
 };
 
@@ -798,6 +801,7 @@ interface MtfTf {
   pa: PaResult['pa'];
   paPct: number;
   confidence: number;
+  breakout: BreakoutProb | null; // レンジ上抜け/下抜け/継続の確率（Jev。失敗時 null）
 }
 interface MtfPayload {
   instrument: string;
@@ -819,7 +823,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
     currentRate = cr;
     const structure = computeStructure(candles, cr);
     const recentCloses = candles.slice(-12).map((c) => c.close);
-    const { pa, paEngine: eng } = await classifyPa(env, structure, recentCloses);
+    const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses);
     paEngine = eng;
     timeframes.push({
       tf,
@@ -829,6 +833,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       pa: pa.pa,
       paPct: pa.paPct,
       confidence: pa.confidence,
+      breakout,
     });
   }
 
@@ -836,7 +841,12 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
 
   let comment = '';
   try {
-    const table = timeframes.map((t) => `${t.tf}: トレンド${t.trend}/PA ${t.pa}(${t.paPct}%)`).join(' / ');
+    const table = timeframes
+      .map((t) => {
+        const bk = t.breakout ? ` ブレイク上${t.breakout.up}%/下${t.breakout.down}%/継続${t.breakout.range}%` : '';
+        return `${t.tf}: トレンド${t.trend}/PA ${t.pa}(${t.paPct}%)${bk}`;
+      })
+      .join(' / ');
     const r = await env.AI.run(SUMMARY_MODEL, {
       messages: [
         { role: 'system', content: 'あなたは日本語で簡潔に相場解説するFXアナリストです。' },

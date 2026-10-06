@@ -2,7 +2,7 @@
 // プライスアクション(反転/戻り売り/押し目買い/レンジ)と、全TFを統合した総合判断を表示。
 // Worker(/mtf, VITE_MTF_URL) が Yahoo足＋Jev/Workers AI で算出。※参考情報・投資助言ではない。
 import { useState } from 'react';
-import type { PaClass, SlTimeframe } from '@/lib/stoploss';
+import type { BreakoutProb, PaClass, SlTimeframe } from '@/lib/stoploss';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 
@@ -25,6 +25,7 @@ interface MtfTf {
   pa: PaClass;
   paPct: number;
   confidence: number;
+  breakout: BreakoutProb | null;
 }
 interface MtfResult {
   instrument: string;
@@ -57,6 +58,39 @@ const PA_STYLE: Record<PaClass, string> = {
   buy_dip: 'bg-green-100 text-green-700',
   range: 'bg-gray-100 text-gray-600',
 };
+
+// レンジブレイク確率（上抜け/下抜け/継続）を数値＋3色セグメントバー＋優勢ラベルで表示。
+// breakout が null（Jev未取得）のときは判定不可を小さく示す。
+function BreakoutRow({ breakout }: { breakout: BreakoutProb | null }) {
+  if (!breakout) {
+    return <p className="mt-2 text-[10px] text-gray-400">ブレイク判定: Jev未取得</p>;
+  }
+  const { up, down, range } = breakout;
+  const dominant =
+    up >= down && up >= range
+      ? { label: '上方優勢', style: 'text-green-700' }
+      : down >= up && down >= range
+        ? { label: '下方優勢', style: 'text-red-700' }
+        : { label: 'レンジ優勢', style: 'text-gray-500' };
+  return (
+    <div className="mt-2">
+      <div className="flex items-center justify-between text-[11px]">
+        <span className="text-gray-500">ブレイク</span>
+        <span className="flex gap-2 font-semibold">
+          <span className="text-green-700">↑上抜け {up}%</span>
+          <span className="text-red-700">↓下抜け {down}%</span>
+          <span className="text-gray-500">↔継続 {range}%</span>
+        </span>
+      </div>
+      <div className="mt-1 flex h-2 w-full overflow-hidden rounded-full bg-gray-100">
+        <div className="bg-green-500" style={{ width: `${up}%` }} />
+        <div className="bg-red-500" style={{ width: `${down}%` }} />
+        <div className="bg-gray-300" style={{ width: `${range}%` }} />
+      </div>
+      <p className={`mt-0.5 text-right text-[10px] font-semibold ${dominant.style}`}>{dominant.label}</p>
+    </div>
+  );
+}
 
 export default function TimeframeAnalysis() {
   const [instrument, setInstrument] = useState('USD_JPY');
@@ -130,23 +164,28 @@ export default function TimeframeAnalysis() {
             </span>
           </div>
 
-          {/* TF別カード */}
-          <div className="grid grid-cols-2 gap-2">
+          {/* TF別カード（全幅・縦積み） */}
+          <div className="space-y-2">
             {result.timeframes.map((t) => (
-              <div key={t.tf} className="rounded-md border border-gray-200 p-2">
+              <div key={t.tf} className="rounded-md border border-gray-200 p-3">
                 <div className="flex items-center justify-between">
-                  <span className="font-mono text-sm font-bold">{t.tf}</span>
-                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${TREND_STYLE[t.trend]}`}>
-                    {TREND_LABEL[t.trend]}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-sm font-bold">{t.tf}</span>
+                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${TREND_STYLE[t.trend]}`}>
+                      {TREND_LABEL[t.trend]}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${PA_STYLE[t.pa]}`}>
+                      {PA_LABEL[t.pa]} {t.paPct}%
+                    </span>
+                    <span className="text-[10px] text-gray-400">確信{Math.round(t.confidence * 100)}%</span>
+                  </div>
                 </div>
-                <div className="mt-1 flex items-center justify-between">
-                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${PA_STYLE[t.pa]}`}>
-                    {PA_LABEL[t.pa]} {t.paPct}%
-                  </span>
-                  <span className="text-[10px] text-gray-400">確信{Math.round(t.confidence * 100)}%</span>
-                </div>
-                <p className="mt-1 text-[10px] text-gray-400">
+
+                <BreakoutRow breakout={t.breakout} />
+
+                <p className="mt-2 text-[10px] text-gray-400">
                   高{t.swingHigh.toFixed(digits)} / 安{t.swingLow.toFixed(digits)}
                 </p>
               </div>
