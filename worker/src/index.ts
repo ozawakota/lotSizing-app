@@ -33,6 +33,7 @@ import {
   SL_TIMEFRAMES,
   YAHOO_INTERVAL,
   YAHOO_SYMBOL,
+  alignmentLabel,
   buildPaJevRequest,
   buildPaPrompt,
   computeStopLoss,
@@ -567,14 +568,12 @@ const fetchYahooCandles = async (symbol: string, interval: string): Promise<{ ca
   return { candles, currentRate };
 };
 
-// プライスアクション分類（Jev 優先、失敗で Workers AI）＋ 日本語の相場解説。
-const computeMarketRead = async (
+// プライスアクション分類（Jev 優先、失敗で Workers AI）。/stoploss と /mtf で共有。
+const classifyPa = async (
   env: Env,
   structure: SlStructure,
   recentCloses: number[],
-): Promise<{ pa: PaResult; paEngine: string; comment: string }> => {
-  let pa: PaResult;
-  let paEngine = 'jev';
+): Promise<{ pa: PaResult; paEngine: string }> => {
   try {
     if (!env.TYPESAFE_API_KEY) throw new Error('TYPESAFE_API_KEY 未設定');
     const body = { model: 'jev-latest', ...buildPaJevRequest(structure, recentCloses) };
@@ -585,18 +584,26 @@ const computeMarketRead = async (
     });
     if (!res.ok) throw new Error(`Jev HTTP ${res.status}: ${(await res.text()).slice(0, 150)}`);
     const data = (await res.json()) as { answers?: Record<string, { choice?: string; probabilities?: Record<string, number>; confidence?: number }> };
-    pa = parsePaJev(data.answers);
+    return { pa: parsePaJev(data.answers), paEngine: 'jev' };
   } catch (e) {
-    console.error('SL プライスアクション Jev 失敗 → Workers AI:', e);
-    paEngine = 'workers-ai';
+    console.error('プライスアクション Jev 失敗 → Workers AI:', e);
     const r = await env.AI.run(SIGNAL_MODEL, {
       messages: [
         { role: 'system', content: 'あなたは相場のプライスアクション分類器です。指示されたJSONのみ返します。' },
         { role: 'user', content: buildPaPrompt(structure, recentCloses) },
       ],
     });
-    pa = parsePaAi((r as { response?: unknown }).response);
+    return { pa: parsePaAi((r as { response?: unknown }).response), paEngine: 'workers-ai' };
   }
+};
+
+// プライスアクション分類＋日本語の相場解説（/stoploss 用）。
+const computeMarketRead = async (
+  env: Env,
+  structure: SlStructure,
+  recentCloses: number[],
+): Promise<{ pa: PaResult; paEngine: string; comment: string }> => {
+  const { pa, paEngine } = await classifyPa(env, structure, recentCloses);
 
   let comment = '';
   try {
@@ -776,6 +783,106 @@ const handleChat = async (req: Request, env: Env): Promise<Response> => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// /mtf: マルチタイムフレーム分析（15m/30m/1h/4h のトレンド＋PA＋総合）
+// ---------------------------------------------------------------------------
+const KV_MTF_PREFIX = 'mtf:';
+const MTF_TTL_MS = 8 * 60 * 1000; // 8分
+const MTF_TIMEFRAMES: SlTimeframe[] = ['15m', '30m', '1h', '4h'];
+
+interface MtfTf {
+  tf: SlTimeframe;
+  trend: SlStructure['trend'];
+  swingHigh: number;
+  swingLow: number;
+  pa: PaResult['pa'];
+  paPct: number;
+  confidence: number;
+}
+interface MtfPayload {
+  instrument: string;
+  currentRate: number;
+  timeframes: MtfTf[];
+  alignment: string;
+  comment: string;
+  paEngine: string;
+  generatedAt: number;
+}
+
+const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
+  const symbol = YAHOO_SYMBOL[instrument];
+  const timeframes: MtfTf[] = [];
+  let currentRate = 0;
+  let paEngine = 'jev';
+  for (const tf of MTF_TIMEFRAMES) {
+    const { candles, currentRate: cr } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf]);
+    currentRate = cr;
+    const structure = computeStructure(candles, cr);
+    const recentCloses = candles.slice(-12).map((c) => c.close);
+    const { pa, paEngine: eng } = await classifyPa(env, structure, recentCloses);
+    paEngine = eng;
+    timeframes.push({
+      tf,
+      trend: structure.trend,
+      swingHigh: structure.swingHigh,
+      swingLow: structure.swingLow,
+      pa: pa.pa,
+      paPct: pa.paPct,
+      confidence: pa.confidence,
+    });
+  }
+
+  const alignment = alignmentLabel(timeframes.map((t) => t.trend));
+
+  let comment = '';
+  try {
+    const table = timeframes.map((t) => `${t.tf}: トレンド${t.trend}/PA ${t.pa}(${t.paPct}%)`).join(' / ');
+    const r = await env.AI.run(SUMMARY_MODEL, {
+      messages: [
+        { role: 'system', content: 'あなたは日本語で簡潔に相場解説するFXアナリストです。' },
+        {
+          role: 'user',
+          content:
+            `${instrument} の各タイムフレーム分析（整合:${alignment}）: ${table}。` +
+            'これらを統合し、全体の方向性・どの時間軸で反転/継続しそうか・注意点を3〜4行の日本語で解説してください。断定や投資助言は避け、参考情報として。',
+        },
+      ],
+    });
+    comment = aiText(r).trim();
+  } catch (e) {
+    console.error('/mtf 解説生成 失敗:', e);
+  }
+
+  return { instrument, currentRate, timeframes, alignment, comment, paEngine, generatedAt: Date.now() };
+};
+
+const handleMtf = async (env: Env, url: URL): Promise<Response> => {
+  const instrument = url.searchParams.get('instrument') || 'USD_JPY';
+  if (!YAHOO_SYMBOL[instrument]) return new Response(JSON.stringify({ error: '未対応のペアです' }), { headers: CORS_HEADERS });
+
+  const key = `${KV_MTF_PREFIX}${instrument}`;
+  const cached = await env.STRENGTH_KV.get(key);
+  if (cached) {
+    try {
+      const p = JSON.parse(cached) as MtfPayload;
+      if (Date.now() - p.generatedAt < MTF_TTL_MS) return new Response(cached, { headers: CORS_HEADERS });
+    } catch {
+      // 作り直す
+    }
+  }
+  try {
+    const payload = await buildMtf(env, instrument);
+    await env.STRENGTH_KV.put(key, JSON.stringify(payload));
+    return new Response(JSON.stringify(payload), { headers: CORS_HEADERS });
+  } catch (e) {
+    console.error('/mtf 失敗:', e);
+    if (cached) return new Response(cached, { headers: CORS_HEADERS });
+    return new Response(JSON.stringify({ error: 'データ取得に失敗しました。少し待って再試行してください' }), {
+      headers: CORS_HEADERS,
+    });
+  }
+};
+
 export default {
   // Cron: event.cron でジョブを出し分け。失敗時は前回値を保持。
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -809,6 +916,7 @@ export default {
     if (pathname === '/flow') return handleFlow(env);
     if (pathname === '/news') return handleNews(env);
     if (pathname === '/stoploss') return handleStopLoss(env, reqUrl);
+    if (pathname === '/mtf') return handleMtf(env, reqUrl);
     if (req.method === 'POST' && pathname === '/chat') return handleChat(req, env);
 
     let intradayRaw = await env.STRENGTH_KV.get(KV_INTRADAY);

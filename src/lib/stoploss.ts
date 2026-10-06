@@ -63,6 +63,20 @@ export interface PaResult {
 
 const clamp = (n: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, n));
 
+/** 複数タイムフレームのトレンド整合を判定するラベル（マルチTF分析用）。 */
+export function alignmentLabel(trends: ('up' | 'down' | 'range')[]): string {
+  if (trends.length === 0) return '—';
+  const n = trends.length;
+  const up = trends.filter((t) => t === 'up').length;
+  const down = trends.filter((t) => t === 'down').length;
+  if (up === n) return '全TF上向き（強い上昇トレンド）';
+  if (down === n) return '全TF下向き（強い下降トレンド）';
+  if (up === 0 && down === 0) return '全TFレンジ（方向感なし）';
+  if (down === 0 && up > 0) return '上向き優勢';
+  if (up === 0 && down > 0) return '下向き優勢';
+  return '不一致（TF間で方向が対立）';
+}
+
 /** instrument の pip サイズ（XAU=0.1ドル, 対円=0.01, その他=0.0001）。 */
 export function pipSize(instrument: string): number {
   if (instrument.startsWith('XAU')) return 0.1;
