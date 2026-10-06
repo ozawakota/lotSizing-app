@@ -29,7 +29,7 @@ interface Env {
   VAPID_SUBJECT: string; // var（例 mailto:you@example.com）
 }
 
-const RECENT_WINDOW_MS = 2 * 60 * 1000; // /recent が返す直近アラートの範囲
+const RECENT_WINDOW_MS = 15 * 60 * 1000; // /recent が返す直近アラートの範囲（push 配信遅延を吸収）
 // 価格取得がこの回数（分）連続で失敗したら「健全性通知」を一度だけ送る。
 // 単発の瞬断で誤報しないよう、まとまった障害のみを対象にする。
 const FEED_FAIL_ALERT_AFTER = 10;
@@ -223,7 +223,7 @@ const sendPushToAll = async (env: Env): Promise<void> => {
       const res = await fetch(sub.endpoint, {
         method: 'POST',
         headers: {
-          TTL: '120',
+          TTL: '1800', // 端末オフライン/doze を跨いでも push サービスが30分保持
           Authorization: `vapid t=${jwt}, k=${env.VAPID_PUBLIC_KEY}`,
         },
       });
