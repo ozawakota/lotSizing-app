@@ -34,6 +34,7 @@ import {
   YAHOO_INTERVAL,
   YAHOO_SYMBOL,
   alignmentLabel,
+  assessRiskReward,
   buildPaJevRequest,
   buildPaPrompt,
   computeStopLoss,
@@ -44,6 +45,7 @@ import {
   type BreakoutProb,
   type Candle,
   type PaResult,
+  type RrSetup,
   type SlDirection,
   type SlStructure,
   type SlSuggestion,
@@ -802,6 +804,7 @@ interface MtfTf {
   paPct: number;
   confidence: number;
   breakout: BreakoutProb | null; // レンジ上抜け/下抜け/継続の確率（Jev。失敗時 null）
+  rr: RrSetup | null; // 上位TFスイングを目標にした RR 評価（上位TFが無い/目標無しは null）
 }
 interface MtfPayload {
   instrument: string;
@@ -810,6 +813,7 @@ interface MtfPayload {
   alignment: string;
   comment: string;
   paEngine: string;
+  rrOpportunity: (RrSetup & { tf: SlTimeframe }) | null; // 全TFで狙える最良 setup（ポップアップ用）
   generatedAt: number;
 }
 
@@ -834,8 +838,22 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       paPct: pa.paPct,
       confidence: pa.confidence,
       breakout,
+      rr: null, // 下の2パス目で算出（上位TFのスイングが必要なため）
     });
   }
+
+  // RR 評価: 各TFを上位TF（配列後方＝長い足）のスイングを目標に判定し、最良の好機を1件選ぶ。
+  let rrOpportunity: (RrSetup & { tf: SlTimeframe }) | null = null;
+  timeframes.forEach((t, i) => {
+    const dir = dirFromBreakout(t.breakout);
+    if (!dir) return;
+    const structure = { trend: t.trend, swingHigh: t.swingHigh, swingLow: t.swingLow, currentRate };
+    const higherSwings = timeframes.slice(i + 1).map((h) => ({ swingHigh: h.swingHigh, swingLow: h.swingLow }));
+    t.rr = assessRiskReward(structure, dir.direction, dir.prob, higherSwings, instrument);
+    if (t.rr?.qualifies && (!rrOpportunity || t.rr.rr > rrOpportunity.rr)) {
+      rrOpportunity = { ...t.rr, tf: t.tf };
+    }
+  });
 
   const alignment = alignmentLabel(timeframes.map((t) => t.trend));
 
@@ -863,7 +881,15 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
     console.error('/mtf 解説生成 失敗:', e);
   }
 
-  return { instrument, currentRate, timeframes, alignment, comment, paEngine, generatedAt: Date.now() };
+  return { instrument, currentRate, timeframes, alignment, comment, paEngine, rrOpportunity, generatedAt: Date.now() };
+};
+
+// ブレイク確率から RR 評価の方向と確率を決める。レンジ継続優勢/未取得は null（方向なし）。
+const dirFromBreakout = (bk: BreakoutProb | null): { direction: SlDirection; prob: number } | null => {
+  if (!bk) return null;
+  const max = Math.max(bk.up, bk.down, bk.range);
+  if (max === bk.range) return null;
+  return bk.up >= bk.down ? { direction: 'long', prob: bk.up } : { direction: 'short', prob: bk.down };
 };
 
 const handleMtf = async (env: Env, url: URL): Promise<Response> => {

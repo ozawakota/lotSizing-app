@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
+  assessRiskReward,
   buildPaJevRequest,
   computeStopLoss,
   computeStructure,
+  parseBreakoutJev,
   parsePaAi,
   parsePaJev,
   pipSize,
   type Candle,
+  type SlStructure,
 } from '../stoploss';
 
 const mkCandles = (vals: [number, number, number][]): Candle[] =>
@@ -96,5 +99,54 @@ describe('parsePaAi', () => {
 
   it('falls back to range on garbage', () => {
     expect(parsePaAi('nonsense').pa).toBe('range');
+  });
+});
+
+describe('parseBreakoutJev', () => {
+  it('normalizes the three probabilities to 0-100 summing to 100', () => {
+    const r = parseBreakoutJev({
+      breakout: { probabilities: { break_up: 0.6, break_down: 0.1, stay_range: 0.3 } },
+    });
+    expect(r).not.toBeNull();
+    expect(r!.up + r!.down + r!.range).toBe(100);
+    expect(r!.up).toBe(60);
+    expect(r!.down).toBe(10);
+  });
+
+  it('returns null when the breakout answer is missing', () => {
+    expect(parseBreakoutJev({})).toBeNull();
+    expect(parseBreakoutJev(undefined)).toBeNull();
+  });
+});
+
+describe('assessRiskReward', () => {
+  // USD_JPY: pip=0.01。レンジ 150.00–150.50, 現在 150.40。ロングの損切りは安値の少し下。
+  const structure: SlStructure = { trend: 'up', swingHigh: 150.5, swingLow: 150.0, currentRate: 150.4 };
+
+  it('qualifies when reward (higher-TF swing) is >=3x risk and bias is strong', () => {
+    const rr = assessRiskReward(structure, 'long', 60, [{ swingHigh: 152.0, swingLow: 149.0 }], 'USD_JPY');
+    expect(rr).not.toBeNull();
+    expect(rr!.direction).toBe('long');
+    expect(rr!.target).toBe(152.0); // 進行方向で最も近い上位TF高値
+    expect(rr!.rr).toBeGreaterThanOrEqual(3);
+    expect(rr!.qualifies).toBe(true);
+  });
+
+  it('does not qualify when the nearest higher-TF swing is too close (RR<3)', () => {
+    const rr = assessRiskReward(structure, 'long', 60, [{ swingHigh: 151.0, swingLow: 149.0 }], 'USD_JPY');
+    expect(rr!.rr).toBeLessThan(3);
+    expect(rr!.qualifies).toBe(false);
+  });
+
+  it('does not qualify when direction probability is below the gate even if RR>=3', () => {
+    const rr = assessRiskReward(structure, 'long', 40, [{ swingHigh: 152.0, swingLow: 149.0 }], 'USD_JPY');
+    expect(rr!.rr).toBeGreaterThanOrEqual(3);
+    expect(rr!.qualifies).toBe(false);
+  });
+
+  it('returns null when no higher-TF swing lies ahead in the trade direction', () => {
+    // すべての上位TF高値が現在値より下 → ロングの目標が無い
+    const rr = assessRiskReward(structure, 'long', 60, [{ swingHigh: 150.2, swingLow: 149.0 }], 'USD_JPY');
+    expect(rr).toBeNull();
   });
 });

@@ -1,8 +1,8 @@
 // タイムフレーム分析ページ。選んだペアを 15m/30m/1h/4h で分析し、各TFのトレンド＋
 // プライスアクション(反転/戻り売り/押し目買い/レンジ)と、全TFを統合した総合判断を表示。
 // Worker(/mtf, VITE_MTF_URL) が Yahoo足＋Jev/Workers AI で算出。※参考情報・投資助言ではない。
-import { useState } from 'react';
-import type { BreakoutProb, PaClass, SlTimeframe } from '@/lib/stoploss';
+import { useEffect, useState } from 'react';
+import type { BreakoutProb, PaClass, RrSetup, SlDirection, SlTimeframe } from '@/lib/stoploss';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 
@@ -26,6 +26,7 @@ interface MtfTf {
   paPct: number;
   confidence: number;
   breakout: BreakoutProb | null;
+  rr: RrSetup | null;
 }
 interface MtfResult {
   instrument: string;
@@ -34,6 +35,7 @@ interface MtfResult {
   alignment: string;
   comment: string;
   paEngine: string;
+  rrOpportunity: (RrSetup & { tf: SlTimeframe }) | null;
   generatedAt: number;
 }
 
@@ -92,11 +94,41 @@ function BreakoutRow({ breakout }: { breakout: BreakoutProb | null }) {
   );
 }
 
+const DIR_LABEL: Record<SlDirection, string> = { long: 'ロング', short: 'ショート' };
+const DIR_STYLE: Record<SlDirection, string> = { long: 'text-green-700', short: 'text-red-700' };
+
+// 上位TFスイングを目標にした RR 評価の1行。狙える(qualifies)ときはオレンジ＋✓で強調。
+function RrRow({ rr, digits }: { rr: RrSetup | null; digits: number }) {
+  if (!rr) return <p className="mt-1 text-[10px] text-gray-400">RR　上位TF目標なし —</p>;
+  const ok = rr.qualifies;
+  return (
+    <div className="mt-1 flex items-center justify-between text-[11px]">
+      <span className="flex items-center gap-1">
+        <span className="text-gray-500">RR</span>
+        <span className={`font-semibold ${DIR_STYLE[rr.direction]}`}>{DIR_LABEL[rr.direction]}</span>
+        <span className={ok ? 'font-bold text-orange-600' : 'text-gray-500'}>
+          1:{rr.rr.toFixed(1)}
+          {ok ? ' ✓' : ''}
+        </span>
+      </span>
+      <span className="text-[10px] text-gray-400">
+        損切 {rr.stop.toFixed(digits)} / 目標 {rr.target.toFixed(digits)}
+      </span>
+    </div>
+  );
+}
+
 export default function TimeframeAnalysis() {
   const [instrument, setInstrument] = useState('USD_JPY');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<MtfResult | null>(null);
+  const [showRrPopup, setShowRrPopup] = useState(false);
+
+  // 分析完了時、RR 1:3 以上の好機があればポップアップを1回開く（新しい分析ごとに再判定）。
+  useEffect(() => {
+    if (result?.rrOpportunity) setShowRrPopup(true);
+  }, [result]);
 
   const run = async () => {
     if (!MTF_URL) return;
@@ -184,6 +216,7 @@ export default function TimeframeAnalysis() {
                 </div>
 
                 <BreakoutRow breakout={t.breakout} />
+                <RrRow rr={t.rr} digits={digits} />
 
                 <p className="mt-2 text-[10px] text-gray-400">
                   高{t.swingHigh.toFixed(digits)} / 安{t.swingLow.toFixed(digits)}
@@ -210,6 +243,56 @@ export default function TimeframeAnalysis() {
 
       {!result && !error && !loading && (
         <p className="mt-3 text-center text-gray-400">ペアを選んで「分析」を押してください。</p>
+      )}
+
+      {/* RR 1:3 以上の好機ポップアップ（分析完了時に自動表示） */}
+      {showRrPopup && result?.rrOpportunity && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          onClick={() => setShowRrPopup(false)}
+        >
+          <div
+            className="w-full max-w-xs rounded-xl bg-white p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-center text-base font-bold text-orange-600">🎯 RR 1:3 以上の好機</p>
+            <p className="mt-2 text-center text-sm font-semibold text-gray-800">
+              {result.instrument.replace('_', '/')}　<span className="font-mono">{result.rrOpportunity.tf}</span>
+              <span className={DIR_STYLE[result.rrOpportunity.direction]}>
+                {DIR_LABEL[result.rrOpportunity.direction]}
+              </span>
+              　1:{result.rrOpportunity.rr.toFixed(1)}
+            </p>
+            <div className="mt-3 space-y-1 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">エントリー</span>
+                <span className="font-mono">{result.rrOpportunity.entry.toFixed(digits)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">損切り</span>
+                <span className="font-mono text-red-600">
+                  {result.rrOpportunity.stop.toFixed(digits)} (-{result.rrOpportunity.riskPips}pips)
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">目標</span>
+                <span className="font-mono text-green-600">
+                  {result.rrOpportunity.target.toFixed(digits)} (+{result.rrOpportunity.rewardPips}pips)
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowRrPopup(false)}
+              className="mt-4 w-full rounded bg-orange-500 py-2 text-sm font-medium text-white"
+            >
+              閉じる
+            </button>
+            <p className="mt-2 text-center text-[10px] text-gray-400">
+              ※上位TFスイングを目標にした構造上の参考値。投資助言ではありません。
+            </p>
+          </div>
+        </div>
       )}
     </div>
   );

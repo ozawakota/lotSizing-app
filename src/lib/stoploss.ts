@@ -129,6 +129,67 @@ export function computeStopLoss(
 }
 
 // ---------------------------------------------------------------------------
+// リスクリワード（RR）評価: 上位TFのスイングを利確目標にした 1:N 判定（/mtf 用）
+// ---------------------------------------------------------------------------
+/** あるTFの「狙える setup」。リスク=構造的損切りまで, リワード=上位TFスイングまで。 */
+export interface RrSetup {
+  direction: SlDirection;
+  entry: number;
+  stop: number; // 損切り価格
+  target: number; // 利確目標価格（上位TFスイング）
+  riskPips: number;
+  rewardPips: number;
+  rr: number; // リワード/リスク（小数1桁）
+  qualifies: boolean; // rr>=minRr かつ 方向のブレイク確率>=minProb
+}
+
+/**
+ * 上位TFのスイングを利確目標として RR を評価する。
+ * - リスク: computeStopLoss（ロング=スイング安値の下 / ショート=高値の上＋バッファ）までの距離。
+ * - リワード: 進行方向で現在値より先にある最も近い上位TFスイング（ロング=上の最も近い高値 /
+ *   ショート=下の最も近い安値）までの距離。候補が無ければ null。
+ * - 「狙える」= rr>=minRr かつ その方向のブレイク確率>=minProb。
+ */
+export function assessRiskReward(
+  structure: SlStructure,
+  direction: SlDirection,
+  directionProb: number, // その方向のブレイク確率(0-100)
+  higherSwings: { swingHigh: number; swingLow: number }[],
+  instrument: string,
+  minRr = 3,
+  minProb = 50,
+): RrSetup | null {
+  const entry = structure.currentRate;
+  const pip = pipSize(instrument);
+  const sl = computeStopLoss(structure, direction, null, instrument);
+  const riskPips = sl.distancePips;
+  if (riskPips <= 0) return null;
+
+  let target: number | null = null;
+  if (direction === 'long') {
+    const cands = higherSwings.map((h) => h.swingHigh).filter((h) => h > entry);
+    if (cands.length) target = Math.min(...cands);
+  } else {
+    const cands = higherSwings.map((h) => h.swingLow).filter((l) => l < entry);
+    if (cands.length) target = Math.max(...cands);
+  }
+  if (target == null) return null; // 上位TFに進行方向の目標が無い
+
+  const rewardPips = Math.round((Math.abs(target - entry) / pip) * 10) / 10;
+  const rr = Math.round((rewardPips / riskPips) * 10) / 10;
+  return {
+    direction,
+    entry,
+    stop: sl.price,
+    target,
+    riskPips,
+    rewardPips,
+    rr,
+    qualifies: rr >= minRr && directionProb >= minProb,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // プライスアクション分類: Jev(Choice) / Workers AI(JSON)
 // ---------------------------------------------------------------------------
 export interface JevBody {
