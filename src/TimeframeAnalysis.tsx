@@ -2,7 +2,17 @@
 // プライスアクション(反転/戻り売り/押し目買い/レンジ)と、全TFを統合した総合判断を表示。
 // Worker(/mtf, VITE_MTF_URL) が Yahoo足＋Jev/Workers AI で算出。※参考情報・投資助言ではない。
 import { useEffect, useState } from 'react';
-import type { BreakoutProb, PaClass, RrSetup, SlDirection, SlTimeframe } from '@/lib/stoploss';
+import type {
+  BreakoutProb,
+  PaClass,
+  RrSetup,
+  SessionOutlook,
+  SessionPrediction,
+  SessionScenario,
+  SlDirection,
+  SlTimeframe,
+} from '@/lib/stoploss';
+import { MARKET_SESSIONS, isSessionOpen } from '@/lib/session';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 
@@ -36,6 +46,7 @@ interface MtfResult {
   comment: string;
   paEngine: string;
   rrOpportunity: (RrSetup & { tf: SlTimeframe }) | null;
+  sessionOutlook: SessionOutlook | null;
   generatedAt: number;
 }
 
@@ -96,6 +107,91 @@ function BreakoutRow({ breakout }: { breakout: BreakoutProb | null }) {
 
 const DIR_LABEL: Record<SlDirection, string> = { long: 'ロング', short: 'ショート' };
 const DIR_STYLE: Record<SlDirection, string> = { long: 'text-green-700', short: 'text-red-700' };
+
+const SCENARIO_LABEL: Record<SessionScenario, string> = {
+  reversal: '反転',
+  breakout: 'ブレイク',
+  buy_dip: '押し目買い',
+  sell_rally: '戻り売り',
+  range: 'レンジ',
+};
+const SCENARIO_STYLE: Record<SessionScenario, string> = {
+  reversal: 'bg-amber-100 text-amber-700',
+  breakout: 'bg-blue-100 text-blue-700',
+  buy_dip: 'bg-green-100 text-green-700',
+  sell_rally: 'bg-red-100 text-red-700',
+  range: 'bg-gray-100 text-gray-600',
+};
+const SCENARIO_BAR: Record<SessionScenario, string> = {
+  reversal: 'bg-amber-500',
+  breakout: 'bg-blue-500',
+  buy_dip: 'bg-green-500',
+  sell_rally: 'bg-red-500',
+  range: 'bg-gray-400',
+};
+
+// 現在開いていないセッションのうち、最も早く開場するものの名前（「次」バッジ用）。
+function nextSessionLabel(now: Date): string | null {
+  for (let h = 1; h <= 48; h++) {
+    const t = new Date(now.getTime() + h * 3600_000);
+    for (const s of MARKET_SESSIONS) {
+      if (!isSessionOpen(s, now) && isSessionOpen(s, t)) return s.label;
+    }
+  }
+  return null;
+}
+
+// 東京/ロンドン/NY のシナリオ予測。開催中/次バッジ＋シナリオ＋確率バー。
+function SessionOutlookCard({ outlook }: { outlook: SessionOutlook | null }) {
+  if (!outlook) {
+    return (
+      <div className="rounded-md border border-gray-200 p-3">
+        <p className="text-sm font-bold text-gray-700">セッション別予測</p>
+        <p className="mt-1 text-[10px] text-gray-400">セッション予測: Jev未取得</p>
+      </div>
+    );
+  }
+  const now = new Date();
+  const next = nextSessionLabel(now);
+  const rows: { session: (typeof MARKET_SESSIONS)[number]; pred: SessionPrediction }[] = [
+    { session: MARKET_SESSIONS[0], pred: outlook.tokyo },
+    { session: MARKET_SESSIONS[1], pred: outlook.london },
+    { session: MARKET_SESSIONS[2], pred: outlook.ny },
+  ];
+  return (
+    <div className="rounded-md border border-gray-200 p-3">
+      <p className="mb-1 text-sm font-bold text-gray-700">セッション別予測（Jev）</p>
+      {rows.map(({ session, pred }) => {
+        const open = isSessionOpen(session, now);
+        const badge = open ? '開催中' : session.label === next ? '次' : '';
+        return (
+          <div key={session.label} className="mt-2">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-sm">
+                <span
+                  aria-hidden
+                  className={`inline-block h-2 w-2 rounded-full ${open ? 'bg-green-500' : 'border border-gray-400'}`}
+                />
+                <span className={open ? 'font-medium text-gray-800' : 'text-gray-500'}>{session.label}</span>
+                {badge && <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500">{badge}</span>}
+              </span>
+              <span className="flex items-center gap-2">
+                <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${SCENARIO_STYLE[pred.scenario]}`}>
+                  {SCENARIO_LABEL[pred.scenario]} {pred.pct}%
+                </span>
+                <span className="text-[10px] text-gray-400">確信{Math.round(pred.confidence * 100)}%</span>
+              </span>
+            </div>
+            <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
+              <div className={SCENARIO_BAR[pred.scenario]} style={{ width: `${pred.pct}%`, height: '100%' }} />
+            </div>
+          </div>
+        );
+      })}
+      <p className="mt-2 text-[10px] text-gray-400">※セッション予測は構造＋AI推定の参考値です。</p>
+    </div>
+  );
+}
 
 // 上位TFスイングを目標にした RR 評価の1行。狙える(qualifies)ときはオレンジ＋✓で強調。
 function RrRow({ rr, digits }: { rr: RrSetup | null; digits: number }) {
@@ -195,6 +291,9 @@ export default function TimeframeAnalysis() {
               {result.alignment}
             </span>
           </div>
+
+          {/* セッション別シナリオ予測 */}
+          <SessionOutlookCard outlook={result.sessionOutlook} />
 
           {/* TF別カード（全幅・縦積み） */}
           <div className="space-y-2">

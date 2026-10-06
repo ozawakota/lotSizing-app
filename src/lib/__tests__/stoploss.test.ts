@@ -2,13 +2,16 @@ import { describe, it, expect } from 'vitest';
 import {
   assessRiskReward,
   buildPaJevRequest,
+  buildSessionJevRequest,
   computeStopLoss,
   computeStructure,
   parseBreakoutJev,
   parsePaAi,
   parsePaJev,
+  parseSessionJev,
   pipSize,
   type Candle,
+  type SessionState,
   type SlStructure,
 } from '../stoploss';
 
@@ -148,5 +151,46 @@ describe('assessRiskReward', () => {
     // すべての上位TF高値が現在値より下 → ロングの目標が無い
     const rr = assessRiskReward(structure, 'long', 60, [{ swingHigh: 150.2, swingLow: 149.0 }], 'USD_JPY');
     expect(rr).toBeNull();
+  });
+});
+
+describe('buildSessionJevRequest', () => {
+  const state: SessionState = {
+    trend: 'up',
+    currentRate: 150.4,
+    swingHigh: 150.8,
+    swingLow: 149.5,
+    alignment: '上向き優勢',
+    breakoutBias: '15m:上 30m:継続 1h:上 4h:上',
+    recentCloses: [150.1, 150.2, 150.3, 150.4],
+    sessionStatus: '【市場セッション】東京:開場中 ロンドン:閉場 ニューヨーク:閉場',
+  };
+
+  it('creates three session choice questions over the 5 scenarios with state', () => {
+    const { state: s, questions } = buildSessionJevRequest(state);
+    expect((s as { alignment: string }).alignment).toBe('上向き優勢');
+    expect(Object.keys(questions).sort()).toEqual(['london', 'ny', 'tokyo']);
+    const q = questions.tokyo as { type: string; criteria: Record<string, string> };
+    expect(q.type).toBe('choice');
+    expect(Object.keys(q.criteria).sort()).toEqual(['breakout', 'buy_dip', 'range', 'reversal', 'sell_rally']);
+  });
+});
+
+describe('parseSessionJev', () => {
+  it('maps each session to its chosen scenario, probability and confidence', () => {
+    const r = parseSessionJev({
+      tokyo: { choice: 'buy_dip', probabilities: { buy_dip: 0.58, reversal: 0.2, range: 0.22 }, confidence: 0.6 },
+      london: { choice: 'breakout', probabilities: { breakout: 0.64, buy_dip: 0.2, range: 0.16 }, confidence: 0.55 },
+      ny: { choice: 'reversal', probabilities: { reversal: 0.47, range: 0.33, breakout: 0.2 }, confidence: 0.5 },
+    });
+    expect(r).not.toBeNull();
+    expect(r!.tokyo).toMatchObject({ scenario: 'buy_dip', pct: 58 });
+    expect(r!.london).toMatchObject({ scenario: 'breakout', pct: 64 });
+    expect(r!.ny.scenario).toBe('reversal');
+  });
+
+  it('returns null when any of the three sessions is missing', () => {
+    expect(parseSessionJev({ tokyo: { choice: 'range' }, london: { choice: 'range' } })).toBeNull();
+    expect(parseSessionJev(undefined)).toBeNull();
   });
 });

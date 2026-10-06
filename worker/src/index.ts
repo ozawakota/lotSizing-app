@@ -37,15 +37,19 @@ import {
   assessRiskReward,
   buildPaJevRequest,
   buildPaPrompt,
+  buildSessionJevRequest,
   computeStopLoss,
   computeStructure,
   parseBreakoutJev,
   parsePaAi,
   parsePaJev,
+  parseSessionJev,
   type BreakoutProb,
   type Candle,
   type PaResult,
   type RrSetup,
+  type SessionOutlook,
+  type SessionState,
   type SlDirection,
   type SlStructure,
   type SlSuggestion,
@@ -814,6 +818,7 @@ interface MtfPayload {
   comment: string;
   paEngine: string;
   rrOpportunity: (RrSetup & { tf: SlTimeframe }) | null; // 全TFで狙える最良 setup（ポップアップ用）
+  sessionOutlook: SessionOutlook | null; // 東京/ロンドン/NY のシナリオ予測（Jev。失敗時 null）
   generatedAt: number;
 }
 
@@ -822,11 +827,13 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
   const timeframes: MtfTf[] = [];
   let currentRate = 0;
   let paEngine = 'jev';
+  let sessionCloses: number[] = []; // セッション予測用の代表的な終値列（1h優先）
   for (const tf of MTF_TIMEFRAMES) {
     const { candles, currentRate: cr } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf]);
     currentRate = cr;
     const structure = computeStructure(candles, cr);
     const recentCloses = candles.slice(-12).map((c) => c.close);
+    if (tf === '1h' || sessionCloses.length === 0) sessionCloses = recentCloses;
     const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses);
     paEngine = eng;
     timeframes.push({
@@ -857,6 +864,25 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
 
   const alignment = alignmentLabel(timeframes.map((t) => t.trend));
 
+  // セッション別シナリオ予測: 各TFを統合した相場観で東京/ロンドン/NYを一括判定（Jev 1呼び出し）。
+  const top = timeframes[timeframes.length - 1]; // 最上位TF(4h)を代表の相場観に
+  const breakoutBias = timeframes
+    .map((t) => {
+      const d = dirFromBreakout(t.breakout);
+      return `${t.tf}:${d ? (d.direction === 'long' ? '上' : '下') : '継続'}`;
+    })
+    .join(' ');
+  const sessionOutlook = await buildSessionOutlook(env, {
+    trend: top.trend,
+    currentRate,
+    swingHigh: top.swingHigh,
+    swingLow: top.swingLow,
+    alignment,
+    breakoutBias,
+    recentCloses: sessionCloses,
+    sessionStatus: sessionStatusText(new Date()),
+  });
+
   let comment = '';
   try {
     const table = timeframes
@@ -881,7 +907,28 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
     console.error('/mtf 解説生成 失敗:', e);
   }
 
-  return { instrument, currentRate, timeframes, alignment, comment, paEngine, rrOpportunity, generatedAt: Date.now() };
+  return { instrument, currentRate, timeframes, alignment, comment, paEngine, rrOpportunity, sessionOutlook, generatedAt: Date.now() };
+};
+
+// セッション別シナリオ予測を Jev で判定（1呼び出しに東京/ロンドン/NYの3問）。未設定/失敗は null。
+const buildSessionOutlook = async (env: Env, state: SessionState): Promise<SessionOutlook | null> => {
+  try {
+    if (!env.TYPESAFE_API_KEY) return null;
+    const body = { model: 'jev-latest', ...buildSessionJevRequest(state) };
+    const res = await fetch(JEV_ENDPOINT, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.TYPESAFE_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`Jev HTTP ${res.status}: ${(await res.text()).slice(0, 150)}`);
+    const data = (await res.json()) as {
+      answers?: Record<string, { choice?: string; probabilities?: Record<string, number>; confidence?: number }>;
+    };
+    return parseSessionJev(data.answers);
+  } catch (e) {
+    console.error('/mtf セッション予測 Jev 失敗:', e);
+    return null;
+  }
 };
 
 // ブレイク確率から RR 評価の方向と確率を決める。レンジ継続優勢/未取得は null（方向なし）。

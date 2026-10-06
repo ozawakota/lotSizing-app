@@ -265,6 +265,89 @@ export function parsePaJev(answers: Record<string, JevChoiceAnswer> | undefined)
   return { pa, paPct, confidence };
 }
 
+// ---------------------------------------------------------------------------
+// セッション別シナリオ予測（東京/ロンドン/NY で 反転/ブレイク/押し目/戻り/レンジ）
+// ---------------------------------------------------------------------------
+export type SessionScenario = 'reversal' | 'breakout' | 'buy_dip' | 'sell_rally' | 'range';
+export const SESSION_SCENARIO_CRITERIA: Record<SessionScenario, string> = {
+  reversal: '直近トレンドが反転する（転換）',
+  breakout: '直近レンジ(スイング高安)を抜けて新たな方向へ動く',
+  buy_dip: '上昇基調の押し目（一旦下げてから上昇再開）',
+  sell_rally: '下降基調の戻り（一旦上げてから下落再開）',
+  range: '方向感なくレンジ/動意薄',
+};
+
+/** セッション予測 Jev に渡す集約状態（各TFを統合した相場観）。 */
+export interface SessionState {
+  trend: 'up' | 'down' | 'range'; // 上位TFの方向
+  currentRate: number;
+  swingHigh: number;
+  swingLow: number;
+  alignment: string; // 複数TFの整合ラベル
+  breakoutBias: string; // 各TFのブレイク優勢サマリ（例 "15m:上 30m:継続 ..."）
+  recentCloses: number[];
+  sessionStatus: string; // 現在の各セッション開閉テキスト
+}
+
+/** 1回の Jev 呼び出しで 東京/ロンドン/NY の3問を判定するリクエスト body（model 以外）。 */
+export function buildSessionJevRequest(state: SessionState): JevBody {
+  const mkQ = (session: string) => ({
+    type: 'choice',
+    instructions: `上位足の相場観と現在のセッション状況から、${session}セッションで最も起きやすい値動きのシナリオを判定してください。`,
+    criteria: SESSION_SCENARIO_CRITERIA,
+  });
+  return {
+    state: {
+      trend: state.trend,
+      currentRate: state.currentRate,
+      swingHigh: state.swingHigh,
+      swingLow: state.swingLow,
+      alignment: state.alignment,
+      breakoutBias: state.breakoutBias,
+      recentCloses: state.recentCloses.slice(-12),
+      sessionStatus: state.sessionStatus,
+    },
+    questions: {
+      tokyo: mkQ('東京'),
+      london: mkQ('ロンドン'),
+      ny: mkQ('ニューヨーク'),
+    },
+  };
+}
+
+/** 1セッションの予測。 */
+export interface SessionPrediction {
+  scenario: SessionScenario;
+  pct: number; // 0-100 そのシナリオの確からしさ
+  confidence: number; // 0-1
+}
+/** 東京/ロンドン/NY のセッション別予測。 */
+export interface SessionOutlook {
+  tokyo: SessionPrediction;
+  london: SessionPrediction;
+  ny: SessionPrediction;
+}
+
+/** Jev の answers を SessionOutlook に整形。3セッションのいずれか欠損なら null（判定不可）。 */
+export function parseSessionJev(answers: Record<string, JevChoiceAnswer> | undefined): SessionOutlook | null {
+  if (!answers) return null;
+  const valid: SessionScenario[] = ['reversal', 'breakout', 'buy_dip', 'sell_rally', 'range'];
+  const one = (key: string): SessionPrediction | null => {
+    const q = answers[key];
+    if (!q) return null;
+    const scenario = valid.includes(q.choice as SessionScenario) ? (q.choice as SessionScenario) : 'range';
+    const p = q.probabilities?.[scenario];
+    const pct = typeof p === 'number' ? Math.round(clamp(p * 100, 0, 100)) : 50;
+    const confidence = typeof q.confidence === 'number' ? clamp(q.confidence, 0, 1) : 0.5;
+    return { scenario, pct, confidence };
+  };
+  const tokyo = one('tokyo');
+  const london = one('london');
+  const ny = one('ny');
+  if (!tokyo || !london || !ny) return null;
+  return { tokyo, london, ny };
+}
+
 /** Workers AI フォールバック用プロンプト（厳密JSONを要求）。 */
 export function buildPaPrompt(structure: SlStructure, recentCloses: number[]): string {
   return [
