@@ -1,6 +1,6 @@
 {
-  "name": "FX ロット計算",
-  "short_name": "FXロット",
+  "name": "FX トレードセンター ~トレセン~",
+  "short_name": "トレセン",
   "description": "ロットサイズ計算・通貨強弱・相場変動通知",
   "start_url": ".",
   "scope": ".",
