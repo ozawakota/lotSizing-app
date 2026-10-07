@@ -130,6 +130,43 @@ export function alignmentLabel(trends: ('up' | 'down' | 'range')[]): string {
   return '不一致（TF間で方向が対立）';
 }
 
+/**
+ * ロウソク足からスロー・ストキャスティクス(%K/%D)を算出する（Twelve Data の既定 14-3-3 相当）。
+ * rawK = (終値 − 期間kPeriodの安値) / (期間の高値 − 安値) × 100、
+ * slowK = rawK の kSlowing本SMA、%D = slowK の dPeriod本SMA。最新値を返す。
+ * 足数不足や値幅ゼロで算出できなければ null。API不要（取得済みの足から計算）。
+ */
+export function computeStochastic(
+  candles: Candle[],
+  kPeriod = 14,
+  kSlowing = 3,
+  dPeriod = 3,
+): { k: number; d: number } | null {
+  const need = kPeriod + kSlowing + dPeriod;
+  if (candles.length < need) return null;
+  // 各時点の rawK を、計算に必要な分だけ後ろから求める。
+  const rawK: number[] = [];
+  for (let i = kPeriod - 1; i < candles.length; i++) {
+    const win = candles.slice(i - kPeriod + 1, i + 1);
+    const hh = Math.max(...win.map((c) => c.high));
+    const ll = Math.min(...win.map((c) => c.low));
+    if (hh === ll) return null;
+    rawK.push(((candles[i].close - ll) / (hh - ll)) * 100);
+  }
+  const sma = (arr: number[], period: number): number[] => {
+    const out: number[] = [];
+    for (let i = period - 1; i < arr.length; i++) {
+      out.push(arr.slice(i - period + 1, i + 1).reduce((s, v) => s + v, 0) / period);
+    }
+    return out;
+  };
+  const slowK = sma(rawK, kSlowing);
+  const slowD = sma(slowK, dPeriod);
+  if (slowK.length === 0 || slowD.length === 0) return null;
+  const clampPct = (n: number) => Math.round(clamp(n, 0, 100) * 10) / 10;
+  return { k: clampPct(slowK[slowK.length - 1]), d: clampPct(slowD[slowD.length - 1]) };
+}
+
 /** instrument の pip サイズ（XAU=0.1ドル, 対円=0.01, その他=0.0001）。 */
 export function pipSize(instrument: string): number {
   if (instrument.startsWith('XAU')) return 0.1;
@@ -242,48 +279,55 @@ export interface JevBody {
   questions: Record<string, unknown>;
 }
 
-const paState = (
-  structure: SlStructure,
-  recentCloses: number[],
-  sessionStatus?: string,
-  volumeLevel?: number | null,
-): unknown => ({
+/** ストキャスティクスの読み取り値（%K/%D、0-100）。 */
+export interface StochReading {
+  k: number;
+  d: number;
+}
+
+/** プライスアクション判定に追加で渡す文脈（すべて任意）。 */
+export interface PaContext {
+  sessionStatus?: string; // 東京/ロンドン/NY の開閉状況
+  volumeLevel?: number | null; // 過去の高出来高の節目価格
+  stoch?: StochReading | null; // ストキャスティクス(%K/%D)
+}
+
+const paState = (structure: SlStructure, recentCloses: number[], ctx: PaContext = {}): unknown => ({
   trend: structure.trend,
   currentRate: structure.currentRate,
   swingHigh: structure.swingHigh,
   swingLow: structure.swingLow,
   recentCloses: recentCloses.slice(-12),
-  // 東京/ロンドン/NY の開閉状況（任意）。渡されたときだけ判定の材料にする。
-  ...(sessionStatus ? { sessionStatus } : {}),
-  // 過去の高出来高の節目価格（任意）。レジサポとして重視させる。
-  ...(volumeLevel != null ? { volumeLevel } : {}),
+  // 以下はいずれも任意。渡されたときだけ判定の材料にする。
+  ...(ctx.sessionStatus ? { sessionStatus: ctx.sessionStatus } : {}),
+  ...(ctx.volumeLevel != null ? { volumeLevel: ctx.volumeLevel } : {}),
+  ...(ctx.stoch ? { stochastic: { k: ctx.stoch.k, d: ctx.stoch.d } } : {}),
 });
 
 /** Jev systemone リクエスト body（model 以外）。1問の Choice でプライスアクションを分類。
- *  sessionStatus を渡すと市場の開閉状況、volumeLevel を渡すと過去の高出来高の節目も考慮させる。 */
-export function buildPaJevRequest(
-  structure: SlStructure,
-  recentCloses: number[],
-  sessionStatus?: string,
-  volumeLevel?: number | null,
-): JevBody {
-  const sessionNote = sessionStatus
+ *  ctx でセッション状況・過去の高出来高の節目・ストキャスティクスも考慮させられる。 */
+export function buildPaJevRequest(structure: SlStructure, recentCloses: number[], ctx: PaContext = {}): JevBody {
+  const sessionNote = ctx.sessionStatus
     ? '。また現在のセッション状況(sessionStatus: どの市場が開いているか)も踏まえ、その時間帯に動きやすい方向を考慮してください'
     : '';
-  const volumeNote = volumeLevel != null ? '。過去に出来高が膨らんだ価格(volumeLevel)は重要なレジサポ(節目)として考慮してください' : '';
+  const volumeNote = ctx.volumeLevel != null ? '。過去に出来高が膨らんだ価格(volumeLevel)は重要なレジサポ(節目)として考慮してください' : '';
+  const stochNote = ctx.stoch
+    ? '。ストキャスティクス(stochastic.k/%K, stochastic.d/%D)の買われすぎ(80以上)/売られすぎ(20以下)や%Kと%Dのクロスも考慮してください'
+    : '';
+  const note = sessionNote + volumeNote + stochNote;
   return {
-    state: paState(structure, recentCloses, sessionStatus, volumeLevel),
+    state: paState(structure, recentCloses, ctx),
     questions: {
       price_action: {
         type: 'choice',
         instructions:
-          '直近のトレンド・スイング高安・現在値・最近の終値列から、現在の相場のプライスアクションを分類してください' + sessionNote + volumeNote + '。',
+          '直近のトレンド・スイング高安・現在値・最近の終値列から、現在の相場のプライスアクションを分類してください' + note + '。',
         criteria: PA_CRITERIA,
       },
       breakout: {
         type: 'choice',
         instructions:
-          '現在値・スイング高安・トレンド・最近の終値列から、現在のレンジ(スイング高安)を次の数本でどう抜けるかを判定してください' + sessionNote + volumeNote + '。',
+          '現在値・スイング高安・トレンド・最近の終値列から、現在のレンジ(スイング高安)を次の数本でどう抜けるかを判定してください' + note + '。',
         criteria: BREAKOUT_CRITERIA,
       },
     },
@@ -413,17 +457,13 @@ export function parseSessionJev(answers: Record<string, JevChoiceAnswer> | undef
 }
 
 /** Workers AI フォールバック用プロンプト（厳密JSONを要求）。 */
-export function buildPaPrompt(
-  structure: SlStructure,
-  recentCloses: number[],
-  sessionStatus?: string,
-  volumeLevel?: number | null,
-): string {
+export function buildPaPrompt(structure: SlStructure, recentCloses: number[], ctx: PaContext = {}): string {
   return [
     '次の相場状態から、現在のプライスアクションを分類してください。',
-    sessionStatus ? `現在のセッション状況も考慮してください: ${sessionStatus}` : '',
-    volumeLevel != null ? `過去に出来高が膨らんだ価格(${volumeLevel})は重要なレジサポとして考慮してください。` : '',
-    JSON.stringify(paState(structure, recentCloses, sessionStatus, volumeLevel)),
+    ctx.sessionStatus ? `現在のセッション状況も考慮してください: ${ctx.sessionStatus}` : '',
+    ctx.volumeLevel != null ? `過去に出来高が膨らんだ価格(${ctx.volumeLevel})は重要なレジサポとして考慮してください。` : '',
+    ctx.stoch ? `ストキャスティクス %K=${ctx.stoch.k} / %D=${ctx.stoch.d}（80以上=買われすぎ, 20以下=売られすぎ）も考慮してください。` : '',
+    JSON.stringify(paState(structure, recentCloses, ctx)),
     '分類の定義:',
     ...Object.entries(PA_CRITERIA).map(([k, v]) => `- ${k}: ${v}`),
     '次のJSONのみ返してください（説明なし）:',

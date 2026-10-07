@@ -12,6 +12,7 @@ import {
   pipSize,
   volumeAnchoredLevel,
   futuresLevelToSpot,
+  computeStochastic,
   type Candle,
   type SessionState,
   type SlStructure,
@@ -51,6 +52,30 @@ describe('volumeAnchoredLevel', () => {
   it('窓内に足が無ければ null', () => {
     const candles: Candle[] = [{ high: 0, low: 0, close: 100, volume: 10, t: now / 1000 }];
     expect(volumeAnchoredLevel(candles, now, 2 * DAY, 1 * HOUR)).toBeNull();
+  });
+});
+
+describe('computeStochastic', () => {
+  it('足数が足りなければ null', () => {
+    const few = mkCandles(Array.from({ length: 5 }, (_, i) => [i + 2, i, i + 1] as [number, number, number]));
+    expect(computeStochastic(few)).toBeNull();
+  });
+
+  it('終値が期間高値に張り付くと %K/%D は高位（買われすぎ域）', () => {
+    // 高安は一定(10-0)、終値は最高値 → rawK≈100
+    const s = computeStochastic(mkCandles(Array.from({ length: 25 }, () => [10, 0, 10])));
+    expect(s).not.toBeNull();
+    expect(s!.k).toBeGreaterThanOrEqual(80);
+    expect(s!.d).toBeGreaterThanOrEqual(80);
+  });
+
+  it('終値が期間安値付近だと %K は低位（売られすぎ域）', () => {
+    const s = computeStochastic(mkCandles(Array.from({ length: 25 }, () => [10, 0, 0])));
+    expect(s!.k).toBeLessThanOrEqual(20);
+  });
+
+  it('高安が同値（値幅ゼロ）なら null', () => {
+    expect(computeStochastic(mkCandles(Array.from({ length: 25 }, () => [5, 5, 5])))).toBeNull();
   });
 });
 
@@ -130,7 +155,7 @@ describe('buildPaJevRequest', () => {
     const { state, questions } = buildPaJevRequest(
       { trend: 'up', swingHigh: 1.2, swingLow: 1.1, currentRate: 1.15 },
       [1.1, 1.15],
-      '東京: 開場 / ロンドン: 閉場',
+      { sessionStatus: '東京: 開場 / ロンドン: 閉場' },
     );
     expect((state as { sessionStatus?: string }).sessionStatus).toBe('東京: 開場 / ロンドン: 閉場');
     const breakout = questions.breakout as { instructions: string };
@@ -143,11 +168,20 @@ describe('buildPaJevRequest', () => {
     const { state, questions } = buildPaJevRequest(
       { trend: 'up', swingHigh: 1.2, swingLow: 1.1, currentRate: 1.15 },
       [1.1, 1.15],
-      undefined,
-      1.18,
+      { volumeLevel: 1.18 },
     );
     expect((state as { volumeLevel?: number }).volumeLevel).toBe(1.18);
     expect((questions.breakout as { instructions: string }).instructions).toContain('出来高');
+  });
+
+  it('includes stochastic in state and instructions when provided', () => {
+    const { state, questions } = buildPaJevRequest(
+      { trend: 'up', swingHigh: 1.2, swingLow: 1.1, currentRate: 1.15 },
+      [1.1, 1.15],
+      { stoch: { k: 85, d: 78 } },
+    );
+    expect((state as { stochastic?: { k: number } }).stochastic?.k).toBe(85);
+    expect((questions.breakout as { instructions: string }).instructions).toContain('ストキャス');
   });
 });
 

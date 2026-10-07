@@ -46,8 +46,11 @@ import {
   parseSessionJev,
   volumeAnchoredLevel,
   futuresLevelToSpot,
+  computeStochastic,
   VOLUME_SYMBOL,
   type BreakoutProb,
+  type PaContext,
+  type StochReading,
   type Candle,
   type PaResult,
   type RrSetup,
@@ -593,12 +596,11 @@ const classifyPa = async (
   env: Env,
   structure: SlStructure,
   recentCloses: number[],
-  sessionStatus?: string, // 渡すと東京/ロンドン/NYの開閉も判定材料にする
-  volumeLevel?: number | null, // 渡すと過去の高出来高の節目も判定材料にする
+  ctx: PaContext = {}, // セッション状況・出来高の節目・ストキャスティクス等の判定材料
 ): Promise<{ pa: PaResult; breakout: BreakoutProb | null; paEngine: string }> => {
   try {
     if (!env.TYPESAFE_API_KEY) throw new Error('TYPESAFE_API_KEY 未設定');
-    const body = { model: 'jev-latest', ...buildPaJevRequest(structure, recentCloses, sessionStatus, volumeLevel) };
+    const body = { model: 'jev-latest', ...buildPaJevRequest(structure, recentCloses, ctx) };
     const res = await fetch(JEV_ENDPOINT, {
       method: 'POST',
       headers: { Authorization: `Bearer ${env.TYPESAFE_API_KEY}`, 'Content-Type': 'application/json' },
@@ -613,7 +615,7 @@ const classifyPa = async (
     const r = await env.AI.run(SIGNAL_MODEL, {
       messages: [
         { role: 'system', content: 'あなたは相場のプライスアクション分類器です。指示されたJSONのみ返します。' },
-        { role: 'user', content: buildPaPrompt(structure, recentCloses, sessionStatus, volumeLevel) },
+        { role: 'user', content: buildPaPrompt(structure, recentCloses, ctx) },
       ],
     });
     return { pa: parsePaAi((r as { response?: unknown }).response), breakout: null, paEngine: 'workers-ai' };
@@ -824,6 +826,7 @@ interface MtfTf {
   breakout: BreakoutProb | null; // レンジ上抜け/下抜け/継続の確率（Jev。失敗時 null）
   rr: RrSetup | null; // 上位TFスイングを目標にした RR 評価（上位TFが無い/目標無しは null）
   volumeLevel: number | null; // 過去の高出来高の節目価格（30m/1h=2日前・4h=2週前付近。出来高無し=null）
+  stoch: StochReading | null; // ストキャスティクス(%K/%D)。足から自前計算（算出不可は null）
 }
 interface MtfPayload {
   instrument: string;
@@ -875,7 +878,9 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
         console.error(`/mtf 出来高(先物)取得 失敗 ${instrument} ${tf}:`, e);
       }
     }
-    const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses, sessionStatus, volumeLevel);
+    // ストキャスティクス(%K/%D)を足から自前計算（API不要）。Jev の判定材料にも含める。
+    const stoch = computeStochastic(candles);
+    const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses, { sessionStatus, volumeLevel, stoch });
     paEngine = eng;
     timeframes.push({
       tf,
@@ -888,6 +893,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       breakout,
       rr: null, // 下の2パス目で算出（上位TFのスイングが必要なため）
       volumeLevel,
+      stoch,
     });
   }
 

@@ -29,6 +29,7 @@ interface SrTf {
   paPct: number;
   breakout: BreakoutProb | null;
   volumeLevel: number | null; // 過去の高出来高の節目（30m/1h=2日前・4h=2週前。出来高無し=null）
+  stoch: { k: number; d: number } | null; // ストキャスティクス(%K/%D)
 }
 interface MtfResult {
   instrument: string;
@@ -112,6 +113,26 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: SrTf; instrument:
             <span className={tf.volumeLevel >= currentRate ? 'ml-1 text-red-700' : 'ml-1 text-green-700'}>
               {tf.volumeLevel >= currentRate ? '（レジ）' : '（サポ）'}
             </span>
+          </span>
+        </div>
+      )}
+
+      {/* ストキャスティクス（%K/%D。買われすぎ/売られすぎを色で） */}
+      {tf.stoch && (
+        <div className="mt-2 flex items-center justify-between text-[11px]">
+          <span className="text-gray-500">ストキャス %K/%D</span>
+          <span className="flex items-center gap-2">
+            <span className="font-semibold text-gray-700">{tf.stoch.k.toFixed(1)} / {tf.stoch.d.toFixed(1)}</span>
+            {(() => {
+              const v = tf.stoch.k;
+              const [label, cls] =
+                v >= 80
+                  ? ['買われすぎ', 'bg-red-100 text-red-700']
+                  : v <= 20
+                    ? ['売られすぎ', 'bg-green-100 text-green-700']
+                    : ['中立', 'bg-gray-100 text-gray-600'];
+              return <span className={`rounded px-1.5 py-0.5 font-semibold ${cls}`}>{label}</span>;
+            })()}
           </span>
         </div>
       )}
