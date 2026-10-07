@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import type { BreakoutProb, PaClass, SlTimeframe } from '@/lib/stoploss';
 import { pipSize } from '@/lib/stoploss';
+import { fetchGoldSpot } from '@/lib/goldSpot';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 
@@ -122,19 +123,14 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: SrTf; instrument:
 // XAU の GC=F(先物)基準を現物スポット基準へ平行移動する。gold-api のスポットを取得し、
 // offset = 先物現在値 − スポットを全価格から引く。取得失敗時は元の payload をそのまま返す。
 async function toSpotBasis(body: MtfResult): Promise<MtfResult> {
-  try {
-    const res = await fetch('https://api.gold-api.com/price/XAU');
-    const spot = parseFloat((await res.json())?.price);
-    if (!Number.isFinite(spot) || spot <= 0 || !(body.currentRate > 0)) return body;
-    const offset = body.currentRate - spot;
-    return {
-      ...body,
-      currentRate: spot,
-      timeframes: body.timeframes.map((t) => ({ ...t, swingHigh: t.swingHigh - offset, swingLow: t.swingLow - offset })),
-    };
-  } catch {
-    return body;
-  }
+  const spot = await fetchGoldSpot();
+  if (spot === null || !(body.currentRate > 0)) return body;
+  const offset = body.currentRate - spot;
+  return {
+    ...body,
+    currentRate: spot,
+    timeframes: body.timeframes.map((t) => ({ ...t, swingHigh: t.swingHigh - offset, swingLow: t.swingLow - offset })),
+  };
 }
 
 export default function SupportResistance() {

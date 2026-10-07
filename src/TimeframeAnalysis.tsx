@@ -13,6 +13,7 @@ import type {
   SlTimeframe,
 } from '@/lib/stoploss';
 import { MARKET_SESSIONS, isSessionOpen } from '@/lib/session';
+import { fetchGoldSpot } from '@/lib/goldSpot';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 
@@ -48,6 +49,27 @@ interface MtfResult {
   rrOpportunity: (RrSetup & { tf: SlTimeframe }) | null;
   sessionOutlook: SessionOutlook | null;
   generatedAt: number;
+}
+
+// XAU は /mtf が金先物(GC=F)基準のため、gold-api の現物スポットとの差分(offset)で
+// 現在レート・スイング高安・RR価格(エントリー/損切/目標)をスポット基準へ平行移動する。
+// 構造・pips・確率は差分不変。取得失敗時は GC=F のまま。
+async function toSpotBasis(body: MtfResult): Promise<MtfResult> {
+  const spot = await fetchGoldSpot();
+  if (spot === null || !(body.currentRate > 0)) return body;
+  const off = body.currentRate - spot;
+  const shiftRr = <T extends RrSetup>(rr: T): T => ({ ...rr, entry: rr.entry - off, stop: rr.stop - off, target: rr.target - off });
+  return {
+    ...body,
+    currentRate: spot,
+    timeframes: body.timeframes.map((t) => ({
+      ...t,
+      swingHigh: t.swingHigh - off,
+      swingLow: t.swingLow - off,
+      rr: t.rr ? shiftRr(t.rr) : null,
+    })),
+    rrOpportunity: body.rrOpportunity ? shiftRr(body.rrOpportunity) : null,
+  };
 }
 
 const digitsFor = (instrument: string): number =>
@@ -215,7 +237,7 @@ function RrRow({ rr, digits }: { rr: RrSetup | null; digits: number }) {
 }
 
 export default function TimeframeAnalysis() {
-  const [instrument, setInstrument] = useState('USD_JPY');
+  const [instrument, setInstrument] = useState('XAU_USD');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<MtfResult | null>(null);
@@ -235,7 +257,8 @@ export default function TimeframeAnalysis() {
       const res = await fetch(`${MTF_URL}?instrument=${encodeURIComponent(instrument)}`);
       const body = (await res.json()) as MtfResult | { error: string };
       if ('error' in body) throw new Error(body.error);
-      setResult(body);
+      // ゴールドは現物スポット基準に揃える（レジサポページと同様）。
+      setResult(instrument === 'XAU_USD' ? await toSpotBasis(body) : body);
     } catch (e) {
       setError(e instanceof Error ? e.message : '取得に失敗しました');
     } finally {
