@@ -13,6 +13,17 @@ async function getAlertUrl() {
   return res ? (await res.text()) : null;
 }
 
+// RR好機通知の端末設定（"rr-enabled" が "0" のときだけ無効。未設定は有効）。
+async function isRrEnabled() {
+  try {
+    const cache = await caches.open(CFG_CACHE);
+    const res = await cache.match('rr-enabled');
+    return res ? (await res.text()) !== '0' : true;
+  } catch {
+    return true;
+  }
+}
+
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
@@ -36,6 +47,10 @@ self.addEventListener('push', (event) => {
         } catch (e) {
           // 取得失敗 → 下の汎用フォールバックで1件出す。
         }
+      }
+      // RR好機通知（pair が "RR:" 始まり）は端末設定が OFF なら表示しない。
+      if (!(await isRrEnabled())) {
+        alerts = alerts.filter((a) => !String(a.pair || '').startsWith('RR:'));
       }
       if (alerts.length === 0) {
         alerts = [{ pair: 'market', title: '相場変動通知', body: '相場が大きく変動しました。アプリで確認してください。' }];

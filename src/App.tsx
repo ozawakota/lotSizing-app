@@ -6,6 +6,7 @@ import HelpModal from './HelpModal'; // 前提：別ファイルに作成済み
 import DstInfoModal from './DstInfoModal'; // 夏時間/冬時間の説明モーダル
 import CurrencyStrengthMeter from './CurrencyStrengthMeter';
 import AlertBell from './AlertBell'; // ヘッダーの相場変動通知ベル
+import AlertRrToggle from './AlertRrToggle'; // ヘッダーのRR好機通知トグル（ベルの左）
 import AppHeader from './components/AppHeader';
 import BottomTabBar, { type AppView } from './components/BottomTabBar';
 import OrderFlow from './OrderFlow'; // 取引量・センチメント ページ
@@ -907,6 +908,7 @@ const App: FC = () => {
 
       {/* 共通ヘッダー（タイトル + 通知ベル。計算ページのみヘルプ/夏時間を表示） */}
       <AppHeader title={VIEW_TITLES[view]}>
+        <AlertRrToggle />
         <AlertBell />
         {view === 'calculator' && (
           <>

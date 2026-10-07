@@ -49,6 +49,47 @@ async function storeAlertUrl(): Promise<void> {
   await cache.put('alert-url', new Response(ALERT_URL));
 }
 
+// ---------------------------------------------------------------------------
+// RR好機通知の端末ローカル設定（既定ON）。OFF にすると OS通知・アプリ内トーストの
+// 両方で RR通知を止める。SW が push 受信時に読めるよう Cache にも保存する。
+// ---------------------------------------------------------------------------
+const RR_PREF_KEY = 'rrAlertsEnabled';
+
+export function getRrEnabled(): boolean {
+  return localStorage.getItem(RR_PREF_KEY) !== '0'; // 未設定は ON
+}
+
+// Cache に RR可否を保存（SW が push 時に参照）。
+async function storeRrEnabled(enabled: boolean): Promise<void> {
+  try {
+    const cache = await caches.open(CFG_CACHE);
+    await cache.put('rr-enabled', new Response(enabled ? '1' : '0'));
+  } catch {
+    // Cache 非対応環境は無視
+  }
+}
+
+export async function setRrEnabled(enabled: boolean): Promise<void> {
+  localStorage.setItem(RR_PREF_KEY, enabled ? '1' : '0');
+  await storeRrEnabled(enabled);
+  // 購読中なら Alert Worker の購読フラグも更新（RR無効端末には RR push を送らない）。
+  if (ALERT_URL && isPushSupported()) {
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = reg ? await reg.pushManager.getSubscription() : null;
+      if (sub) {
+        await fetch(`${ALERT_URL}/rr-pref`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint: sub.endpoint, enabled }),
+        });
+      }
+    } catch {
+      // 失敗は無視（次回トグルで回復）
+    }
+  }
+}
+
 // アプリ内「最近のアラート」履歴の1件。
 export interface AlertHistoryItem {
   id: number;
@@ -90,6 +131,7 @@ export async function enableAlerts(): Promise<boolean> {
 
   const reg = await registerServiceWorker();
   await storeAlertUrl();
+  await storeRrEnabled(getRrEnabled());
 
   let sub = await reg.pushManager.getSubscription();
   if (!sub) {
@@ -102,7 +144,7 @@ export async function enableAlerts(): Promise<boolean> {
   const res = await fetch(`${ALERT_URL}/subscribe`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(sub.toJSON()),
+    body: JSON.stringify({ ...sub.toJSON(), rrEnabled: getRrEnabled() }),
   });
   return res.ok;
 }

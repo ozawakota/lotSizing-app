@@ -13,21 +13,47 @@ async function getAlertUrl() {
   return res ? (await res.text()) : null;
 }
 
+// RR好機通知の端末設定（"rr-enabled" が "0" のときだけ無効。未設定は有効）。
+async function isRrEnabled() {
+  try {
+    const cache = await caches.open(CFG_CACHE);
+    const res = await cache.match('rr-enabled');
+    return res ? (await res.text()) !== '0' : true;
+  } catch {
+    return true;
+  }
+}
+
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
 self.addEventListener('push', (event) => {
   event.waitUntil(
     (async () => {
-      const base = await getAlertUrl();
-      if (!base) return;
+      // push は必ず1件は通知を出す（userVisibleOnly 準拠）。内容は push 本体に無いため
+      // サーバから取得するが、配信遅延で /recent(直近) が空になることがある。その場合は
+      // /alerts?limit=1（最新の実アラート）→ 汎用文言 の順にフォールバックする。
       let alerts = [];
-      try {
-        const res = await fetch(`${base}/recent`);
-        if (res.ok) alerts = await res.json();
-      } catch (e) {
-        // 取得失敗時は汎用文言で1件だけ出す。
-        alerts = [{ pair: 'market', title: '相場変動通知', body: '相場が大きく変動しました' }];
+      const base = await getAlertUrl();
+      if (base) {
+        try {
+          let res = await fetch(`${base}/recent`);
+          if (res.ok) alerts = await res.json();
+          if (alerts.length === 0) {
+            // 遅延配信：直近窓を外れていても最新のアラートを1件表示する。
+            res = await fetch(`${base}/alerts?limit=1`);
+            if (res.ok) alerts = await res.json();
+          }
+        } catch (e) {
+          // 取得失敗 → 下の汎用フォールバックで1件出す。
+        }
+      }
+      // RR好機通知（pair が "RR:" 始まり）は端末設定が OFF なら表示しない。
+      if (!(await isRrEnabled())) {
+        alerts = alerts.filter((a) => !String(a.pair || '').startsWith('RR:'));
+      }
+      if (alerts.length === 0) {
+        alerts = [{ pair: 'market', title: '相場変動通知', body: '相場が大きく変動しました。アプリで確認してください。' }];
       }
       await Promise.all(
         alerts.map((a) =>

@@ -3,7 +3,7 @@
 // 初回ポーリングはベースライン記録のみ（既存の過去分はトーストしない）。
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
-import { fetchAlertHistory, isPushConfigured, pickNewAlerts, type AlertHistoryItem } from '@/lib/push';
+import { fetchAlertHistory, getRrEnabled, isPushConfigured, pickNewAlerts, type AlertHistoryItem } from '@/lib/push';
 
 const POLL_MS = 60_000; // 60秒
 const AUTO_DISMISS_MS = 8_000; // 8秒で自動消滅
@@ -29,9 +29,12 @@ export default function AlertToast() {
           lastSeenId.current = maxId;
           return;
         }
-        const fresh = pickNewAlerts(alerts, lastSeenId.current);
+        // RR好機通知（pair が "RR:" 始まり）は端末設定が OFF ならトーストしない。
+        const fresh = pickNewAlerts(alerts, lastSeenId.current).filter(
+          (a) => getRrEnabled() || !a.pair.startsWith('RR:'),
+        );
+        lastSeenId.current = maxId; // 表示有無に関わらず既読を進める
         if (fresh.length > 0) {
-          lastSeenId.current = maxId;
           setToasts((prev) => [...prev, ...fresh].slice(-MAX_TOASTS));
         }
       } catch {

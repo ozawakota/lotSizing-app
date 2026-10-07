@@ -2,12 +2,16 @@
 -- 投入: npx wrangler d1 execute lotsizing-alert --remote --file=./schema.sql
 
 -- Web Push 購読（1ブラウザ=1行）。endpoint が主キー。
+-- rr_enabled: RR好機通知を受け取るか（既定1=受け取る）。既存DBは下の ALTER で追加。
 CREATE TABLE IF NOT EXISTS subscriptions (
   endpoint   TEXT PRIMARY KEY,
   p256dh     TEXT NOT NULL,
   auth       TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  rr_enabled INTEGER NOT NULL DEFAULT 1
 );
+-- 既存DBへの追加（新規作成時は上の定義で足りるため失敗しても可）:
+--   ALTER TABLE subscriptions ADD COLUMN rr_enabled INTEGER NOT NULL DEFAULT 1;
 
 -- ペアごとの測定状態（15分ローリング窓とクールダウン明け時刻）。
 -- samples は Sample[] の JSON、cooldown_until は epoch ms（なければ NULL）。

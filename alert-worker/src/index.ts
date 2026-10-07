@@ -259,7 +259,7 @@ const runRrDetection = async (env: Env): Promise<void> => {
       console.error(`RR検知 失敗 ${inst}:`, e);
     }
   }
-  if (anyTriggered) await sendPushToAll(env);
+  if (anyTriggered) await sendPushToAll(env, true); // RR有効の購読のみへ
 };
 
 // ---------------------------------------------------------------------------
@@ -310,8 +310,12 @@ interface SubscriptionRow {
   endpoint: string;
 }
 
-const sendPushToAll = async (env: Env): Promise<void> => {
-  const subs = await env.DB.prepare('SELECT endpoint FROM subscriptions').all<SubscriptionRow>();
+// onlyRrEnabled=true のときは rr_enabled=1 の購読にのみ送る（RR好機通知用）。
+const sendPushToAll = async (env: Env, onlyRrEnabled = false): Promise<void> => {
+  const sql = onlyRrEnabled
+    ? 'SELECT endpoint FROM subscriptions WHERE rr_enabled = 1'
+    : 'SELECT endpoint FROM subscriptions';
+  const subs = await env.DB.prepare(sql).all<SubscriptionRow>();
   for (const sub of subs.results ?? []) {
     try {
       const aud = new URL(sub.endpoint).origin;
@@ -395,6 +399,7 @@ const strToB64url = (str: string): string => bytesToB64url(new TextEncoder().enc
 interface SubscribeBody {
   endpoint?: string;
   keys?: { p256dh?: string; auth?: string };
+  rrEnabled?: boolean; // RR好機通知を受け取るか（省略時 true）
 }
 
 const handleSubscribe = async (req: Request, env: Env): Promise<Response> => {
@@ -402,11 +407,24 @@ const handleSubscribe = async (req: Request, env: Env): Promise<Response> => {
   if (!body.endpoint || !body.keys?.p256dh || !body.keys?.auth) {
     return new Response(JSON.stringify({ error: 'invalid subscription' }), { status: 400, headers: CORS_HEADERS });
   }
+  const rr = body.rrEnabled === false ? 0 : 1;
   await env.DB.prepare(
-    'INSERT INTO subscriptions (endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?) ' +
-      'ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth',
+    'INSERT INTO subscriptions (endpoint, p256dh, auth, created_at, rr_enabled) VALUES (?, ?, ?, ?, ?) ' +
+      'ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, rr_enabled = excluded.rr_enabled',
   )
-    .bind(body.endpoint, body.keys.p256dh, body.keys.auth, Date.now())
+    .bind(body.endpoint, body.keys.p256dh, body.keys.auth, Date.now(), rr)
+    .run();
+  return new Response(JSON.stringify({ ok: true }), { headers: CORS_HEADERS });
+};
+
+// RR好機通知の購読ごと ON/OFF を更新（トグル用。購読自体は維持）。
+const handleRrPref = async (req: Request, env: Env): Promise<Response> => {
+  const body = (await req.json()) as { endpoint?: string; enabled?: boolean };
+  if (!body.endpoint) {
+    return new Response(JSON.stringify({ error: 'endpoint required' }), { status: 400, headers: CORS_HEADERS });
+  }
+  await env.DB.prepare('UPDATE subscriptions SET rr_enabled = ? WHERE endpoint = ?')
+    .bind(body.enabled === false ? 0 : 1, body.endpoint)
     .run();
   return new Response(JSON.stringify({ ok: true }), { headers: CORS_HEADERS });
 };
@@ -465,6 +483,7 @@ export default {
 
     if (req.method === 'POST' && pathname === '/subscribe') return handleSubscribe(req, env);
     if (req.method === 'POST' && pathname === '/unsubscribe') return handleUnsubscribe(req, env);
+    if (req.method === 'POST' && pathname === '/rr-pref') return handleRrPref(req, env);
     if (req.method === 'GET' && pathname === '/recent') return handleRecent(env);
     if (req.method === 'GET' && pathname === '/alerts') return handleAlerts(env, new URL(req.url));
     if (req.method === 'GET' && pathname === '/vapidPublicKey') {
