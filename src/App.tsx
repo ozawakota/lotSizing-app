@@ -13,6 +13,7 @@ import ChatBot from './ChatBot'; // AIbot（アプリデータ連携チャット
 import FundManager from './FundManager'; // 資金管理（トレードジャーナル）ページ
 import NewsSummary from './NewsSummary'; // 為替ニュース要約＋売買シグナル ページ
 import TimeframeAnalysis from './TimeframeAnalysis'; // マルチタイムフレーム分析 ページ
+import SupportResistance from './SupportResistance'; // レジサポライン分析 ページ
 import AlertToast from './AlertToast'; // 相場変動の in-app トースト通知
 // 各ページのタイトル（共通ヘッダーに表示）。
 const VIEW_TITLES: Record<AppView, string> = {
@@ -22,6 +23,7 @@ const VIEW_TITLES: Record<AppView, string> = {
   fund: '資金管理',
   news: '為替ニュース',
   mtf: 'タイムフレーム分析',
+  sr: 'レジサポ分析',
 };
 
 setOptions({
@@ -1204,6 +1206,8 @@ const App: FC = () => {
         <NewsSummary />
       ) : view === 'mtf' ? (
         <TimeframeAnalysis />
+      ) : view === 'sr' ? (
+        <SupportResistance />
       ) : view === 'aibot' ? (
         <ChatBot />
       ) : (
