@@ -581,10 +581,11 @@ const classifyPa = async (
   env: Env,
   structure: SlStructure,
   recentCloses: number[],
+  sessionStatus?: string, // 渡すと東京/ロンドン/NYの開閉も判定材料にする
 ): Promise<{ pa: PaResult; breakout: BreakoutProb | null; paEngine: string }> => {
   try {
     if (!env.TYPESAFE_API_KEY) throw new Error('TYPESAFE_API_KEY 未設定');
-    const body = { model: 'jev-latest', ...buildPaJevRequest(structure, recentCloses) };
+    const body = { model: 'jev-latest', ...buildPaJevRequest(structure, recentCloses, sessionStatus) };
     const res = await fetch(JEV_ENDPOINT, {
       method: 'POST',
       headers: { Authorization: `Bearer ${env.TYPESAFE_API_KEY}`, 'Content-Type': 'application/json' },
@@ -599,7 +600,7 @@ const classifyPa = async (
     const r = await env.AI.run(SIGNAL_MODEL, {
       messages: [
         { role: 'system', content: 'あなたは相場のプライスアクション分類器です。指示されたJSONのみ返します。' },
-        { role: 'user', content: buildPaPrompt(structure, recentCloses) },
+        { role: 'user', content: buildPaPrompt(structure, recentCloses, sessionStatus) },
       ],
     });
     return { pa: parsePaAi((r as { response?: unknown }).response), breakout: null, paEngine: 'workers-ai' };
@@ -828,13 +829,14 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
   let currentRate = 0;
   let paEngine = 'jev';
   let sessionCloses: number[] = []; // セッション予測用の代表的な終値列（1h優先）
+  const sessionStatus = sessionStatusText(new Date()); // 東京/ロンドン/NY の開閉を各TF判定に反映
   for (const tf of MTF_TIMEFRAMES) {
     const { candles, currentRate: cr } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf]);
     currentRate = cr;
     const structure = computeStructure(candles, cr);
     const recentCloses = candles.slice(-12).map((c) => c.close);
     if (tf === '1h' || sessionCloses.length === 0) sessionCloses = recentCloses;
-    const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses);
+    const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses, sessionStatus);
     paEngine = eng;
     timeframes.push({
       tf,

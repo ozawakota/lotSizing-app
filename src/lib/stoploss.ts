@@ -197,29 +197,35 @@ export interface JevBody {
   questions: Record<string, unknown>;
 }
 
-const paState = (structure: SlStructure, recentCloses: number[]): unknown => ({
+const paState = (structure: SlStructure, recentCloses: number[], sessionStatus?: string): unknown => ({
   trend: structure.trend,
   currentRate: structure.currentRate,
   swingHigh: structure.swingHigh,
   swingLow: structure.swingLow,
   recentCloses: recentCloses.slice(-12),
+  // 東京/ロンドン/NY の開閉状況（任意）。渡されたときだけ判定の材料にする。
+  ...(sessionStatus ? { sessionStatus } : {}),
 });
 
-/** Jev systemone リクエスト body（model 以外）。1問の Choice でプライスアクションを分類。 */
-export function buildPaJevRequest(structure: SlStructure, recentCloses: number[]): JevBody {
+/** Jev systemone リクエスト body（model 以外）。1問の Choice でプライスアクションを分類。
+ *  sessionStatus を渡すと、東京/ロンドン/NY の開閉状況も考慮して判定させる。 */
+export function buildPaJevRequest(structure: SlStructure, recentCloses: number[], sessionStatus?: string): JevBody {
+  const sessionNote = sessionStatus
+    ? '。また現在のセッション状況(sessionStatus: どの市場が開いているか)も踏まえ、その時間帯に動きやすい方向を考慮してください'
+    : '';
   return {
-    state: paState(structure, recentCloses),
+    state: paState(structure, recentCloses, sessionStatus),
     questions: {
       price_action: {
         type: 'choice',
         instructions:
-          '直近のトレンド・スイング高安・現在値・最近の終値列から、現在の相場のプライスアクションを分類してください。',
+          '直近のトレンド・スイング高安・現在値・最近の終値列から、現在の相場のプライスアクションを分類してください' + sessionNote + '。',
         criteria: PA_CRITERIA,
       },
       breakout: {
         type: 'choice',
         instructions:
-          '現在値・スイング高安・トレンド・最近の終値列から、現在のレンジ(スイング高安)を次の数本でどう抜けるかを判定してください。',
+          '現在値・スイング高安・トレンド・最近の終値列から、現在のレンジ(スイング高安)を次の数本でどう抜けるかを判定してください' + sessionNote + '。',
         criteria: BREAKOUT_CRITERIA,
       },
     },
@@ -349,10 +355,11 @@ export function parseSessionJev(answers: Record<string, JevChoiceAnswer> | undef
 }
 
 /** Workers AI フォールバック用プロンプト（厳密JSONを要求）。 */
-export function buildPaPrompt(structure: SlStructure, recentCloses: number[]): string {
+export function buildPaPrompt(structure: SlStructure, recentCloses: number[], sessionStatus?: string): string {
   return [
     '次の相場状態から、現在のプライスアクションを分類してください。',
-    JSON.stringify(paState(structure, recentCloses)),
+    sessionStatus ? `現在のセッション状況も考慮してください: ${sessionStatus}` : '',
+    JSON.stringify(paState(structure, recentCloses, sessionStatus)),
     '分類の定義:',
     ...Object.entries(PA_CRITERIA).map(([k, v]) => `- ${k}: ${v}`),
     '次のJSONのみ返してください（説明なし）:',

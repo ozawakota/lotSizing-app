@@ -75,6 +75,24 @@ describe('buildPaJevRequest', () => {
     expect(q.type).toBe('choice');
     expect(Object.keys(q.criteria).sort()).toEqual(['buy_dip', 'range', 'reversal', 'sell_rally']);
   });
+
+  it('omits sessionStatus from state when not provided', () => {
+    const { state } = buildPaJevRequest({ trend: 'up', swingHigh: 1.2, swingLow: 1.1, currentRate: 1.15 }, [1.1, 1.15]);
+    expect('sessionStatus' in (state as object)).toBe(false);
+  });
+
+  it('includes sessionStatus in state and instructions when provided', () => {
+    const { state, questions } = buildPaJevRequest(
+      { trend: 'up', swingHigh: 1.2, swingLow: 1.1, currentRate: 1.15 },
+      [1.1, 1.15],
+      '東京: 開場 / ロンドン: 閉場',
+    );
+    expect((state as { sessionStatus?: string }).sessionStatus).toBe('東京: 開場 / ロンドン: 閉場');
+    const breakout = questions.breakout as { instructions: string };
+    const pa = questions.price_action as { instructions: string };
+    expect(breakout.instructions).toContain('セッション');
+    expect(pa.instructions).toContain('セッション');
+  });
 });
 
 describe('parsePaJev', () => {
