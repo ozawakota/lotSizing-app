@@ -25,6 +25,12 @@ const VIEW_TITLES: Record<AppView, string> = {
   mtf: 'タイムフレーム分析',
   sr: 'レジサポ分析',
 };
+// リロードしても現在のページを保持する（localStorage）。不正値はロット計算にフォールバック。
+const VIEW_STORAGE_KEY = 'app_view';
+const loadView = (): AppView => {
+  const v = localStorage.getItem(VIEW_STORAGE_KEY);
+  return v && v in VIEW_TITLES ? (v as AppView) : 'calculator';
+};
 
 setOptions({
   locale: localeJa,
@@ -234,7 +240,7 @@ const WorldClock: FC = () => {
 
 const App: FC = () => {
   // 表示中のページ（ロット計算 / 取引量・センチメント）とハンバーガーメニューの開閉。
-  const [view, setView] = useState<AppView>('calculator');
+  const [view, setView] = useState<AppView>(loadView); // リロードでも保持
   const validCurrencies: CurrencyCode[] = ['JPY', 'USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF', 'XAU'];
   const [currency, setCurrency] = useState<CurrencyCode>(() => {
     const saved = localStorage.getItem('currency') as CurrencyCode | null;
@@ -455,6 +461,11 @@ const App: FC = () => {
     localStorage.setItem('stopLossPips', stopLossPips);
     localStorage.setItem('leverage', String(leverage));
   }, [accountBalance, inputBalance, balanceCurrency, currency, riskPercentage, stopLossPips, leverage]);
+
+  // 現在のページをリロード後も保持する。
+  useEffect(() => {
+    localStorage.setItem(VIEW_STORAGE_KEY, view);
+  }, [view]);
 
   // コンポーネントマウント時に通貨レートを取得
   useEffect(() => {
