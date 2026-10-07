@@ -44,6 +44,7 @@ import {
   parsePaAi,
   parsePaJev,
   parseSessionJev,
+  volumeAnchoredLevel,
   type BreakoutProb,
   type Candle,
   type PaResult,
@@ -548,7 +549,10 @@ interface YahooChart {
   chart?: {
     result?: {
       meta?: { regularMarketPrice?: number };
-      indicators?: { quote?: { high?: (number | null)[]; low?: (number | null)[]; close?: (number | null)[] }[] };
+      timestamp?: number[];
+      indicators?: {
+        quote?: { high?: (number | null)[]; low?: (number | null)[]; close?: (number | null)[]; volume?: (number | null)[] }[];
+      };
     }[];
   };
 }
@@ -564,12 +568,18 @@ const fetchYahooCandles = async (symbol: string, interval: string): Promise<{ ca
   const highs = q?.high ?? [];
   const lows = q?.low ?? [];
   const closes = q?.close ?? [];
+  const volumes = q?.volume ?? [];
+  const times = r?.timestamp ?? [];
   const candles: Candle[] = [];
   for (let i = 0; i < closes.length; i++) {
     const h = highs[i];
     const l = lows[i];
     const c = closes[i];
-    if (typeof h === 'number' && typeof l === 'number' && typeof c === 'number') candles.push({ high: h, low: l, close: c });
+    if (typeof h === 'number' && typeof l === 'number' && typeof c === 'number') {
+      const v = volumes[i];
+      const t = times[i];
+      candles.push({ high: h, low: l, close: c, volume: typeof v === 'number' ? v : undefined, t: typeof t === 'number' ? t : undefined });
+    }
   }
   const currentRate = Number(r?.meta?.regularMarketPrice);
   if (candles.length === 0 || !Number.isFinite(currentRate)) throw new Error('Yahoo: ロウソク足データが不足');
@@ -582,10 +592,11 @@ const classifyPa = async (
   structure: SlStructure,
   recentCloses: number[],
   sessionStatus?: string, // 渡すと東京/ロンドン/NYの開閉も判定材料にする
+  volumeLevel?: number | null, // 渡すと過去の高出来高の節目も判定材料にする
 ): Promise<{ pa: PaResult; breakout: BreakoutProb | null; paEngine: string }> => {
   try {
     if (!env.TYPESAFE_API_KEY) throw new Error('TYPESAFE_API_KEY 未設定');
-    const body = { model: 'jev-latest', ...buildPaJevRequest(structure, recentCloses, sessionStatus) };
+    const body = { model: 'jev-latest', ...buildPaJevRequest(structure, recentCloses, sessionStatus, volumeLevel) };
     const res = await fetch(JEV_ENDPOINT, {
       method: 'POST',
       headers: { Authorization: `Bearer ${env.TYPESAFE_API_KEY}`, 'Content-Type': 'application/json' },
@@ -600,7 +611,7 @@ const classifyPa = async (
     const r = await env.AI.run(SIGNAL_MODEL, {
       messages: [
         { role: 'system', content: 'あなたは相場のプライスアクション分類器です。指示されたJSONのみ返します。' },
-        { role: 'user', content: buildPaPrompt(structure, recentCloses, sessionStatus) },
+        { role: 'user', content: buildPaPrompt(structure, recentCloses, sessionStatus, volumeLevel) },
       ],
     });
     return { pa: parsePaAi((r as { response?: unknown }).response), breakout: null, paEngine: 'workers-ai' };
@@ -810,6 +821,7 @@ interface MtfTf {
   confidence: number;
   breakout: BreakoutProb | null; // レンジ上抜け/下抜け/継続の確率（Jev。失敗時 null）
   rr: RrSetup | null; // 上位TFスイングを目標にした RR 評価（上位TFが無い/目標無しは null）
+  volumeLevel: number | null; // 過去の高出来高の節目価格（30m/1h=2日前・4h=2週前付近。出来高無し=null）
 }
 interface MtfPayload {
   instrument: string;
@@ -823,6 +835,15 @@ interface MtfPayload {
   generatedAt: number;
 }
 
+// 各TFの出来高アンカー: 参照する過去時点と前後の窓（ミリ秒）。30m/1h=2日前±12h, 4h=2週前±2日。
+const DAY_MS = 86_400_000;
+const VOLUME_ANCHOR: Record<SlTimeframe, { agoMs: number; windowMs: number }> = {
+  '15m': { agoMs: 2 * DAY_MS, windowMs: 12 * 3_600_000 },
+  '30m': { agoMs: 2 * DAY_MS, windowMs: 12 * 3_600_000 },
+  '1h': { agoMs: 2 * DAY_MS, windowMs: 12 * 3_600_000 },
+  '4h': { agoMs: 14 * DAY_MS, windowMs: 2 * DAY_MS },
+};
+
 const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
   const symbol = YAHOO_SYMBOL[instrument];
   const timeframes: MtfTf[] = [];
@@ -830,13 +851,17 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
   let paEngine = 'jev';
   let sessionCloses: number[] = []; // セッション予測用の代表的な終値列（1h優先）
   const sessionStatus = sessionStatusText(new Date()); // 東京/ロンドン/NY の開閉を各TF判定に反映
+  const now = Date.now();
   for (const tf of MTF_TIMEFRAMES) {
     const { candles, currentRate: cr } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf]);
     currentRate = cr;
     const structure = computeStructure(candles, cr);
     const recentCloses = candles.slice(-12).map((c) => c.close);
     if (tf === '1h' || sessionCloses.length === 0) sessionCloses = recentCloses;
-    const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses, sessionStatus);
+    // 過去時点の高出来高の節目（出来高が無い FX スポットは null）。Jev の判定材料にも含める。
+    const { agoMs, windowMs } = VOLUME_ANCHOR[tf];
+    const volumeLevel = volumeAnchoredLevel(candles, now, agoMs, windowMs);
+    const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses, sessionStatus, volumeLevel);
     paEngine = eng;
     timeframes.push({
       tf,
@@ -848,6 +873,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       confidence: pa.confidence,
       breakout,
       rr: null, // 下の2パス目で算出（上位TFのスイングが必要なため）
+      volumeLevel,
     });
   }
 

@@ -28,6 +28,7 @@ interface SrTf {
   pa: PaClass;
   paPct: number;
   breakout: BreakoutProb | null;
+  volumeLevel: number | null; // 過去の高出来高の節目（30m/1h=2日前・4h=2週前。出来高無し=null）
 }
 interface MtfResult {
   instrument: string;
@@ -40,6 +41,8 @@ const digitsFor = (instrument: string): number =>
   instrument.startsWith('XAU') ? 2 : instrument.endsWith('JPY') ? 3 : 5;
 
 const TF_LABEL: Record<SlTimeframe, string> = { '15m': '15分足', '30m': '30分足', '1h': '1時間足', '4h': '4時間足' };
+// 出来高の節目が参照する過去時点（カード表示用）。
+const VOLUME_AGO_LABEL: Record<SlTimeframe, string> = { '15m': '2日前', '30m': '2日前', '1h': '2日前', '4h': '2週間前' };
 const TREND_LABEL: Record<'up' | 'down' | 'range', string> = { up: '上昇', down: '下降', range: 'レンジ' };
 const TREND_STYLE: Record<'up' | 'down' | 'range', string> = {
   up: 'bg-green-100 text-green-700',
@@ -100,6 +103,19 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: SrTf; instrument:
         </div>
       </div>
 
+      {/* 出来高の節目（過去時点の高出来高価格。FX等で無ければ非表示） */}
+      {tf.volumeLevel != null && (
+        <div className="mt-2 flex items-center justify-between text-[11px]">
+          <span className="text-gray-500">📊 出来高の節目（{VOLUME_AGO_LABEL[tf.tf]}）</span>
+          <span className="font-semibold text-gray-700">
+            {tf.volumeLevel.toFixed(digits)}
+            <span className={tf.volumeLevel >= currentRate ? 'ml-1 text-red-700' : 'ml-1 text-green-700'}>
+              {tf.volumeLevel >= currentRate ? '（レジ）' : '（サポ）'}
+            </span>
+          </span>
+        </div>
+      )}
+
       {/* ブレイク/反転 判定 */}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
         {tf.breakout ? (
@@ -129,7 +145,12 @@ async function toSpotBasis(body: MtfResult): Promise<MtfResult> {
   return {
     ...body,
     currentRate: spot,
-    timeframes: body.timeframes.map((t) => ({ ...t, swingHigh: t.swingHigh - offset, swingLow: t.swingLow - offset })),
+    timeframes: body.timeframes.map((t) => ({
+      ...t,
+      swingHigh: t.swingHigh - offset,
+      swingLow: t.swingLow - offset,
+      volumeLevel: t.volumeLevel == null ? null : t.volumeLevel - offset,
+    })),
   };
 }
 

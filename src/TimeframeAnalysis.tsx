@@ -38,6 +38,7 @@ interface MtfTf {
   confidence: number;
   breakout: BreakoutProb | null;
   rr: RrSetup | null;
+  volumeLevel: number | null; // 過去の高出来高の節目（レジサポページで使用。TF分析では表示しないが整合のため保持）
 }
 interface MtfResult {
   instrument: string;
@@ -67,6 +68,7 @@ async function toSpotBasis(body: MtfResult): Promise<MtfResult> {
       swingHigh: t.swingHigh - off,
       swingLow: t.swingLow - off,
       rr: t.rr ? shiftRr(t.rr) : null,
+      volumeLevel: t.volumeLevel == null ? null : t.volumeLevel - off,
     })),
     rrOpportunity: body.rrOpportunity ? shiftRr(body.rrOpportunity) : null,
   };

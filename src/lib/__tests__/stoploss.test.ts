@@ -10,6 +10,7 @@ import {
   parsePaJev,
   parseSessionJev,
   pipSize,
+  volumeAnchoredLevel,
   type Candle,
   type SessionState,
   type SlStructure,
@@ -23,6 +24,32 @@ describe('pipSize', () => {
     expect(pipSize('XAU_USD')).toBe(0.1);
     expect(pipSize('USD_JPY')).toBe(0.01);
     expect(pipSize('GBP_USD')).toBe(0.0001);
+  });
+});
+
+describe('volumeAnchoredLevel', () => {
+  const HOUR = 3_600_000;
+  const DAY = 86_400_000;
+  const now = 10 * DAY; // 基準の現在時刻
+
+  it('参照時点(2日前)±窓で最大出来高の足の終値を返す', () => {
+    const at = (daysAgo: number) => (now - daysAgo * DAY) / 1000; // UNIX秒
+    const candles: Candle[] = [
+      { high: 0, low: 0, close: 100, volume: 50, t: at(2) }, // 2日前ちょうど
+      { high: 0, low: 0, close: 105, volume: 200, t: at(2) + 3 * HOUR / 1000 }, // 窓内・最大出来高
+      { high: 0, low: 0, close: 999, volume: 999, t: at(0) }, // 窓外（現在付近）
+    ];
+    expect(volumeAnchoredLevel(candles, now, 2 * DAY, 12 * HOUR)).toBe(105);
+  });
+
+  it('出来高が無い（FXスポット等）は null', () => {
+    const candles: Candle[] = [{ high: 0, low: 0, close: 100, t: (now - 2 * DAY) / 1000 }];
+    expect(volumeAnchoredLevel(candles, now, 2 * DAY, 12 * HOUR)).toBeNull();
+  });
+
+  it('窓内に足が無ければ null', () => {
+    const candles: Candle[] = [{ high: 0, low: 0, close: 100, volume: 10, t: now / 1000 }];
+    expect(volumeAnchoredLevel(candles, now, 2 * DAY, 1 * HOUR)).toBeNull();
   });
 });
 
@@ -92,6 +119,17 @@ describe('buildPaJevRequest', () => {
     const pa = questions.price_action as { instructions: string };
     expect(breakout.instructions).toContain('セッション');
     expect(pa.instructions).toContain('セッション');
+  });
+
+  it('includes volumeLevel in state and instructions when provided', () => {
+    const { state, questions } = buildPaJevRequest(
+      { trend: 'up', swingHigh: 1.2, swingLow: 1.1, currentRate: 1.15 },
+      [1.1, 1.15],
+      undefined,
+      1.18,
+    );
+    expect((state as { volumeLevel?: number }).volumeLevel).toBe(1.18);
+    expect((questions.breakout as { instructions: string }).instructions).toContain('出来高');
   });
 });
 

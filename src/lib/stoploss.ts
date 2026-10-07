@@ -30,6 +30,32 @@ export interface Candle {
   high: number;
   low: number;
   close: number;
+  volume?: number; // 出来高（Yahoo。FXスポット=Xは0/欠損のことが多い）
+  t?: number; // ロウソク足の時刻（UNIX秒）
+}
+
+/**
+ * 指定の過去時点(nowMs − agoMs)付近(±windowMs)で最も出来高が多かったロウソク足の終値を返す。
+ * 「過去にその時間帯で商いが膨らんだ価格＝レジサポの節目」を1本取り出す用途。
+ * 出来高データが無い/全て0（FXスポット等）、または窓内に足が無ければ null。
+ */
+export function volumeAnchoredLevel(
+  candles: Candle[],
+  nowMs: number,
+  agoMs: number,
+  windowMs: number,
+): number | null {
+  const center = nowMs - agoMs;
+  const lo = center - windowMs;
+  const hi = center + windowMs;
+  let best: Candle | null = null;
+  for (const c of candles) {
+    if (c.t == null || !(c.volume && c.volume > 0)) continue;
+    const tMs = c.t * 1000;
+    if (tMs < lo || tMs > hi) continue;
+    if (!best || (c.volume ?? 0) > (best.volume ?? 0)) best = c;
+  }
+  return best ? best.close : null;
 }
 
 // プライスアクション分類。
@@ -197,7 +223,12 @@ export interface JevBody {
   questions: Record<string, unknown>;
 }
 
-const paState = (structure: SlStructure, recentCloses: number[], sessionStatus?: string): unknown => ({
+const paState = (
+  structure: SlStructure,
+  recentCloses: number[],
+  sessionStatus?: string,
+  volumeLevel?: number | null,
+): unknown => ({
   trend: structure.trend,
   currentRate: structure.currentRate,
   swingHigh: structure.swingHigh,
@@ -205,27 +236,35 @@ const paState = (structure: SlStructure, recentCloses: number[], sessionStatus?:
   recentCloses: recentCloses.slice(-12),
   // 東京/ロンドン/NY の開閉状況（任意）。渡されたときだけ判定の材料にする。
   ...(sessionStatus ? { sessionStatus } : {}),
+  // 過去の高出来高の節目価格（任意）。レジサポとして重視させる。
+  ...(volumeLevel != null ? { volumeLevel } : {}),
 });
 
 /** Jev systemone リクエスト body（model 以外）。1問の Choice でプライスアクションを分類。
- *  sessionStatus を渡すと、東京/ロンドン/NY の開閉状況も考慮して判定させる。 */
-export function buildPaJevRequest(structure: SlStructure, recentCloses: number[], sessionStatus?: string): JevBody {
+ *  sessionStatus を渡すと市場の開閉状況、volumeLevel を渡すと過去の高出来高の節目も考慮させる。 */
+export function buildPaJevRequest(
+  structure: SlStructure,
+  recentCloses: number[],
+  sessionStatus?: string,
+  volumeLevel?: number | null,
+): JevBody {
   const sessionNote = sessionStatus
     ? '。また現在のセッション状況(sessionStatus: どの市場が開いているか)も踏まえ、その時間帯に動きやすい方向を考慮してください'
     : '';
+  const volumeNote = volumeLevel != null ? '。過去に出来高が膨らんだ価格(volumeLevel)は重要なレジサポ(節目)として考慮してください' : '';
   return {
-    state: paState(structure, recentCloses, sessionStatus),
+    state: paState(structure, recentCloses, sessionStatus, volumeLevel),
     questions: {
       price_action: {
         type: 'choice',
         instructions:
-          '直近のトレンド・スイング高安・現在値・最近の終値列から、現在の相場のプライスアクションを分類してください' + sessionNote + '。',
+          '直近のトレンド・スイング高安・現在値・最近の終値列から、現在の相場のプライスアクションを分類してください' + sessionNote + volumeNote + '。',
         criteria: PA_CRITERIA,
       },
       breakout: {
         type: 'choice',
         instructions:
-          '現在値・スイング高安・トレンド・最近の終値列から、現在のレンジ(スイング高安)を次の数本でどう抜けるかを判定してください' + sessionNote + '。',
+          '現在値・スイング高安・トレンド・最近の終値列から、現在のレンジ(スイング高安)を次の数本でどう抜けるかを判定してください' + sessionNote + volumeNote + '。',
         criteria: BREAKOUT_CRITERIA,
       },
     },
@@ -355,11 +394,17 @@ export function parseSessionJev(answers: Record<string, JevChoiceAnswer> | undef
 }
 
 /** Workers AI フォールバック用プロンプト（厳密JSONを要求）。 */
-export function buildPaPrompt(structure: SlStructure, recentCloses: number[], sessionStatus?: string): string {
+export function buildPaPrompt(
+  structure: SlStructure,
+  recentCloses: number[],
+  sessionStatus?: string,
+  volumeLevel?: number | null,
+): string {
   return [
     '次の相場状態から、現在のプライスアクションを分類してください。',
     sessionStatus ? `現在のセッション状況も考慮してください: ${sessionStatus}` : '',
-    JSON.stringify(paState(structure, recentCloses, sessionStatus)),
+    volumeLevel != null ? `過去に出来高が膨らんだ価格(${volumeLevel})は重要なレジサポとして考慮してください。` : '',
+    JSON.stringify(paState(structure, recentCloses, sessionStatus, volumeLevel)),
     '分類の定義:',
     ...Object.entries(PA_CRITERIA).map(([k, v]) => `- ${k}: ${v}`),
     '次のJSONのみ返してください（説明なし）:',
