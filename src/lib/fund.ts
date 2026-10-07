@@ -170,3 +170,116 @@ export function computeSummary(
     equityCurve,
   };
 }
+
+// ── 資金推移シミュレーション（複利・期待値） ─────────────────────────────
+// 毎トレード「その時点の残高 × リスク%」を賭け、勝ちで +リスク×RR、負けで −リスク。
+// 勝敗を平均化した1トレードあたりの幾何平均成長率で滑らかに複利する。
+
+export interface GrowthParams {
+  startingBalance: number; // 起点資金
+  targetBalance: number; // 目標金額
+  winRate: number; // 勝率 0..1
+  tradesPerMonth: number; // 毎月のトレード回数
+  rewardRatio: number; // リスクリワードの R（1:3 なら 3）
+  riskPercents: number[]; // 比較するリスク%（例: [2,3,4,5]）
+}
+
+export interface GrowthLine {
+  riskPercent: number; // リスク%（2,3,4,5…）
+  growthPerTrade: number; // 1トレードあたりの幾何平均成長率 g
+  monthsToTarget: number | null; // 目標到達までの月数（厳密値・未到達は null）
+  points: { month: number; balance: number }[]; // 月ごとの残高（目標でクランプ）
+}
+
+export interface GrowthResult {
+  lines: GrowthLine[];
+  maxMonths: number; // 横軸の上限（到達した中で最長、全未到達なら既定）
+}
+
+const GROWTH_MONTH_CAP = 120; // 横軸の上限（10年）。これを超える到達も表示月数は返す。
+const GROWTH_DEFAULT_MONTHS = 24; // 全リスク%が未到達のときの既定横軸。
+
+// 1トレードあたりの幾何平均成長率 g = (1 + RR·r)^勝率 × (1 − r)^(1−勝率)。
+export function growthPerTrade(winRate: number, rewardRatio: number, riskFraction: number): number {
+  return Math.pow(1 + rewardRatio * riskFraction, winRate) * Math.pow(1 - riskFraction, 1 - winRate);
+}
+
+// 起点が目標以上・不正値、または g≤1（期待値マイナス）なら到達しない（null）。
+function monthsToReach(startingBalance: number, targetBalance: number, tradesPerMonth: number, g: number): number | null {
+  const valid = startingBalance > 0 && targetBalance > startingBalance && tradesPerMonth > 0;
+  return valid && g > 1 ? Math.log(targetBalance / startingBalance) / (tradesPerMonth * Math.log(g)) : null;
+}
+
+export function simulateGrowth(params: GrowthParams): GrowthResult {
+  const { startingBalance, targetBalance, winRate, tradesPerMonth, rewardRatio, riskPercents } = params;
+
+  // 起点が目標以上、または不正値なら推移を描かない。
+  const valid = startingBalance > 0 && targetBalance > startingBalance && tradesPerMonth > 0;
+
+  const raw = riskPercents.map((riskPercent) => {
+    const r = riskPercent / 100;
+    const g = growthPerTrade(winRate, rewardRatio, r);
+    const monthsToTarget = monthsToReach(startingBalance, targetBalance, tradesPerMonth, g);
+    return { riskPercent, g, monthsToTarget };
+  });
+
+  // 横軸: 到達する中で最長の月数（切り上げ・上限 CAP）。全未到達なら既定。
+  const reachable = raw.map((l) => l.monthsToTarget).filter((m): m is number => m !== null);
+  const maxMonths = reachable.length
+    ? Math.min(GROWTH_MONTH_CAP, Math.max(1, Math.ceil(Math.max(...reachable))))
+    : GROWTH_DEFAULT_MONTHS;
+
+  const lines: GrowthLine[] = raw.map(({ riskPercent, g, monthsToTarget }) => {
+    const points: { month: number; balance: number }[] = [];
+    for (let month = 0; month <= maxMonths; month++) {
+      const grown = valid ? startingBalance * Math.pow(g, tradesPerMonth * month) : startingBalance;
+      // 目標に達したら以降は目標でクランプ（縦軸を 起点〜目標 に収める）。
+      points.push({ month, balance: Math.min(grown, targetBalance) });
+    }
+    return { riskPercent, growthPerTrade: g, monthsToTarget, points };
+  });
+
+  return { lines, maxMonths };
+}
+
+// 選択したリスク%1本の詳細。期待値の内訳（1トレードの平均＝算術）と、
+// 複利の推移（月利・初月の増加額・到達回数＝幾何平均 g ベース）を返す。
+export interface GrowthDetail {
+  riskPercent: number;
+  // 1トレードの内訳（%は小数ではなくパーセント値。金額は初回＝起点ベース）
+  winPct: number; // 勝ち時の増加率（+RR×r）… 例 6
+  lossPct: number; // 負け時の減少率の大きさ（r）… 例 2
+  expectancyPct: number; // 1トレード期待値（算術平均）r×(p×RR−(1−p))… 例 2.8
+  initialRiskAmount: number; // 初回リスク額 B×r
+  initialWinAmount: number; // 初回の勝ち利益 B×RR×r
+  initialExpectancyAmount: number; // 初回の期待損益 B×expectancy
+  // 複利の推移（幾何平均 g）
+  growthPerTrade: number; // g
+  monthlyRatePct: number; // 月利 (g^毎月回数 − 1)×100
+  firstMonthGain: number; // 初月の期待増加額 B×(g^毎月回数 − 1)
+  monthsToTarget: number | null; // 目標到達までの月数（厳密値・未到達は null）
+  tradesToTarget: number | null; // 目標到達までの総トレード回数（切り上げ・未到達は null）
+}
+
+export function growthDetail(params: GrowthParams, riskPercent: number): GrowthDetail {
+  const { startingBalance: B, targetBalance, winRate: p, tradesPerMonth: m, rewardRatio: RR } = params;
+  const r = riskPercent / 100;
+  const expectancyFrac = r * (p * RR - (1 - p));
+  const g = growthPerTrade(p, RR, r);
+  const monthlyFactor = Math.pow(g, m); // 1ヶ月（m回）の複利係数
+  const monthsToTarget = monthsToReach(B, targetBalance, m, g);
+  return {
+    riskPercent,
+    winPct: RR * r * 100,
+    lossPct: r * 100,
+    expectancyPct: expectancyFrac * 100,
+    initialRiskAmount: B * r,
+    initialWinAmount: B * RR * r,
+    initialExpectancyAmount: B * expectancyFrac,
+    growthPerTrade: g,
+    monthlyRatePct: (monthlyFactor - 1) * 100,
+    firstMonthGain: B * (monthlyFactor - 1),
+    monthsToTarget,
+    tradesToTarget: monthsToTarget === null ? null : Math.ceil(monthsToTarget * m),
+  };
+}

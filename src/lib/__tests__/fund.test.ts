@@ -3,10 +3,14 @@ import {
   aggregateByTag,
   computeSummary,
   dailyPnl,
+  growthDetail,
+  growthPerTrade,
   monthGrid,
   pnlOf,
+  simulateGrowth,
   type Cashflow,
   type FundSettings,
+  type GrowthParams,
   type Trade,
 } from '../fund';
 
@@ -134,5 +138,117 @@ describe('monthGrid', () => {
     expect(days[0]).toBe('2026-02-01');
     expect(days[days.length - 1]).toBe('2026-02-28');
     expect(days.length).toBe(28);
+  });
+});
+
+describe('growthPerTrade', () => {
+  it('g = (1 + RR·r)^勝率 × (1 − r)^(1−勝率)', () => {
+    // 勝率50%・RR3・リスク2% → (1.06)^0.5 × (0.98)^0.5
+    expect(growthPerTrade(0.5, 3, 0.02)).toBeCloseTo(Math.sqrt(1.06 * 0.98), 10);
+  });
+
+  it('勝率100%なら勝ちの倍率そのもの、0%なら負けの倍率そのもの', () => {
+    expect(growthPerTrade(1, 3, 0.05)).toBeCloseTo(1.15, 10);
+    expect(growthPerTrade(0, 3, 0.05)).toBeCloseTo(0.95, 10);
+  });
+});
+
+describe('simulateGrowth', () => {
+  const base: GrowthParams = {
+    startingBalance: 100_000,
+    targetBalance: 1_000_000,
+    winRate: 0.5,
+    tradesPerMonth: 20,
+    rewardRatio: 3,
+    riskPercents: [2, 3, 4, 5],
+  };
+
+  it('各リスク%の線を返し、残高は目標でクランプされる', () => {
+    const { lines } = simulateGrowth(base);
+    expect(lines.map((l) => l.riskPercent)).toEqual([2, 3, 4, 5]);
+    for (const l of lines) {
+      expect(l.points[0].balance).toBe(100_000); // 月0は起点
+      expect(Math.max(...l.points.map((p) => p.balance))).toBeLessThanOrEqual(1_000_000);
+    }
+  });
+
+  it('期待値プラス（g>1）なら到達月を返し、リスクが高いほど速い', () => {
+    const { lines } = simulateGrowth(base);
+    const months = lines.map((l) => l.monthsToTarget);
+    expect(months.every((m) => m !== null)).toBe(true);
+    // 2% < 3% < 4% < 5% の順に到達が速くなる（月数は小さくなる）。
+    for (let i = 1; i < months.length; i++) {
+      expect(months[i]!).toBeLessThan(months[i - 1]!);
+    }
+  });
+
+  it('到達月は複利式と一致する', () => {
+    const { lines } = simulateGrowth({ ...base, riskPercents: [3] });
+    const g = growthPerTrade(0.5, 3, 0.03);
+    const expected = Math.log(10) / (20 * Math.log(g)); // target/start = 10
+    expect(lines[0].monthsToTarget).toBeCloseTo(expected, 8);
+  });
+
+  it('横軸は到達する中で最長（最もリスクの低い線）の月数を切り上げたもの', () => {
+    const { lines, maxMonths } = simulateGrowth(base);
+    const slowest = Math.max(...lines.map((l) => l.monthsToTarget!));
+    expect(maxMonths).toBe(Math.ceil(slowest));
+  });
+
+  it('期待値マイナス（g≤1）は未到達（null）', () => {
+    // 勝率20%・RR3: g = (1.09)^0.2 × (0.97)^0.8 < 1
+    const { lines } = simulateGrowth({ ...base, winRate: 0.2, riskPercents: [3] });
+    expect(lines[0].growthPerTrade).toBeLessThanOrEqual(1);
+    expect(lines[0].monthsToTarget).toBeNull();
+  });
+
+  it('起点が不正（0以下/目標以上）なら未到達で平坦', () => {
+    const { lines } = simulateGrowth({ ...base, startingBalance: 0 });
+    expect(lines[0].monthsToTarget).toBeNull();
+    expect(lines[0].points.every((p) => p.balance === 0)).toBe(true);
+  });
+});
+
+describe('growthDetail', () => {
+  const base: GrowthParams = {
+    startingBalance: 50_000,
+    targetBalance: 1_000_000,
+    winRate: 0.6,
+    tradesPerMonth: 10,
+    rewardRatio: 3,
+    riskPercents: [2, 3, 4, 5],
+  };
+
+  it('勝率60%・RR3・2% の1トレード内訳（勝ち+6%/負け-2%/期待値+2.8%）', () => {
+    const d = growthDetail(base, 2);
+    expect(d.winPct).toBeCloseTo(6, 10);
+    expect(d.lossPct).toBeCloseTo(2, 10);
+    expect(d.expectancyPct).toBeCloseTo(2.8, 10); // 2% ×(0.6×3 − 0.4) = 2% ×1.4
+  });
+
+  it('初回の金額換算は起点ベース（リスク1,000円・勝ち3,000円・期待値1,400円）', () => {
+    const d = growthDetail(base, 2);
+    expect(d.initialRiskAmount).toBeCloseTo(1_000, 6);
+    expect(d.initialWinAmount).toBeCloseTo(3_000, 6);
+    expect(d.initialExpectancyAmount).toBeCloseTo(1_400, 6);
+  });
+
+  it('月利・初月増加額は幾何平均 g の月複利と一致', () => {
+    const d = growthDetail(base, 2);
+    const g = growthPerTrade(0.6, 3, 0.02);
+    const monthlyFactor = Math.pow(g, 10);
+    expect(d.monthlyRatePct).toBeCloseTo((monthlyFactor - 1) * 100, 8);
+    expect(d.firstMonthGain).toBeCloseTo(50_000 * (monthlyFactor - 1), 6);
+  });
+
+  it('総トレード回数 = 到達月数 × 毎月回数 の切り上げ', () => {
+    const d = growthDetail(base, 3);
+    expect(d.tradesToTarget).toBe(Math.ceil(d.monthsToTarget! * 10));
+  });
+
+  it('期待値マイナスなら到達月・総回数は null', () => {
+    const d = growthDetail({ ...base, winRate: 0.2 }, 3);
+    expect(d.monthsToTarget).toBeNull();
+    expect(d.tradesToTarget).toBeNull();
   });
 });

@@ -4,7 +4,17 @@
 // VITE_GOOGLE_CLIENT_ID / VITE_FUND_URL 未設定時は案内のみ表示。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Popup } from '@mobiscroll/react';
-import { aggregateByTag, computeSummary, pnlOf, type Cashflow, type FundSettings, type Trade } from '@/lib/fund';
+import {
+  aggregateByTag,
+  computeSummary,
+  growthDetail,
+  pnlOf,
+  simulateGrowth,
+  type Cashflow,
+  type FundSettings,
+  type GrowthResult,
+  type Trade,
+} from '@/lib/fund';
 import TradeCalendar from './TradeCalendar';
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
@@ -66,6 +76,247 @@ function EquityCurve({ startingBalance, balances }: { startingBalance: number; b
   );
 }
 
+// リスク%ごとの色（2→5% でリスク増）。
+const RISK_COLORS: Record<number, string> = { 2: '#3b82f6', 3: '#16a34a', 4: '#f59e0b', 5: '#dc2626' };
+const RISK_PERCENTS = [2, 3, 4, 5];
+
+// 月数を「Nヶ月」/「X年Yヶ月」で表示（未到達は「—」）。
+const formatMonths = (m: number | null): string => {
+  if (m === null) return '—';
+  const months = Math.ceil(m);
+  if (months < 12) return `${months}ヶ月`;
+  const y = Math.floor(months / 12);
+  const mo = months % 12;
+  return mo === 0 ? `${y}年` : `${y}年${mo}ヶ月`;
+};
+
+// リスク%別の資金推移を重ね描きする折れ線グラフ。縦軸=起点〜目標・横軸=0〜maxMonths。
+function GrowthChart({ result, startingBalance, targetBalance }: { result: GrowthResult; startingBalance: number; targetBalance: number }) {
+  const w = 300;
+  const h = 150;
+  const span = targetBalance - startingBalance || 1;
+  const xOf = (month: number) => (result.maxMonths > 0 ? (month / result.maxMonths) * w : 0);
+  const yOf = (balance: number) => h - ((balance - startingBalance) / span) * h;
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-40">
+      {/* 目標ライン（上端） */}
+      <line x1="0" y1={yOf(targetBalance)} x2={w} y2={yOf(targetBalance)} stroke="#9ca3af" strokeWidth="1" strokeDasharray="4 3" />
+      {result.lines.map((l) => (
+        <path
+          key={l.riskPercent}
+          d={l.points.map((p, i) => `${i === 0 ? 'M' : 'L'}${xOf(p.month).toFixed(1)},${yOf(p.balance).toFixed(1)}`).join(' ')}
+          fill="none"
+          stroke={RISK_COLORS[l.riskPercent] ?? '#6b7280'}
+          strokeWidth="2"
+        />
+      ))}
+    </svg>
+  );
+}
+
+// シミュレーション入力。タブ切り替えで失わないよう親で保持する。
+interface SimInputs {
+  winRatePct: number;
+  tradesPerMonth: number;
+  rewardRatio: number;
+  targetBalance: number;
+}
+const DEFAULT_SIM_INPUTS: SimInputs = { winRatePct: 50, tradesPerMonth: 20, rewardRatio: 3, targetBalance: 1_000_000 };
+
+// シミュレーション入力はページ移動・再読み込みでも失わないよう localStorage に保持する。
+const SIM_INPUTS_KEY = 'fund_sim_inputs';
+const SIM_RISK_KEY = 'fund_sim_risk';
+const loadSimInputs = (): SimInputs => {
+  try {
+    const p = JSON.parse(localStorage.getItem(SIM_INPUTS_KEY) ?? '{}') as Partial<SimInputs>;
+    return {
+      winRatePct: Number(p.winRatePct ?? DEFAULT_SIM_INPUTS.winRatePct),
+      tradesPerMonth: Number(p.tradesPerMonth ?? DEFAULT_SIM_INPUTS.tradesPerMonth),
+      rewardRatio: Number(p.rewardRatio ?? DEFAULT_SIM_INPUTS.rewardRatio),
+      targetBalance: Number(p.targetBalance ?? DEFAULT_SIM_INPUTS.targetBalance),
+    };
+  } catch {
+    return DEFAULT_SIM_INPUTS;
+  }
+};
+const loadSimRisk = (): number => {
+  const n = Number(localStorage.getItem(SIM_RISK_KEY));
+  return RISK_PERCENTS.includes(n) ? n : 2;
+};
+
+// 資金推移シミュレーションタブ。起点=記録タブの初期残高を流用。入力値は親が保持（制御コンポーネント）。
+function SimulationTab({
+  startingBalance,
+  currency,
+  inputs,
+  onChange,
+  selectedRisk,
+  onSelectRisk,
+}: {
+  startingBalance: number;
+  currency: string;
+  inputs: SimInputs;
+  onChange: (next: SimInputs) => void;
+  selectedRisk: number;
+  onSelectRisk: (r: number) => void;
+}) {
+  const { winRatePct, tradesPerMonth, rewardRatio, targetBalance } = inputs;
+  const setField = (patch: Partial<SimInputs>) => onChange({ ...inputs, ...patch });
+
+  const simParams = useMemo(
+    () => ({
+      startingBalance,
+      targetBalance,
+      winRate: winRatePct / 100,
+      tradesPerMonth,
+      rewardRatio,
+      riskPercents: RISK_PERCENTS,
+    }),
+    [startingBalance, targetBalance, winRatePct, tradesPerMonth, rewardRatio],
+  );
+  const result = useMemo(() => simulateGrowth(simParams), [simParams]);
+  const detail = useMemo(() => growthDetail(simParams, selectedRisk), [simParams, selectedRisk]);
+
+  const inputCls = 'rounded border border-gray-300 px-2 py-1 text-sm bg-white w-full';
+  const valid = startingBalance > 0 && targetBalance > startingBalance && tradesPerMonth > 0;
+
+  return (
+    <div className="space-y-3">
+      {/* 入力 */}
+      <div className="bg-gray-50 rounded-md p-3 border border-gray-200 space-y-2">
+        <p className="text-sm font-bold text-gray-700">条件</p>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="text-xs text-gray-600">
+            勝率（%）
+            <input type="number" min={0} max={100} value={winRatePct} onChange={(e) => setField({ winRatePct: Number(e.target.value) })} className={inputCls} />
+          </label>
+          <label className="text-xs text-gray-600">
+            毎月トレード回数
+            <input type="number" min={1} value={tradesPerMonth} onChange={(e) => setField({ tradesPerMonth: Number(e.target.value) })} className={inputCls} />
+          </label>
+          <label className="text-xs text-gray-600">
+            リスクリワード（1:X）
+            <input type="number" min={0.1} step={0.1} value={rewardRatio} onChange={(e) => setField({ rewardRatio: Number(e.target.value) })} className={inputCls} />
+          </label>
+          <label className="text-xs text-gray-600">
+            目標金額
+            <input type="number" min={1} value={targetBalance} onChange={(e) => setField({ targetBalance: Number(e.target.value) })} className={inputCls} />
+          </label>
+        </div>
+        <p className="text-[11px] text-gray-500">
+          起点資金（記録タブの初期残高）: <span className="font-bold text-gray-700">{yen(startingBalance)} {currency}</span>
+        </p>
+      </div>
+
+      {!valid ? (
+        <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-700">
+          {startingBalance <= 0
+            ? '記録タブの「初期残高」を設定すると資金推移を表示できます。'
+            : '目標金額は起点資金より大きい値にしてください。'}
+        </div>
+      ) : (
+        <>
+          {/* グラフ */}
+          <div className="bg-blue-50 rounded-md p-3 border border-blue-200">
+            <div className="flex justify-between items-baseline mb-1">
+              <p className="text-sm text-gray-600">資金推移（複利・リスク%別）</p>
+              <p className="text-xs text-gray-500">目標 {yen(targetBalance)} {currency}</p>
+            </div>
+            <GrowthChart result={result} startingBalance={startingBalance} targetBalance={targetBalance} />
+          </div>
+
+          {/* 到達一覧（タップで詳細表示するリスク%を選択） */}
+          <div className="bg-white rounded-md border border-gray-200 divide-y">
+            {result.lines.map((l) => {
+              const active = l.riskPercent === selectedRisk;
+              return (
+                <button
+                  type="button"
+                  key={l.riskPercent}
+                  onClick={() => onSelectRisk(l.riskPercent)}
+                  className={`w-full flex items-center justify-between px-3 py-2 text-sm text-left ${active ? 'bg-orange-50' : 'bg-white'}`}
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RISK_COLORS[l.riskPercent] }} />
+                    <span className={active ? 'font-bold text-orange-700' : ''}>リスク {l.riskPercent}%</span>
+                  </span>
+                  <span className={l.monthsToTarget === null ? 'text-red-600 text-xs' : 'font-bold text-gray-800'}>
+                    {l.monthsToTarget === null ? '未到達（期待値マイナス）' : `${formatMonths(l.monthsToTarget)}で到達`}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* 選択リスク%の詳細 */}
+          <div className="rounded-md border p-3 space-y-3" style={{ borderColor: RISK_COLORS[selectedRisk] ?? '#d1d5db' }}>
+            <p className="text-sm font-bold text-gray-700">
+              リスク {selectedRisk}% の詳細
+              <span className="font-normal text-[11px] text-gray-500"> ・初回リスク額 {yen(Math.round(detail.initialRiskAmount))} {currency}</span>
+            </p>
+
+            {/* 1トレードの内訳（算術平均） */}
+            <div>
+              <p className="text-xs font-bold text-gray-600 mb-1">1トレードの内訳（平均）</p>
+              <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                <div className="bg-green-50 rounded py-1">
+                  <p className="text-gray-500">勝ち（{winRatePct}%）</p>
+                  <p className="font-bold text-green-600">+{detail.winPct.toFixed(1)}%</p>
+                  <p className="text-[11px] text-gray-500">+{yen(Math.round(detail.initialWinAmount))}</p>
+                </div>
+                <div className="bg-red-50 rounded py-1">
+                  <p className="text-gray-500">負け（{100 - winRatePct}%）</p>
+                  <p className="font-bold text-red-600">−{detail.lossPct.toFixed(1)}%</p>
+                  <p className="text-[11px] text-gray-500">−{yen(Math.round(detail.initialRiskAmount))}</p>
+                </div>
+                <div className="bg-blue-50 rounded py-1">
+                  <p className="text-gray-500">期待値</p>
+                  <p className={`font-bold ${detail.expectancyPct >= 0 ? 'text-blue-700' : 'text-red-600'}`}>
+                    {detail.expectancyPct >= 0 ? '+' : ''}{detail.expectancyPct.toFixed(2)}%
+                  </p>
+                  <p className="text-[11px] text-gray-500">
+                    {detail.initialExpectancyAmount >= 0 ? '+' : ''}{yen(Math.round(detail.initialExpectancyAmount))}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* 複利の推移（幾何平均） */}
+            <div>
+              <p className="text-xs font-bold text-gray-600 mb-1">複利の推移</p>
+              <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                <div>
+                  <p className="text-gray-500">月利</p>
+                  <p className={`font-bold ${detail.monthlyRatePct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {detail.monthlyRatePct >= 0 ? '+' : ''}{detail.monthlyRatePct.toFixed(1)}%
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-500">初月の増加額</p>
+                  <p className={`font-bold ${detail.firstMonthGain >= 0 ? 'text-gray-800' : 'text-red-600'}`}>
+                    {detail.firstMonthGain >= 0 ? '+' : ''}{yen(Math.round(detail.firstMonthGain))}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-500">目標到達</p>
+                  <p className="font-bold text-gray-800">
+                    {detail.monthsToTarget === null ? '未到達' : `${formatMonths(detail.monthsToTarget)}`}
+                  </p>
+                  {detail.tradesToTarget !== null && <p className="text-[11px] text-gray-500">約{detail.tradesToTarget}回</p>}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p className="text-[11px] text-gray-400">
+            ※ 毎トレード「その時点の残高×リスク%」を賭ける複利・期待値モデル。内訳は1トレードの平均（算術）、推移グラフ・到達月は幾何平均（典型値）ベース。実際の成績を保証するものではありません。
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function FundManager() {
   const [idToken, setIdToken] = useState(storedToken); // 有効な保存トークンがあれば復元
   const [email, setEmail] = useState(() => (storedToken() ? decodeEmail(storedToken()) : ''));
@@ -74,10 +325,28 @@ export default function FundManager() {
   const [cashflows, setCashflows] = useState<Cashflow[]>([]);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
-  const [modalTags, setModalTags] = useState<string[]>([]);
-  const [tagDraft, setTagDraft] = useState('');
+  const [tradeResult, setTradeResult] = useState<'win' | 'loss'>('win'); // 追加フォームの勝ち/負け
   const [error, setError] = useState('');
+  const [tab, setTab] = useState<'record' | 'sim'>('record'); // 記録 / シミュレーション
+  const [simInputs, setSimInputs] = useState<SimInputs>(loadSimInputs); // ページ移動・再読み込みでも保持（localStorage）
+  const [selectedRisk, setSelectedRisk] = useState<number>(loadSimRisk); // 詳細表示するリスク%（localStorage 保持）
+  const [toast, setToast] = useState(''); // 保存完了などの一時トースト
   const btnRef = useRef<HTMLDivElement>(null);
+
+  // トーストは約2秒で自動的に消す。
+  useEffect(() => {
+    if (!toast) return;
+    const id = setTimeout(() => setToast(''), 2000);
+    return () => clearTimeout(id);
+  }, [toast]);
+
+  // シミュレーション入力・選択リスク%を localStorage に保存（ページ移動後も復元）。
+  useEffect(() => {
+    localStorage.setItem(SIM_INPUTS_KEY, JSON.stringify(simInputs));
+  }, [simInputs]);
+  useEffect(() => {
+    localStorage.setItem(SIM_RISK_KEY, String(selectedRisk));
+  }, [selectedRisk]);
 
   const configured = Boolean(CLIENT_ID && FUND_URL);
 
@@ -141,10 +410,9 @@ export default function FundManager() {
     if (idToken) reload();
   }, [idToken, reload]);
 
-  // モーダルを開く日が変わったらタグ入力をリセット。
+  // モーダルを開く日が変わったら勝ち/負けを既定（勝ち）に戻す。
   useEffect(() => {
-    setModalTags([]);
-    setTagDraft('');
+    setTradeResult('win');
   }, [selectedDate]);
 
   // タグ絞り込み中はそのタグを含むトレードだけを対象にする。
@@ -155,34 +423,25 @@ export default function FundManager() {
   const summary = useMemo(() => computeSummary(settings, viewTrades, cashflows), [settings, viewTrades, cashflows]);
   const tagAggs = useMemo(() => aggregateByTag(trades).sort((a, b) => b.count - a.count), [trades]);
 
-  // チップ式タグ入力。入力中のドラフトも取り込む。
-  const addTagChip = (tag: string) => {
-    const t = tag.trim();
-    if (t && !modalTags.includes(t)) setModalTags((prev) => [...prev, t]);
-    setTagDraft('');
-  };
-
   const addTrade = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!selectedDate) return;
     const form = e.currentTarget;
     const f = new FormData(form);
-    const draft = tagDraft.trim();
-    const tags = draft && !modalTags.includes(draft) ? [...modalTags, draft] : modalTags;
+    const amount = Math.abs(Number(f.get('amount')));
+    // 勝ち→回収に、負け→投資に金額を入れる（損益 = 回収 − 投資 = ±金額）。
     try {
       await api('/trades', {
         method: 'POST',
         body: JSON.stringify({
           date: selectedDate,
-          invested: Number(f.get('invested')),
-          recovered: Number(f.get('recovered')),
-          tags,
-          note: f.get('note') || undefined,
+          invested: tradeResult === 'loss' ? amount : 0,
+          recovered: tradeResult === 'win' ? amount : 0,
+          tags: [],
         }),
       });
       form.reset();
-      setModalTags([]);
-      setTagDraft('');
+      setTradeResult('win');
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : '追加に失敗しました');
@@ -213,6 +472,7 @@ export default function FundManager() {
         body: JSON.stringify({ startingBalance: Number(f.get('startingBalance')), currency: f.get('currency') }),
       });
       await reload();
+      setToast('保存しました');
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存に失敗しました');
     }
@@ -229,9 +489,17 @@ export default function FundManager() {
 
   const inputCls = 'rounded border border-gray-300 px-2 py-1 text-sm bg-white w-full';
   const dayTrades = selectedDate ? trades.filter((t) => t.date === selectedDate) : [];
+  // PF（プロフィットファクター）= 総利益 ÷ 総損失。損失ゼロ時は算出不能（—）。
+  const pf = summary.totalInvested > 0 ? summary.totalRecovered / summary.totalInvested : null;
 
   return (
     <>
+      {/* 保存完了などの一時トースト（下中央・約2秒で自動消去） */}
+      {toast && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 bg-gray-800 text-white text-sm px-4 py-2 rounded-full shadow-lg">
+          {toast}
+        </div>
+      )}
       {!configured ? (
         <div className="mx-3 my-3 p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700">
           未設定です。<code>VITE_GOOGLE_CLIENT_ID</code> と <code>VITE_FUND_URL</code> を設定すると使えます。
@@ -245,8 +513,34 @@ export default function FundManager() {
       ) : (
         <div className="mx-3 my-2 space-y-3">
           <p className="text-[11px] text-gray-400 text-right">{email}</p>
+
+          {/* タブ: 記録 / シミュレーション */}
+          <div className="flex rounded-md border border-gray-200 overflow-hidden text-sm">
+            {(['record', 'sim'] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTab(t)}
+                className={`flex-1 py-1.5 ${tab === t ? 'bg-orange-500 text-white' : 'bg-white text-gray-600'}`}
+              >
+                {t === 'record' ? '記録' : 'シミュレーション'}
+              </button>
+            ))}
+          </div>
+
           {error && <p className="text-sm text-red-600">{error}</p>}
 
+          {tab === 'sim' ? (
+            <SimulationTab
+              startingBalance={settings.startingBalance}
+              currency={settings.currency}
+              inputs={simInputs}
+              onChange={setSimInputs}
+              selectedRisk={selectedRisk}
+              onSelectRisk={setSelectedRisk}
+            />
+          ) : (
+          <>
           {/* タグフィルタ */}
           {tagAggs.length > 0 && (
             <div className="flex flex-wrap gap-1">
@@ -288,9 +582,9 @@ export default function FundManager() {
             {!selectedTag && <EquityCurve startingBalance={summary.startingBalance} balances={summary.equityCurve.map((p) => p.balance)} />}
             <div className="grid grid-cols-3 gap-2 text-center text-xs mt-1">
               <div>
-                <p className="text-gray-500">回収率</p>
-                <p className={`font-bold ${summary.recoveryRate >= 1 ? 'text-green-600' : 'text-red-600'}`}>
-                  {(summary.recoveryRate * 100).toFixed(0)}%
+                <p className="text-gray-500">累計損益</p>
+                <p className={`font-bold ${summary.cumulativePnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {summary.cumulativePnl >= 0 ? '+' : ''}{yen(summary.cumulativePnl)}
                 </p>
               </div>
               <div>
@@ -300,8 +594,10 @@ export default function FundManager() {
                 </p>
               </div>
               <div>
-                <p className="text-gray-500">投資/回収</p>
-                <p className="font-bold">{yen(summary.totalInvested)}→{yen(summary.totalRecovered)}</p>
+                <p className="text-gray-500">PF（損益比）</p>
+                <p className={`font-bold ${pf === null || pf >= 1 ? 'text-green-600' : 'text-red-600'}`}>
+                  {pf === null ? '—' : pf.toFixed(2)}
+                </p>
               </div>
             </div>
           </div>
@@ -324,7 +620,9 @@ export default function FundManager() {
                 <div className="border border-gray-200 rounded divide-y">
                   {dayTrades.map((t) => (
                     <div key={t.id} className="flex items-center justify-between px-2 py-1.5 text-xs gap-2">
-                      <span className="text-gray-500 shrink-0">投{yen(t.invested)}→回{yen(t.recovered)}</span>
+                      <span className={`shrink-0 font-bold ${pnlOf(t) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {pnlOf(t) >= 0 ? '勝ち' : '負け'}
+                      </span>
                       <span className="flex-1 truncate text-gray-400">{t.tags.join(' ')}</span>
                       <span className={pnlOf(t) >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>
                         {pnlOf(t) >= 0 ? '+' : ''}
@@ -338,53 +636,26 @@ export default function FundManager() {
 
               {/* 追加フォーム（日付はこの日に固定） */}
               <form key={selectedDate ?? 'none'} onSubmit={addTrade} className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <input name="invested" inputMode="decimal" placeholder="投資金額" className={inputCls} required />
-                  <input name="recovered" inputMode="decimal" placeholder="回収金額" className={inputCls} required />
-                  <input name="note" placeholder="メモ(任意)" className={`${inputCls} col-span-2`} />
+                {/* 勝ち/負けトグル */}
+                <div className="flex rounded-md border border-gray-200 overflow-hidden text-sm">
+                  {(['win', 'loss'] as const).map((r) => (
+                    <button
+                      type="button"
+                      key={r}
+                      onClick={() => setTradeResult(r)}
+                      className={`flex-1 py-1.5 font-bold ${
+                        tradeResult === r
+                          ? r === 'win'
+                            ? 'bg-green-500 text-white'
+                            : 'bg-red-500 text-white'
+                          : 'bg-white text-gray-500'
+                      }`}
+                    >
+                      {r === 'win' ? '勝ち' : '負け'}
+                    </button>
+                  ))}
                 </div>
-
-                {/* タグ（チップ式: 入力してEnter / 候補タップで追加 / ×で削除） */}
-                <div>
-                  {modalTags.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mb-1">
-                      {modalTags.map((tg) => (
-                        <span key={tg} className="text-xs bg-orange-100 text-orange-700 rounded-full px-2 py-0.5 flex items-center">
-                          {tg}
-                          <button type="button" onClick={() => setModalTags(modalTags.filter((x) => x !== tg))} className="ml-1">
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  <input
-                    value={tagDraft}
-                    onChange={(e) => setTagDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ',') {
-                        e.preventDefault();
-                        addTagChip(tagDraft);
-                      }
-                    }}
-                    placeholder="タグを入力してEnter（例: 店A）"
-                    className={inputCls}
-                  />
-                  {tagAggs.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {tagAggs.map((a) => (
-                        <button
-                          type="button"
-                          key={a.tag}
-                          onClick={() => addTagChip(a.tag)}
-                          className="text-[11px] text-gray-500 border border-gray-300 rounded-full px-2 py-0.5"
-                        >
-                          +{a.tag}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <input name="amount" inputMode="decimal" placeholder="損益額（円）" className={inputCls} required />
                 <button className="w-full rounded bg-orange-500 text-white py-2 text-sm">この日に追加</button>
               </form>
             </div>
@@ -434,6 +705,8 @@ export default function FundManager() {
                 </div>
               ))}
             </div>
+          )}
+          </>
           )}
         </div>
       )}
