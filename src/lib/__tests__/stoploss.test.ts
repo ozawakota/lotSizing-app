@@ -11,6 +11,7 @@ import {
   parseSessionJev,
   pipSize,
   volumeAnchoredLevel,
+  futuresLevelToSpot,
   type Candle,
   type SessionState,
   type SlStructure,
@@ -50,6 +51,23 @@ describe('volumeAnchoredLevel', () => {
   it('窓内に足が無ければ null', () => {
     const candles: Candle[] = [{ high: 0, low: 0, close: 100, volume: 10, t: now / 1000 }];
     expect(volumeAnchoredLevel(candles, now, 2 * DAY, 1 * HOUR)).toBeNull();
+  });
+});
+
+describe('futuresLevelToSpot', () => {
+  it('非逆数（EUR/USD等）はベーシス差で平行移動', () => {
+    // 先物現在1.085 / スポット現在1.080 → offset 0.005。先物節目1.100 → 1.095
+    expect(futuresLevelToSpot(1.1, 1.085, 1.08, false)).toBeCloseTo(1.095, 10);
+  });
+
+  it('逆数（USD/JPY=1/6J=F）は逆数化してからベーシス補正', () => {
+    // 6J=F 現在0.006667(=150.0) / スポット150.2 → offset -0.2。節目0.006623(=151.0) → 151.2
+    const spot = futuresLevelToSpot(1 / 151, 1 / 150, 150.2, true);
+    expect(spot).toBeCloseTo(151.2, 6);
+  });
+
+  it('ベーシスが0なら非逆数はそのまま', () => {
+    expect(futuresLevelToSpot(1.27, 1.27, 1.27, false)).toBeCloseTo(1.27, 10);
   });
 });
 

@@ -18,6 +18,25 @@ export const YAHOO_SYMBOL: Record<string, string> = {
   AUD_USD: 'AUDUSD=X',
   XAU_USD: 'GC=F',
 };
+// 出来高の節目用の代替シンボル。FXスポット(=X)は出来高が無いため、CME通貨先物から取得する。
+// invert=true は先物が逆数クォート(例 6J=F は USD/JPY の逆数)。クロス円は単一先物が無く対象外。
+export const VOLUME_SYMBOL: Record<string, { symbol: string; invert: boolean }> = {
+  USD_JPY: { symbol: '6J=F', invert: true },
+  EUR_USD: { symbol: '6E=F', invert: false },
+  GBP_USD: { symbol: '6B=F', invert: false },
+  AUD_USD: { symbol: '6A=F', invert: false },
+};
+
+/**
+ * 先物由来の価格をスポット目盛りへ変換する。invert のときは逆数化し、現在値の差（ベーシス）で
+ * 平行移動してスポットに合わせる。（例 USD/JPY: spot ≈ 1/先物 − ((1/先物現在値) − スポット現在値)）
+ */
+export function futuresLevelToSpot(futLevel: number, futCurrent: number, spotCurrent: number, invert: boolean): number {
+  const mapLvl = invert ? 1 / futLevel : futLevel;
+  const mapCur = invert ? 1 / futCurrent : futCurrent;
+  return mapLvl - (mapCur - spotCurrent);
+}
+
 // アプリの足 → Yahoo の interval。
 export const YAHOO_INTERVAL: Record<SlTimeframe, string> = {
   '15m': '15m',

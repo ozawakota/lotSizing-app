@@ -45,6 +45,8 @@ import {
   parsePaJev,
   parseSessionJev,
   volumeAnchoredLevel,
+  futuresLevelToSpot,
+  VOLUME_SYMBOL,
   type BreakoutProb,
   type Candle,
   type PaResult,
@@ -858,9 +860,21 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
     const structure = computeStructure(candles, cr);
     const recentCloses = candles.slice(-12).map((c) => c.close);
     if (tf === '1h' || sessionCloses.length === 0) sessionCloses = recentCloses;
-    // 過去時点の高出来高の節目（出来高が無い FX スポットは null）。Jev の判定材料にも含める。
+    // 過去時点の高出来高の節目。Jev の判定材料にも含める。
+    // XAU(GC=F)はロウソク足に出来高があるのでそのまま。FXスポット(=X)は出来高が無いため、
+    // 対応ペアは CME通貨先物から出来高節目を取りスポット目盛りへ変換（クロス円は null のまま）。
     const { agoMs, windowMs } = VOLUME_ANCHOR[tf];
-    const volumeLevel = volumeAnchoredLevel(candles, now, agoMs, windowMs);
+    let volumeLevel = volumeAnchoredLevel(candles, now, agoMs, windowMs);
+    if (volumeLevel == null && VOLUME_SYMBOL[instrument]) {
+      try {
+        const { symbol: vSym, invert } = VOLUME_SYMBOL[instrument];
+        const fut = await fetchYahooCandles(vSym, YAHOO_INTERVAL[tf]);
+        const futLevel = volumeAnchoredLevel(fut.candles, now, agoMs, windowMs);
+        if (futLevel != null) volumeLevel = futuresLevelToSpot(futLevel, fut.currentRate, cr, invert);
+      } catch (e) {
+        console.error(`/mtf 出来高(先物)取得 失敗 ${instrument} ${tf}:`, e);
+      }
+    }
     const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses, sessionStatus, volumeLevel);
     paEngine = eng;
     timeframes.push({
