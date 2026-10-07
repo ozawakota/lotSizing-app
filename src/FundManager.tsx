@@ -114,6 +114,50 @@ function GrowthChart({ result, startingBalance, targetBalance }: { result: Growt
   );
 }
 
+// 数値入力。編集中は空欄を許す（type=number の制御だと空文字が即 0 に戻り、
+// スマホで先頭の 0 を消せない問題を避ける）。空欄のあいだは onChange を発火せず、
+// 親の数値は直前の値を保持する。外部から値が変わった時だけ表示を同期。
+function NumberField({
+  value,
+  onChange,
+  className,
+  min,
+  max,
+  step,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  className?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+}) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => {
+    if (Number(text) !== value) setText(String(value)); // 入力中（パース一致）は上書きしない
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  return (
+    <input
+      type="number"
+      inputMode="decimal"
+      min={min}
+      max={max}
+      step={step}
+      value={text}
+      onChange={(e) => {
+        const t = e.target.value;
+        setText(t);
+        if (t !== '') {
+          const n = Number(t);
+          if (Number.isFinite(n)) onChange(n);
+        }
+      }}
+      className={className}
+    />
+  );
+}
+
 // シミュレーション入力。タブ切り替えで失わないよう親で保持する。
 interface SimInputs {
   winRatePct: number;
@@ -188,19 +232,19 @@ function SimulationTab({
         <div className="grid grid-cols-2 gap-2">
           <label className="text-xs text-gray-600">
             勝率（%）
-            <input type="number" min={0} max={100} value={winRatePct} onChange={(e) => setField({ winRatePct: Number(e.target.value) })} className={inputCls} />
+            <NumberField min={0} max={100} value={winRatePct} onChange={(n) => setField({ winRatePct: n })} className={inputCls} />
           </label>
           <label className="text-xs text-gray-600">
             毎月トレード回数
-            <input type="number" min={1} value={tradesPerMonth} onChange={(e) => setField({ tradesPerMonth: Number(e.target.value) })} className={inputCls} />
+            <NumberField min={1} value={tradesPerMonth} onChange={(n) => setField({ tradesPerMonth: n })} className={inputCls} />
           </label>
           <label className="text-xs text-gray-600">
             リスクリワード（1:X）
-            <input type="number" min={0.1} step={0.1} value={rewardRatio} onChange={(e) => setField({ rewardRatio: Number(e.target.value) })} className={inputCls} />
+            <NumberField min={0.1} step={0.1} value={rewardRatio} onChange={(n) => setField({ rewardRatio: n })} className={inputCls} />
           </label>
           <label className="text-xs text-gray-600">
             目標金額
-            <input type="number" min={1} value={targetBalance} onChange={(e) => setField({ targetBalance: Number(e.target.value) })} className={inputCls} />
+            <NumberField min={1} value={targetBalance} onChange={(n) => setField({ targetBalance: n })} className={inputCls} />
           </label>
         </div>
         <p className="text-[11px] text-gray-500">
