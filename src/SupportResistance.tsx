@@ -52,107 +52,110 @@ const TREND_STYLE: Record<'up' | 'down' | 'range', string> = {
 };
 const PA_LABEL: Record<PaClass, string> = { reversal: '反転', sell_rally: '戻り売り', buy_dip: '押し目買い', range: 'レンジ' };
 
-// 各TFのレジサポ＋ブレイク/反転カード（レジ→現在→サポの3段ラダー）。
+// カード右上の「結論チップ」。反転が出ていれば最優先、無ければブレイク優勢、
+// それも無ければPAラベル。色: 上抜け=緑 / 下抜け=赤 / 反転=アンバー / その他=グレー。
+function verdict(tf: SrTf): { label: string; cls: string } {
+  const AMBER = 'bg-amber-100 text-amber-700';
+  const GREEN = 'bg-green-100 text-green-700';
+  const RED = 'bg-red-100 text-red-700';
+  const GRAY = 'bg-gray-100 text-gray-600';
+  if (tf.pa === 'reversal') return { label: `反転 ${tf.paPct}%`, cls: AMBER };
+  if (tf.breakout) {
+    const { up, down, range } = tf.breakout;
+    const max = Math.max(up, down, range);
+    if (max === up) return { label: `上抜け ${up}%`, cls: GREEN };
+    if (max === down) return { label: `下抜け ${down}%`, cls: RED };
+    return { label: `レンジ継続 ${range}%`, cls: GRAY };
+  }
+  return { label: PA_LABEL[tf.pa], cls: GRAY };
+}
+
+// レジサポラインの1行（レジ/サポ）。ラベル＋価格＋現在値からの距離を列で揃える。
+function LevelLine({
+  side,
+  price,
+  distancePips,
+  digits,
+}: {
+  side: 'res' | 'sup';
+  price: number;
+  distancePips: number;
+  digits: number;
+}) {
+  const res = side === 'res';
+  return (
+    <>
+      <span className={`flex items-center gap-1.5 text-sm ${res ? 'text-red-600' : 'text-green-600'}`}>
+        <span className={`inline-block h-0.5 w-4 ${res ? 'bg-red-500' : 'bg-green-500'}`} />
+        {res ? 'レジ R' : 'サポ S'}
+      </span>
+      <span className="text-right text-sm font-bold tabular-nums text-gray-800">{price.toFixed(digits)}</span>
+      <span className="w-16 text-right text-[11px] tabular-nums text-gray-400">
+        {res ? '+' : '−'}{distancePips.toFixed(1)}pips
+      </span>
+    </>
+  );
+}
+
+// 各TFのレジサポ＋判定カード。結論チップ → レジ/現在/サポ → 補助指標 の順で読ませる。
 function TfCard({ tf, instrument, currentRate, digits }: { tf: SrTf; instrument: string; currentRate: number; digits: number }) {
   const pip = pipSize(instrument);
   const resDist = Math.abs(tf.swingHigh - currentRate) / pip;
   const supDist = Math.abs(currentRate - tf.swingLow) / pip;
-  const reversal = tf.pa === 'reversal';
+  const v = verdict(tf);
+  const stochLabel = !tf.stoch ? null : tf.stoch.k >= 80 ? '買われすぎ' : tf.stoch.k <= 20 ? '売られすぎ' : '中立';
+  const stochCls = !tf.stoch
+    ? ''
+    : tf.stoch.k >= 80
+      ? 'text-red-600'
+      : tf.stoch.k <= 20
+        ? 'text-green-600'
+        : 'text-gray-500';
 
   return (
-    <div className="rounded-md border border-gray-200 bg-white p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <p className="text-sm font-bold text-gray-800">{TF_LABEL[tf.tf]}</p>
-        <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${TREND_STYLE[tf.trend]}`}>
-          {TREND_LABEL[tf.trend]}
-        </span>
+    <div className="rounded-lg border border-gray-200 bg-white p-3">
+      {/* ヘッダー: 時間足 ＋ トレンド ＋ 結論チップ */}
+      <div className="mb-2.5 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-bold text-gray-800">{TF_LABEL[tf.tf]}</p>
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${TREND_STYLE[tf.trend]}`}>
+            {TREND_LABEL[tf.trend]}
+          </span>
+        </div>
+        <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${v.cls}`}>{v.label}</span>
       </div>
 
-      {/* 3段ラダー: レジ → 現在 → サポ */}
-      <div className="divide-y divide-gray-100 border-y border-gray-100">
-        <div className="flex items-center justify-between py-1.5">
-          <span className="flex items-center gap-1.5 text-sm text-red-700">
-            <span className="inline-block h-0.5 w-4 bg-red-500" />レジ R
-          </span>
-          <span className="flex items-center gap-3">
-            <span className="w-20 text-right font-bold text-gray-800">{tf.swingHigh.toFixed(digits)}</span>
-            <span className="w-16 text-right text-[11px] text-gray-400">+{resDist.toFixed(1)}pips</span>
-            <span className="w-16 text-right text-[11px] font-semibold text-red-700">
-              {tf.breakout ? `上抜${tf.breakout.up}%` : '—'}
-            </span>
-          </span>
-        </div>
+      {/* レジ → 現在 → サポ（価格列を揃える3行グリッド） */}
+      <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-3 gap-y-2 border-y border-gray-100 py-2">
+        <LevelLine side="res" price={tf.swingHigh} distancePips={resDist} digits={digits} />
 
-        <div className="flex items-center justify-between bg-gray-50 py-1.5">
-          <span className="text-sm font-medium text-gray-700">▶ 現在</span>
-          <span className="w-20 text-right text-base font-bold text-gray-900" style={{ marginRight: '4rem' }}>
-            {currentRate.toFixed(digits)}
-          </span>
-        </div>
+        <span className="text-sm font-medium text-gray-500">現在</span>
+        <span className="text-right text-xl font-bold tabular-nums text-gray-900">{currentRate.toFixed(digits)}</span>
+        <span />
 
-        <div className="flex items-center justify-between py-1.5">
-          <span className="flex items-center gap-1.5 text-sm text-green-700">
-            <span className="inline-block h-0.5 w-4 bg-green-500" />サポ S
-          </span>
-          <span className="flex items-center gap-3">
-            <span className="w-20 text-right font-bold text-gray-800">{tf.swingLow.toFixed(digits)}</span>
-            <span className="w-16 text-right text-[11px] text-gray-400">−{supDist.toFixed(1)}pips</span>
-            <span className="w-16 text-right text-[11px] font-semibold text-green-700">
-              {tf.breakout ? `下抜${tf.breakout.down}%` : '—'}
-            </span>
-          </span>
-        </div>
+        <LevelLine side="sup" price={tf.swingLow} distancePips={supDist} digits={digits} />
       </div>
 
-      {/* 出来高の節目（過去時点の高出来高価格。FX等で無ければ非表示） */}
-      {tf.volumeLevel != null && (
-        <div className="mt-2 flex items-center justify-between text-[11px]">
-          <span className="text-gray-500">📊 出来高の節目（{VOLUME_AGO_LABEL[tf.tf]}）</span>
-          <span className="font-semibold text-gray-700">
-            {tf.volumeLevel.toFixed(digits)}
-            <span className={tf.volumeLevel >= currentRate ? 'ml-1 text-red-700' : 'ml-1 text-green-700'}>
-              {tf.volumeLevel >= currentRate ? '（レジ）' : '（サポ）'}
+      {/* 補助指標（ストキャス・出来高節目）を1行に集約。無ければ非表示 */}
+      {(tf.stoch || tf.volumeLevel != null) && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-gray-500">
+          {tf.stoch && (
+            <span>
+              ストキャス <span className="font-semibold tabular-nums text-gray-700">{tf.stoch.k.toFixed(0)}/{tf.stoch.d.toFixed(0)}</span>{' '}
+              <span className={`font-semibold ${stochCls}`}>{stochLabel}</span>
             </span>
-          </span>
-        </div>
-      )}
-
-      {/* ストキャスティクス（%K/%D。買われすぎ/売られすぎを色で） */}
-      {tf.stoch && (
-        <div className="mt-2 flex items-center justify-between text-[11px]">
-          <span className="text-gray-500">ストキャス %K/%D</span>
-          <span className="flex items-center gap-2">
-            <span className="font-semibold text-gray-700">{tf.stoch.k.toFixed(1)} / {tf.stoch.d.toFixed(1)}</span>
-            {(() => {
-              const v = tf.stoch.k;
-              const [label, cls] =
-                v >= 80
-                  ? ['買われすぎ', 'bg-red-100 text-red-700']
-                  : v <= 20
-                    ? ['売られすぎ', 'bg-green-100 text-green-700']
-                    : ['中立', 'bg-gray-100 text-gray-600'];
-              return <span className={`rounded px-1.5 py-0.5 font-semibold ${cls}`}>{label}</span>;
-            })()}
-          </span>
-        </div>
-      )}
-
-      {/* ブレイク/反転 判定 */}
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
-        {tf.breakout ? (
-          <span className="text-gray-500">レンジ継続 <span className="font-semibold text-gray-700">{tf.breakout.range}%</span></span>
-        ) : (
-          <span className="text-gray-400">ブレイク判定: Jev未取得</span>
-        )}
-        <span className="ml-auto flex items-center gap-1">
-          <span className="text-gray-500">反転</span>
-          {reversal ? (
-            <span className="rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-700">可能性 {tf.paPct}%</span>
-          ) : (
-            <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">{PA_LABEL[tf.pa]}</span>
           )}
-        </span>
-      </div>
+          {tf.volumeLevel != null && (
+            <span>
+              出来高節目（{VOLUME_AGO_LABEL[tf.tf]}）{' '}
+              <span className="font-semibold tabular-nums text-gray-700">{tf.volumeLevel.toFixed(digits)}</span>
+              <span className={tf.volumeLevel >= currentRate ? 'text-red-600' : 'text-green-600'}>
+                {tf.volumeLevel >= currentRate ? '（レジ）' : '（サポ）'}
+              </span>
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
