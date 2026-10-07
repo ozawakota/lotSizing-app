@@ -13,6 +13,7 @@ import {
   volumeAnchoredLevel,
   futuresLevelToSpot,
   computeStochastic,
+  scanStructuralRr,
   type Candle,
   type SessionState,
   type SlStructure,
@@ -259,6 +260,38 @@ describe('assessRiskReward', () => {
     // すべての上位TF高値が現在値より下 → ロングの目標が無い
     const rr = assessRiskReward(structure, 'long', 60, [{ swingHigh: 150.2, swingLow: 149.0 }], 'USD_JPY');
     expect(rr).toBeNull();
+  });
+});
+
+describe('scanStructuralRr', () => {
+  it('上昇TFで上位TFの高値を目標に RR>=3 の最良 setup を返す（確率不要）', () => {
+    const tfs = [
+      { tf: '1h' as const, structure: { trend: 'up' as const, swingHigh: 150.5, swingLow: 150.0, currentRate: 150.4 } },
+      { tf: '4h' as const, structure: { trend: 'up' as const, swingHigh: 152.0, swingLow: 149.0, currentRate: 150.4 } },
+    ];
+    const r = scanStructuralRr(tfs, 'USD_JPY', 3);
+    expect(r).not.toBeNull();
+    expect(r!.tf).toBe('1h');
+    expect(r!.direction).toBe('long');
+    expect(r!.rr).toBeGreaterThanOrEqual(3);
+  });
+
+  it('レンジTFは方向なしで除外、満たすものが無ければ null', () => {
+    const tfs = [
+      { tf: '1h' as const, structure: { trend: 'range' as const, swingHigh: 150.5, swingLow: 150.0, currentRate: 150.3 } },
+      { tf: '4h' as const, structure: { trend: 'range' as const, swingHigh: 152.0, swingLow: 149.0, currentRate: 150.3 } },
+    ];
+    expect(scanStructuralRr(tfs, 'USD_JPY', 3)).toBeNull();
+  });
+
+  it('下降TFはショート方向で下位の上位TF安値を目標にする', () => {
+    const tfs = [
+      { tf: '1h' as const, structure: { trend: 'down' as const, swingHigh: 150.5, swingLow: 150.0, currentRate: 150.1 } },
+      { tf: '4h' as const, structure: { trend: 'down' as const, swingHigh: 151.0, swingLow: 148.0, currentRate: 150.1 } },
+    ];
+    const r = scanStructuralRr(tfs, 'USD_JPY', 3);
+    expect(r!.direction).toBe('short');
+    expect(r!.target).toBe(148.0);
   });
 });
 

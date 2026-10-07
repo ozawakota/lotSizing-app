@@ -21,6 +21,15 @@ import {
   type AlertPair,
   type Sample,
 } from '../../src/lib/alert';
+import {
+  computeStructure,
+  scanStructuralRr,
+  YAHOO_SYMBOL as SL_YAHOO_SYMBOL,
+  YAHOO_INTERVAL as SL_YAHOO_INTERVAL,
+  type Candle,
+  type SlStructure,
+  type SlTimeframe,
+} from '../../src/lib/stoploss';
 
 interface Env {
   DB: D1Database;
@@ -163,6 +172,93 @@ const runDetection = async (env: Env): Promise<void> => {
     }
   }
 
+  if (anyTriggered) await sendPushToAll(env);
+};
+
+// ---------------------------------------------------------------------------
+// RR≥1:3 構造的好機の検知（Jev不使用・完全無料）。Yahoo足だけで構造的RRを評価し、
+// 好機があれば価格アラートと同じ基盤で Push する。15分ごと・クールダウン4時間。
+// ---------------------------------------------------------------------------
+const RR_INSTRUMENTS = ['XAU_USD', 'USD_JPY', 'EUR_USD', 'GBP_USD'];
+const RR_TFS: SlTimeframe[] = ['15m', '30m', '1h', '4h'];
+const RR_MIN = 3; // 1:3 以上
+const RR_SCAN_INTERVAL_MS = 15 * 60 * 1000; // 走査間隔（毎分 scheduled の中でゲート）
+const RR_COOLDOWN_MS = 4 * 60 * 60 * 1000; // 同「ペア＋TF＋方向」の再通知休止
+const RR_DISPLAY: Record<string, string> = { XAU_USD: 'XAU/USD', USD_JPY: 'USD/JPY', EUR_USD: 'EUR/USD', GBP_USD: 'GBP/USD' };
+const RR_TF_LABEL: Record<SlTimeframe, string> = { '15m': '15分足', '30m': '30分足', '1h': '1時間足', '4h': '4時間足' };
+
+// Yahoo chart から OHLC ロウソク足＋現在値を取得（キーレス）。
+const fetchCandles = async (symbol: string, interval: string): Promise<{ candles: Candle[]; currentRate: number }> => {
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
+    `?interval=${encodeURIComponent(interval)}&range=1mo`;
+  const res = await fetch(url, { headers: { 'User-Agent': UA } });
+  if (!res.ok) throw new Error(`Yahoo HTTP ${res.status} (${symbol})`);
+  const r = (
+    (await res.json()) as {
+      chart?: {
+        result?: {
+          meta?: { regularMarketPrice?: number };
+          indicators?: { quote?: { high?: (number | null)[]; low?: (number | null)[]; close?: (number | null)[] }[] };
+        }[];
+      };
+    }
+  ).chart?.result?.[0];
+  const q = r?.indicators?.quote?.[0];
+  const highs = q?.high ?? [];
+  const lows = q?.low ?? [];
+  const closes = q?.close ?? [];
+  const candles: Candle[] = [];
+  for (let i = 0; i < closes.length; i++) {
+    const h = highs[i];
+    const l = lows[i];
+    const c = closes[i];
+    if (typeof h === 'number' && typeof l === 'number' && typeof c === 'number') candles.push({ high: h, low: l, close: c });
+  }
+  const currentRate = Number(r?.meta?.regularMarketPrice);
+  if (candles.length === 0 || !Number.isFinite(currentRate)) throw new Error(`Yahoo: 足不足 (${symbol})`);
+  return { candles, currentRate };
+};
+
+const runRrDetection = async (env: Env): Promise<void> => {
+  const now = Date.now();
+  // 15分ゲート（毎分 scheduled されても走査は15分に1回）。
+  const last = Number((await getMeta(env, 'rr_last_run')) ?? '0');
+  if (now - last < RR_SCAN_INTERVAL_MS) return;
+  await setMeta(env, 'rr_last_run', String(now));
+
+  let anyTriggered = false;
+  for (const inst of RR_INSTRUMENTS) {
+    try {
+      const symbol = SL_YAHOO_SYMBOL[inst];
+      if (!symbol) continue;
+      const tfStructures: { tf: SlTimeframe; structure: SlStructure }[] = [];
+      for (const tf of RR_TFS) {
+        const { candles, currentRate } = await fetchCandles(symbol, SL_YAHOO_INTERVAL[tf]);
+        tfStructures.push({ tf, structure: computeStructure(candles, currentRate) });
+      }
+      const best = scanStructuralRr(tfStructures, inst, RR_MIN);
+      if (!best) continue;
+
+      // クールダウン判定（同 ペア＋TF＋方向 は RR_COOLDOWN_MS 再通知しない）。
+      const cdKey = `rr_cd:${inst}:${best.tf}:${best.direction}`;
+      const cdUntil = Number((await getMeta(env, cdKey)) ?? '0');
+      if (now < cdUntil) continue;
+
+      const disp = RR_DISPLAY[inst] ?? inst;
+      const dirJa = best.direction === 'long' ? 'ロング' : 'ショート';
+      const title = `${disp} RR好機 1:${best.rr.toFixed(1)}`;
+      const body = `${RR_TF_LABEL[best.tf]} ${dirJa}／リスク${best.riskPips}pips・リワード${best.rewardPips}pips が狙えます`;
+      // pair 欄に "RR:" を付け、価格アラート(tag=pair)と別タグにして通知が衝突しないようにする。
+      await env.DB.prepare('INSERT INTO alerts (pair, title, body, created_at) VALUES (?, ?, ?, ?)')
+        .bind(`RR:${disp}`, title, body, now)
+        .run();
+      await setMeta(env, cdKey, String(now + RR_COOLDOWN_MS));
+      anyTriggered = true;
+    } catch (e) {
+      console.error(`RR検知 失敗 ${inst}:`, e);
+    }
+  }
   if (anyTriggered) await sendPushToAll(env);
 };
 
@@ -348,9 +444,18 @@ const handleAlerts = async (env: Env, url: URL): Promise<Response> => {
 export default {
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
-      runDetection(env).catch((e) => {
-        console.error('検知 失敗（前回状態を保持）:', e);
-      }),
+      (async () => {
+        try {
+          await runDetection(env); // 相場変動（毎分）
+        } catch (e) {
+          console.error('検知 失敗（前回状態を保持）:', e);
+        }
+        try {
+          await runRrDetection(env); // RR好機（15分ゲート・完全無料）
+        } catch (e) {
+          console.error('RR検知 失敗:', e);
+        }
+      })(),
     );
   },
 
