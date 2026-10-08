@@ -11,7 +11,6 @@ import AppHeader from './components/AppHeader';
 import WorldClock from './components/WorldClock'; // 東京/ロンドン/NY の市場時刻（共通コンポーネント）
 import BottomTabBar, { type AppView } from './components/BottomTabBar';
 import OrderFlow from './OrderFlow'; // 取引量・センチメント ページ
-import ChatBot from './ChatBot'; // AIbot（アプリデータ連携チャット）ページ
 import FundManager from './FundManager'; // 資金管理（トレードジャーナル）ページ
 import NewsSummary from './NewsSummary'; // 為替ニュース要約＋売買シグナル ページ
 import TimeframeAnalysis from './TimeframeAnalysis'; // マルチタイムフレーム分析 ページ
@@ -21,7 +20,6 @@ import AlertToast from './AlertToast'; // 相場変動の in-app トースト通
 const VIEW_TITLES: Record<AppView, string> = {
   calculator: 'ロット計算',
   flow: '取引量・センチメント',
-  aibot: 'AIbot',
   fund: '資金管理',
   news: '為替ニュース',
   mtf: 'タイムフレーム分析',
@@ -775,8 +773,8 @@ const App: FC = () => {
       {/* コンテンツ（下部タブバー分の余白を確保） */}
       <div className="pb-20 pt-2">
 
-      {/* 市場時刻（東京/ロンドン/NY）。AIbot・資金管理以外の全ページで表示 */}
-      {view !== 'aibot' && view !== 'fund' && <WorldClock />}
+      {/* 市場時刻（東京/ロンドン/NY）。資金管理以外の全ページで表示 */}
+      {view !== 'fund' && <WorldClock />}
 
       {view === 'calculator' ? (
       <>
@@ -1059,8 +1057,6 @@ const App: FC = () => {
         <TimeframeAnalysis />
       ) : view === 'sr' ? (
         <SupportResistance />
-      ) : view === 'aibot' ? (
-        <ChatBot />
       ) : (
         <FundManager />
       )}

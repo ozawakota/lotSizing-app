@@ -1,5 +1,5 @@
-// FX市場セッション（東京・ロンドン・ニューヨーク）の開場判定と状況テキスト。
-// AIbot(/chat) のコンテキストに「現在どのセッションが開いているか」を渡すために使う純関数。
+// FX市場セッション（東京・ロンドン・ニューヨーク）の開場判定を行う純関数。
+// TF分析ページのセッション別予測/「次」バッジ判定などで使う。
 // タイムゾーン/DST は Intl(timeZone) が自動処理する（App.tsx の世界時計と同じBabyPips基準）。
 
 export interface MarketSession {
@@ -36,18 +36,4 @@ export function isSessionOpen(session: MarketSession, at: Date): boolean {
   const { hour, weekday } = localParts(session.timeZone, at);
   const isWeekday = weekday >= 1 && weekday <= 5;
   return isWeekday && hour >= session.openHour && hour < session.closeHour;
-}
-
-/** AIbot に渡す市場セッション状況テキスト（現在時刻JST＋各セッションの開閉＋重複注記）。 */
-export function sessionStatusText(now: Date): string {
-  const jst = new Intl.DateTimeFormat('ja-JP', {
-    timeZone: 'Asia/Tokyo',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(now);
-  const statuses = MARKET_SESSIONS.map((s) => `${s.label}:${isSessionOpen(s, now) ? '開場中' : '閉場'}`);
-  const openCount = MARKET_SESSIONS.filter((s) => isSessionOpen(s, now)).length;
-  const overlap = openCount >= 2 ? '（セッション重複中＝流動性・ボラティリティ高めになりやすい）' : '';
-  return `【市場セッション】現在 ${jst} JST｜${statuses.join(' ')}${overlap}`;
 }

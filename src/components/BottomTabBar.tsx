@@ -1,7 +1,7 @@
 // 下部タブバー（モバイル定番のナビ）。各ページを常時表示し、現在地をオレンジで示す。
-import { BarChart3, Bot, Calculator, Layers, Newspaper, Ruler, Wallet } from 'lucide-react';
+import { BarChart3, Calculator, Layers, Newspaper, Ruler, Wallet } from 'lucide-react';
 
-export type AppView = 'calculator' | 'flow' | 'aibot' | 'fund' | 'news' | 'mtf' | 'sr';
+export type AppView = 'calculator' | 'flow' | 'fund' | 'news' | 'mtf' | 'sr';
 
 const TABS: { key: AppView; label: string; Icon: typeof Calculator }[] = [
   { key: 'calculator', label: '計算', Icon: Calculator },
@@ -9,14 +9,13 @@ const TABS: { key: AppView; label: string; Icon: typeof Calculator }[] = [
   { key: 'news', label: 'ニュース', Icon: Newspaper },
   { key: 'mtf', label: 'TF分析', Icon: Layers },
   { key: 'sr', label: 'レジサポ', Icon: Ruler },
-  { key: 'aibot', label: 'AIbot', Icon: Bot },
   { key: 'fund', label: '資金管理', Icon: Wallet },
 ];
 
 export default function BottomTabBar({ view, onChange }: { view: AppView; onChange: (v: AppView) => void }) {
   return (
     <nav className="fixed bottom-0 inset-x-0 z-20 border-t border-gray-200 bg-white/95 backdrop-blur">
-      <div className="lg:w-150 mx-auto grid grid-cols-7">
+      <div className="lg:w-150 mx-auto grid grid-cols-6">
         {TABS.map(({ key, label, Icon }) => {
           const active = view === key;
           return (

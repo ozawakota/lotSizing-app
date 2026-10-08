@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MARKET_SESSIONS, isSessionOpen, sessionStatusText } from '../session';
+import { MARKET_SESSIONS, isSessionOpen } from '../session';
 
 const tokyo = MARKET_SESSIONS[0];
 
@@ -17,16 +17,5 @@ describe('isSessionOpen', () => {
   it('週末は閉場', () => {
     // 2026-01-03(土) 03:00 UTC = 12:00 JST(土) → 週末で閉場
     expect(isSessionOpen(tokyo, new Date('2026-01-03T03:00:00Z'))).toBe(false);
-  });
-});
-
-describe('sessionStatusText', () => {
-  it('現在時刻JSTと各セッションの開閉を含む', () => {
-    const txt = sessionStatusText(new Date('2026-01-05T03:00:00Z'));
-    expect(txt).toContain('市場セッション');
-    expect(txt).toContain('JST');
-    expect(txt).toContain('東京:開場中');
-    expect(txt).toContain('ロンドン:');
-    expect(txt).toContain('ニューヨーク:');
   });
 });
