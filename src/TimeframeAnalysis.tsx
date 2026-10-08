@@ -14,6 +14,7 @@ import type {
 } from '@/lib/stoploss';
 import { MARKET_SESSIONS, isSessionOpen } from '@/lib/session';
 import { fetchGoldSpot } from '@/lib/goldSpot';
+import TfCountdown from '@/components/TfCountdown';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 
@@ -330,6 +331,7 @@ export default function TimeframeAnalysis() {
                     <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${TREND_STYLE[t.trend]}`}>
                       {TREND_LABEL[t.trend]}
                     </span>
+                    <TfCountdown tf={t.tf} />
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${PA_STYLE[t.pa]}`}>

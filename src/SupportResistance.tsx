@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import type { BreakoutProb, PaClass, SlTimeframe } from '@/lib/stoploss';
 import { pipSize } from '@/lib/stoploss';
 import { fetchGoldSpot } from '@/lib/goldSpot';
+import TfCountdown from '@/components/TfCountdown';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 
@@ -121,6 +122,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: SrTf; instrument:
           <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${TREND_STYLE[tf.trend]}`}>
             {TREND_LABEL[tf.trend]}
           </span>
+          <TfCountdown tf={tf.tf} />
         </div>
         <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${v.cls}`}>{v.label}</span>
       </div>
