@@ -1,1 +1,86 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" aria-hidden="true" role="img" class="iconify iconify--logos" width="31.88" height="32" preserveAspectRatio="xMidYMid meet" viewBox="0 0 256 257"><defs><linearGradient id="IconifyId1813088fe1fbc01fb466" x1="-.828%" x2="57.636%" y1="7.652%" y2="78.411%"><stop offset="0%" stop-color="#41D1FF"></stop><stop offset="100%" stop-color="#BD34FE"></stop></linearGradient><linearGradient id="IconifyId1813088fe1fbc01fb467" x1="43.376%" x2="50.316%" y1="2.242%" y2="89.03%"><stop offset="0%" stop-color="#FFEA83"></stop><stop offset="8.333%" stop-color="#FFDD35"></stop><stop offset="100%" stop-color="#FFA800"></stop></linearGradient></defs><path fill="url(#IconifyId1813088fe1fbc01fb466)" d="M255.153 37.938L134.897 252.976c-2.483 4.44-8.862 4.466-11.382.048L.875 37.958c-2.746-4.814 1.371-10.646 6.827-9.67l120.385 21.517a6.537 6.537 0 0 0 2.322-.004l117.867-21.483c5.438-.991 9.574 4.796 6.877 9.62Z"></path><path fill="url(#IconifyId1813088fe1fbc01fb467)" d="M185.432.063L96.44 17.501a3.268 3.268 0 0 0-2.634 3.014l-5.474 92.456a3.268 3.268 0 0 0 3.997 3.378l24.777-5.718c2.318-.535 4.413 1.507 3.936 3.838l-7.361 36.047c-.495 2.426 1.782 4.5 4.151 3.78l15.304-4.649c2.372-.72 4.652 1.36 4.15 3.788l-11.698 56.621c-.732 3.542 3.979 5.473 5.943 2.437l1.313-2.028l72.516-144.72c1.215-2.423-.88-5.186-3.54-4.672l-25.505 4.922c-2.396.462-4.435-1.77-3.759-4.114l16.646-57.705c.677-2.35-1.37-4.583-3.769-4.113Z"></path></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient (Vibrant Warm Orange to Coral) -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff8a3d" />
+      <stop offset="50%" stop-color="#f97316" />
+      <stop offset="100%" stop-color="#ea580c" />
+    </linearGradient>
+
+    <!-- Candlestick Body Gradient -->
+    <linearGradient id="candleGrad1" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95" />
+      <stop offset="100%" stop-color="#ffedd5" stop-opacity="0.8" />
+    </linearGradient>
+
+    <linearGradient id="candleGrad2" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fed7aa" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#fdba74" stop-opacity="0.75" />
+    </linearGradient>
+
+    <!-- Arrow & Trend Line Gradient -->
+    <linearGradient id="arrowGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95" />
+      <stop offset="60%" stop-color="#fffbeb" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#fef3c7" stop-opacity="1" />
+    </linearGradient>
+
+    <!-- Drop Shadow Filter -->
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#9a3412" flood-opacity="0.4" />
+    </filter>
+
+    <filter id="subtleShadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#7c2d12" flood-opacity="0.3" />
+    </filter>
+  </defs>
+
+  <!-- Background Canvas -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+
+  <!-- Candlesticks Group -->
+  <g filter="url(#shadow)">
+    <!-- Candle 1 -->
+    <line x1="160" y1="230" x2="160" y2="350" stroke="#ffffff" stroke-width="6" stroke-linecap="round" opacity="0.8" />
+    <rect x="146" y="255" width="28" height="75" rx="6" fill="url(#candleGrad1)" />
+
+    <!-- Candle 2 -->
+    <line x1="220" y1="180" x2="220" y2="350" stroke="#ffffff" stroke-width="6" stroke-linecap="round" opacity="0.8" />
+    <rect x="206" y="210" width="28" height="110" rx="6" fill="url(#candleGrad2)" />
+
+    <!-- Candle 3 -->
+    <line x1="280" y1="140" x2="280" y2="350" stroke="#ffffff" stroke-width="6" stroke-linecap="round" opacity="0.8" />
+    <rect x="266" y="175" width="28" height="145" rx="6" fill="url(#candleGrad1)" />
+
+    <!-- Candle 4 -->
+    <line x1="340" y1="110" x2="340" y2="350" stroke="#ffffff" stroke-width="6" stroke-linecap="round" opacity="0.8" />
+    <rect x="326" y="145" width="28" height="175" rx="6" fill="url(#candleGrad2)" />
+  </g>
+
+  <!-- Dynamic Trend Curve and Arrow -->
+  <g filter="url(#shadow)">
+    <!-- Dynamic Growth Curve Path -->
+    <path d="M 125 350 Q 180 340 215 285 T 310 210 L 375 145" 
+          fill="none" 
+          stroke="url(#arrowGrad)" 
+          stroke-width="26" 
+          stroke-linecap="round" 
+          stroke-linejoin="round" />
+
+    <!-- Arrow Head -->
+    <path d="M 345 130 L 400 135 L 380 190 Z" 
+          fill="url(#arrowGrad)" 
+          stroke="url(#arrowGrad)" 
+          stroke-width="8" 
+          stroke-linejoin="round" 
+          stroke-linecap="round" />
+  </g>
+
+  <!-- Calibration / Lot Scale Marks -->
+  <g stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.65" filter="url(#subtleShadow)">
+    <line x1="365" y1="215" x2="385" y2="210" />
+    <line x1="355" y1="240" x2="375" y2="235" />
+    <line x1="345" y1="265" x2="365" y2="260" />
+    <line x1="335" y1="290" x2="355" y2="285" />
+  </g>
+</svg>
