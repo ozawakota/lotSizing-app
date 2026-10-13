@@ -279,24 +279,38 @@ export interface RrScanResult extends RrSetup {
 /**
  * Jev を使わない構造的 RR スキャン（バックグラウンド通知用・完全無料）。
  * 各TFで方向をトレンドから決め（up=ロング/down=ショート/range=除外）、上位TFスイングを
- * 目標に RR を評価して rr>=minRr を満たす最良 setup を返す。確率フィルタは使わない。
- * tfStructures は短い足→長い足の順で渡す（上位TF＝後方）。無ければ null。
+ * 目標に RR を評価し、rr>=minRr を満たす setup を「TFごとに全件」返す。確率フィルタは使わない。
+ * tfStructures は短い足→長い足の順で渡す（上位TF＝後方）。渡した順（短い足→長い足）で返す。
  */
-export function scanStructuralRr(
+export function scanStructuralRrAll(
   tfStructures: { tf: SlTimeframe; structure: SlStructure }[],
   instrument: string,
   minRr = 3,
-): RrScanResult | null {
-  let best: RrScanResult | null = null;
+): RrScanResult[] {
+  const results: RrScanResult[] = [];
   tfStructures.forEach(({ tf, structure }, i) => {
     const direction: SlDirection | null = structure.trend === 'up' ? 'long' : structure.trend === 'down' ? 'short' : null;
     if (!direction) return; // レンジは方向なし＝対象外
     const higherSwings = tfStructures.slice(i + 1).map((h) => ({ swingHigh: h.structure.swingHigh, swingLow: h.structure.swingLow }));
     // directionProb=100 / minProb=0 で確率条件を無効化（構造的 RR のみで qualifies）。
     const rr = assessRiskReward(structure, direction, 100, higherSwings, instrument, minRr, 0);
-    if (rr?.qualifies && (!best || rr.rr > best.rr)) best = { ...rr, tf };
+    if (rr?.qualifies) results.push({ ...rr, tf });
   });
-  return best;
+  return results;
+}
+
+/**
+ * 上記のうち rr が最大の1件のみを返す（従来API・互換維持）。該当なしは null。
+ */
+export function scanStructuralRr(
+  tfStructures: { tf: SlTimeframe; structure: SlStructure }[],
+  instrument: string,
+  minRr = 3,
+): RrScanResult | null {
+  return scanStructuralRrAll(tfStructures, instrument, minRr).reduce<RrScanResult | null>(
+    (best, r) => (!best || r.rr > best.rr ? r : best),
+    null,
+  );
 }
 
 // ---------------------------------------------------------------------------

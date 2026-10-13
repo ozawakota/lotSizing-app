@@ -14,6 +14,7 @@ import {
   futuresLevelToSpot,
   computeStochastic,
   scanStructuralRr,
+  scanStructuralRrAll,
   type Candle,
   type SessionState,
   type SlStructure,
@@ -292,6 +293,22 @@ describe('scanStructuralRr', () => {
     const r = scanStructuralRr(tfs, 'USD_JPY', 3);
     expect(r!.direction).toBe('short');
     expect(r!.target).toBe(148.0);
+  });
+});
+
+describe('scanStructuralRrAll', () => {
+  it('条件を満たすTFを全件（短い足→長い足の順）返し、best版は最大rrの1件', () => {
+    const tfs = [
+      { tf: '15m' as const, structure: { trend: 'up' as const, swingHigh: 150.1, swingLow: 149.95, currentRate: 150.0 } },
+      { tf: '1h' as const, structure: { trend: 'up' as const, swingHigh: 150.2, swingLow: 149.9, currentRate: 150.0 } },
+      { tf: '4h' as const, structure: { trend: 'up' as const, swingHigh: 153.0, swingLow: 149.0, currentRate: 150.0 } },
+    ];
+    const all = scanStructuralRrAll(tfs, 'USD_JPY', 2.5);
+    // 15m・1h は上位TFに目標があり成立。4h は上位TFの目標が無く除外。
+    expect(all.map((r) => r.tf)).toEqual(['15m', '1h']);
+    expect(all.every((r) => r.rr >= 2.5)).toBe(true);
+    // 従来の best 版は rr 最大の1件（1h）のみ。
+    expect(scanStructuralRr(tfs, 'USD_JPY', 2.5)!.tf).toBe('1h');
   });
 });
 

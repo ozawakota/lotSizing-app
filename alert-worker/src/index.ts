@@ -23,7 +23,7 @@ import {
 } from '../../src/lib/alert';
 import {
   computeStructure,
-  scanStructuralRr,
+  scanStructuralRrAll,
   YAHOO_SYMBOL as SL_YAHOO_SYMBOL,
   YAHOO_INTERVAL as SL_YAHOO_INTERVAL,
   type Candle,
@@ -176,12 +176,13 @@ const runDetection = async (env: Env): Promise<void> => {
 };
 
 // ---------------------------------------------------------------------------
-// RR≥1:3 構造的好機の検知（Jev不使用・完全無料）。Yahoo足だけで構造的RRを評価し、
+// RR≥1:2.5 構造的好機の検知（Jev不使用・完全無料）。Yahoo足だけで構造的RRを評価し、
 // 好機があれば価格アラートと同じ基盤で Push する。15分ごと・クールダウン2時間。
+// 粒度: 各ペアで条件を満たした時間足を「TFごとに全件」通知する（最良1件への集約はしない）。
 // ---------------------------------------------------------------------------
 const RR_INSTRUMENTS = ['XAU_USD', 'USD_JPY', 'EUR_USD', 'GBP_USD'];
 const RR_TFS: SlTimeframe[] = ['15m', '30m', '1h', '4h'];
-const RR_MIN = 3; // 1:3 以上
+const RR_MIN = 2.5; // 1:2.5 以上
 const RR_SCAN_INTERVAL_MS = 15 * 60 * 1000; // 走査間隔（毎分 scheduled の中でゲート）
 const RR_COOLDOWN_MS = 2 * 60 * 60 * 1000; // 同「ペア＋TF＋方向」の再通知休止
 const RR_DISPLAY: Record<string, string> = { XAU_USD: 'XAU/USD', USD_JPY: 'USD/JPY', EUR_USD: 'EUR/USD', GBP_USD: 'GBP/USD' };
@@ -237,24 +238,25 @@ const runRrDetection = async (env: Env): Promise<void> => {
         const { candles, currentRate } = await fetchCandles(symbol, SL_YAHOO_INTERVAL[tf]);
         tfStructures.push({ tf, structure: computeStructure(candles, currentRate) });
       }
-      const best = scanStructuralRr(tfStructures, inst, RR_MIN);
-      if (!best) continue;
-
-      // クールダウン判定（同 ペア＋TF＋方向 は RR_COOLDOWN_MS 再通知しない）。
-      const cdKey = `rr_cd:${inst}:${best.tf}:${best.direction}`;
-      const cdUntil = Number((await getMeta(env, cdKey)) ?? '0');
-      if (now < cdUntil) continue;
-
+      // 条件を満たしたTFを全件通知（最良1件に集約しない＝粒度を上げる）。
+      const setups = scanStructuralRrAll(tfStructures, inst, RR_MIN);
       const disp = RR_DISPLAY[inst] ?? inst;
-      const dirJa = best.direction === 'long' ? 'ロング' : 'ショート';
-      const title = `${disp} RR好機 1:${best.rr.toFixed(1)}`;
-      const body = `${RR_TF_LABEL[best.tf]} ${dirJa}／リスク${best.riskPips}pips・リワード${best.rewardPips}pips が狙えます`;
-      // pair 欄に "RR:" を付け、価格アラート(tag=pair)と別タグにして通知が衝突しないようにする。
-      await env.DB.prepare('INSERT INTO alerts (pair, title, body, created_at) VALUES (?, ?, ?, ?)')
-        .bind(`RR:${disp}`, title, body, now)
-        .run();
-      await setMeta(env, cdKey, String(now + RR_COOLDOWN_MS));
-      anyTriggered = true;
+      for (const setup of setups) {
+        // クールダウン判定（同 ペア＋TF＋方向 は RR_COOLDOWN_MS 再通知しない）。TFごとに独立。
+        const cdKey = `rr_cd:${inst}:${setup.tf}:${setup.direction}`;
+        const cdUntil = Number((await getMeta(env, cdKey)) ?? '0');
+        if (now < cdUntil) continue;
+
+        const dirJa = setup.direction === 'long' ? 'ロング' : 'ショート';
+        const title = `${disp} RR好機 1:${setup.rr.toFixed(1)}`;
+        const body = `${RR_TF_LABEL[setup.tf]} ${dirJa}／リスク${setup.riskPips}pips・リワード${setup.rewardPips}pips が狙えます`;
+        // pair 欄に "RR:" を付け、価格アラート(tag=pair)と別タグにして通知が衝突しないようにする。
+        await env.DB.prepare('INSERT INTO alerts (pair, title, body, created_at) VALUES (?, ?, ?, ?)')
+          .bind(`RR:${disp}`, title, body, now)
+          .run();
+        await setMeta(env, cdKey, String(now + RR_COOLDOWN_MS));
+        anyTriggered = true;
+      }
     } catch (e) {
       console.error(`RR検知 失敗 ${inst}:`, e);
     }
