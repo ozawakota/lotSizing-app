@@ -55,7 +55,7 @@ const CORS_HEADERS: Record<string, string> = {
 // 価格取得（キーレス無料ソースのハイブリッド）:
 //   - FX 3ペア … Yahoo Finance v8/chart の regularMarketPrice（スポット）
 //   - XAU/USD  … gold-api.com のスポット金価格（USD/oz）
-// OANDA の実 Bid から last/spot 価格に変わるが、しきい値（25pips/$5）は
+// OANDA の実 Bid から last/spot 価格に変わるが、しきい値（25pips/$8）は
 // スプレッド誤差より十分大きく、変動検知の用途では問題ない。市場休止時は
 // 価格が据え置かれ高安差≒0 となり誤発火しない。
 // 1ソースでも成功すれば部分結果を返し、全滅時のみ throw（健全性通知の対象）。

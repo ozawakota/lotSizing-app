@@ -22,7 +22,7 @@ interface PairConfig {
 // 対象ペアと判定設定。ここを編集すれば対象の増減・しきい値変更ができる。
 export const PAIR_CONFIG: Record<AlertPair, PairConfig> = {
   'GBP/JPY': { oanda: 'GBP_JPY', pipSize: 0.01, thresholdPips: 25, unit: 'pips', digits: 3 },
-  'XAU/USD': { oanda: 'XAU_USD', pipSize: 1, thresholdPips: 5, unit: 'ドル', digits: 2 },
+  'XAU/USD': { oanda: 'XAU_USD', pipSize: 1, thresholdPips: 8, unit: 'ドル', digits: 2 },
   'AUD/USD': { oanda: 'AUD_USD', pipSize: 0.0001, thresholdPips: 25, unit: 'pips', digits: 5 },
   'GBP/USD': { oanda: 'GBP_USD', pipSize: 0.0001, thresholdPips: 25, unit: 'pips', digits: 5 },
 };
@@ -110,7 +110,7 @@ export function evaluate(input: EvalInput): EvalResult {
 
 // プッシュ通知の本文を組み立てる。
 //   FX     : "GBP/JPY が15分で25pips変動（190.000 → 190.250）"
-//   ゴールド: "XAU/USD が15分で5ドル変動（2650.00 → 2655.00）"
+//   ゴールド: "XAU/USD が15分で8ドル変動（2650.00 → 2658.00）"
 export function formatAlertBody(pair: AlertPair, high: number, low: number): string {
   const cfg = PAIR_CONFIG[pair];
   const amount = Math.round((high - low) / cfg.pipSize);
@@ -118,7 +118,7 @@ export function formatAlertBody(pair: AlertPair, high: number, low: number): str
 }
 
 // 通知タイトル。ロック画面で一目で「どのペアがどれだけ動いたか」分かるようにする。
-//   例: "GBP/JPY 急変動 25pips" / "XAU/USD 急変動 5ドル"
+//   例: "GBP/JPY 急変動 25pips" / "XAU/USD 急変動 8ドル"
 export function formatAlertTitle(pair: AlertPair, high: number, low: number): string {
   const cfg = PAIR_CONFIG[pair];
   const amount = Math.round((high - low) / cfg.pipSize);

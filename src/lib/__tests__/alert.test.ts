@@ -89,25 +89,25 @@ describe('evaluate', () => {
     expect(r.samples).toEqual([]);
   });
 
-  it('XAU/USD は 15分で5ドル以上動いたら発火する', () => {
+  it('XAU/USD は 15分で8ドル以上動いたら発火する', () => {
+    const now = T0 + min(5);
+    const r = evaluate({
+      pair: 'XAU/USD',
+      samples: [{ ts: T0, bid: 2650 }],
+      newSample: { ts: now, bid: 2658 },
+      cooldownUntil: null,
+      now,
+    });
+    expect(r.triggered).toBe(true);
+    expect(r.rangePips).toBeCloseTo(8, 6);
+  });
+
+  it('XAU/USD は 8ドル未満では発火しない（旧しきい値5ドルでは鳴らない）', () => {
     const now = T0 + min(5);
     const r = evaluate({
       pair: 'XAU/USD',
       samples: [{ ts: T0, bid: 2650 }],
       newSample: { ts: now, bid: 2655 },
-      cooldownUntil: null,
-      now,
-    });
-    expect(r.triggered).toBe(true);
-    expect(r.rangePips).toBeCloseTo(5, 6);
-  });
-
-  it('XAU/USD は 5ドル未満では発火しない', () => {
-    const now = T0 + min(5);
-    const r = evaluate({
-      pair: 'XAU/USD',
-      samples: [{ ts: T0, bid: 2650 }],
-      newSample: { ts: now, bid: 2652 },
       cooldownUntil: null,
       now,
     });
