@@ -177,13 +177,13 @@ const runDetection = async (env: Env): Promise<void> => {
 
 // ---------------------------------------------------------------------------
 // RR≥1:3 構造的好機の検知（Jev不使用・完全無料）。Yahoo足だけで構造的RRを評価し、
-// 好機があれば価格アラートと同じ基盤で Push する。15分ごと・クールダウン4時間。
+// 好機があれば価格アラートと同じ基盤で Push する。15分ごと・クールダウン2時間。
 // ---------------------------------------------------------------------------
 const RR_INSTRUMENTS = ['XAU_USD', 'USD_JPY', 'EUR_USD', 'GBP_USD'];
 const RR_TFS: SlTimeframe[] = ['15m', '30m', '1h', '4h'];
 const RR_MIN = 3; // 1:3 以上
 const RR_SCAN_INTERVAL_MS = 15 * 60 * 1000; // 走査間隔（毎分 scheduled の中でゲート）
-const RR_COOLDOWN_MS = 4 * 60 * 60 * 1000; // 同「ペア＋TF＋方向」の再通知休止
+const RR_COOLDOWN_MS = 2 * 60 * 60 * 1000; // 同「ペア＋TF＋方向」の再通知休止
 const RR_DISPLAY: Record<string, string> = { XAU_USD: 'XAU/USD', USD_JPY: 'USD/JPY', EUR_USD: 'EUR/USD', GBP_USD: 'GBP/USD' };
 const RR_TF_LABEL: Record<SlTimeframe, string> = { '15m': '15分足', '30m': '30分足', '1h': '1時間足', '4h': '4時間足' };
 
