@@ -1,0 +1,19 @@
+# 初回セットアップ専用の VNC（:99 を 5900/loopback のみで配信）。
+# 配置: /etc/systemd/system/x11vnc.service
+# 接続は SSH トンネル経由（ssh -L 5900:localhost:5900 ...）。public には開けない。
+# セットアップ完了後は必ず停止する: sudo systemctl stop x11vnc && sudo systemctl disable x11vnc
+[Unit]
+Description=x11vnc for one-time MT5 setup (loopback only)
+After=xvfb.service
+Requires=xvfb.service
+
+[Service]
+User=ubuntu
+Environment=DISPLAY=:99
+# -localhost: ループバックのみ。-nopw: SSHトンネル前提でVNCパスは省略（公開しないこと）。
+ExecStart=/usr/bin/x11vnc -display :99 -forever -localhost -nopw -rfbport 5900 -shared
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

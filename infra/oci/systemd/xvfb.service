@@ -1,0 +1,14 @@
+# 仮想ディスプレイ :99 を常駐（MT5 をヘッドレスで動かす土台）。
+# 配置: /etc/systemd/system/xvfb.service
+[Unit]
+Description=Xvfb virtual framebuffer on :99
+After=network.target
+
+[Service]
+User=ubuntu
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

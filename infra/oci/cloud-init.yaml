@@ -1,0 +1,117 @@
+#cloud-config
+# OCI Always Free「VM.Standard.E2.1.Micro」(x86_64 / Ubuntu 22.04) の初回起動スクリプト。
+# スワップ作成→Wine/Xvfb/x11vnc/Python 導入→公開リポジトリ clone→venv→systemd ユニット設置→
+# Xvfb と mt5-sync.timer を有効化する。MT5 導入・初回ログイン・EA適用は手順書(README)で VNC 経由で行う。
+# 注意: ARM(A1)では動かない。x86 の E2.1.Micro を使うこと。
+
+package_update: true
+packages:
+  - git
+  - curl
+  - unzip
+  - cabextract
+  - python3
+  - python3-venv
+  - xvfb
+  - x11vnc
+  - winbind
+  - fonts-wqy-zenhei
+
+write_files:
+  # Turso / 同期先の環境変数（権限600）。TURSO_AUTH_TOKEN と MT5_SYNC_DIR は後で実値に置換する。
+  - path: /etc/mt5-sync.env
+    permissions: '0600'
+    owner: root:root
+    content: |
+      TURSO_DATABASE_URL=libsql://mt5-sync-k-ozawa.aws-ap-northeast-1.turso.io
+      TURSO_AUTH_TOKEN=REPLACE_ME
+      MT5_SYNC_DIR=/home/ubuntu/.wine/drive_c/users/ubuntu/AppData/Roaming/MetaQuotes/Terminal/XXXXXXXX/MQL5/Files/mt5sync
+
+  - path: /etc/systemd/system/xvfb.service
+    content: |
+      [Unit]
+      Description=Xvfb virtual framebuffer on :99
+      After=network.target
+      [Service]
+      User=ubuntu
+      ExecStart=/usr/bin/Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp
+      Restart=always
+      RestartSec=5
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/mt5.service
+    content: |
+      [Unit]
+      Description=MetaTrader5 terminal (headless via Wine on :99)
+      After=xvfb.service
+      Requires=xvfb.service
+      [Service]
+      User=ubuntu
+      Environment=DISPLAY=:99
+      Environment=WINEPREFIX=/home/ubuntu/.wine
+      Environment=WINEDEBUG=-all
+      ExecStart=/usr/bin/wine "/home/ubuntu/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe"
+      Restart=always
+      RestartSec=15
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/x11vnc.service
+    content: |
+      [Unit]
+      Description=x11vnc for one-time MT5 setup (loopback only)
+      After=xvfb.service
+      Requires=xvfb.service
+      [Service]
+      User=ubuntu
+      Environment=DISPLAY=:99
+      ExecStart=/usr/bin/x11vnc -display :99 -forever -localhost -nopw -rfbport 5900 -shared
+      Restart=on-failure
+      RestartSec=5
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/mt5-sync.service
+    content: |
+      [Unit]
+      Description=MT5 to Turso sync (one-shot)
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      Type=oneshot
+      EnvironmentFile=/etc/mt5-sync.env
+      WorkingDirectory=/opt/lotsizing-app/infra/sync
+      ExecStart=/opt/mt5-venv/bin/python /opt/lotsizing-app/infra/sync/sync.py --once --dir ${MT5_SYNC_DIR}
+
+  - path: /etc/systemd/system/mt5-sync.timer
+    content: |
+      [Unit]
+      Description=Run MT5 to Turso sync every minute
+      [Timer]
+      OnBootSec=60
+      OnUnitActiveSec=60
+      AccuracySec=5s
+      Unit=mt5-sync.service
+      [Install]
+      WantedBy=timers.target
+
+runcmd:
+  # --- 2GB スワップ（RAM 1GB を補う。Wine+MT5 に必須）---
+  - [ bash, -lc, "test -f /swapfile || (fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048)" ]
+  - [ bash, -lc, "chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile" ]
+  - [ bash, -lc, "grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab" ]
+  # --- Wine（32bit も有効化）---
+  - [ bash, -lc, "dpkg --add-architecture i386 && apt-get update" ]
+  - [ bash, -lc, "DEBIAN_FRONTEND=noninteractive apt-get install -y wine64 wine32" ]
+  # --- 同期コード（公開リポジトリ）を取得 ---
+  - [ bash, -lc, "git clone --depth 1 https://github.com/ozawakota/lotSizing-app.git /opt/lotsizing-app" ]
+  # --- Python venv に Turso クライアントを導入 ---
+  - [ bash, -lc, "python3 -m venv /opt/mt5-venv && /opt/mt5-venv/bin/pip install -r /opt/lotsizing-app/infra/sync/requirements.txt" ]
+  # --- systemd 反映。Xvfb と 同期タイマーは起動（MT5未導入でも manifest 無しでスキップするだけ）---
+  - [ bash, -lc, "systemctl daemon-reload" ]
+  - [ bash, -lc, "systemctl enable --now xvfb.service" ]
+  - [ bash, -lc, "systemctl enable --now mt5-sync.timer" ]
+  - [ bash, -lc, "echo 'cloud-init 完了。次は infra/oci/README.md の手順で MT5 を導入してください。' > /home/ubuntu/NEXT_STEPS.txt" ]
+
+final_message: "mt5-sync base ready. See /opt/lotsizing-app/infra/oci/README.md to install MT5."
