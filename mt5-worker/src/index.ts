@@ -66,6 +66,10 @@ const toDeal = (r: Row): Mt5Deal => ({
 
 // mt5-sync を読み、監視用の状態を組み立てる。口座は最新更新の1件、約定は直近100件。
 const handleState = async (env: Env): Promise<Response> => {
+  // Turso 未設定（secret 未登録）なら生の libSQL エラーを出さず「同期待ち」の空状態を返す。
+  if (!env.TURSO_DATABASE_URL || !env.TURSO_AUTH_TOKEN) {
+    return json(200, { account: null, positions: [], deals: [] } satisfies Mt5State);
+  }
   const db: Client = createClient({ url: env.TURSO_DATABASE_URL, authToken: env.TURSO_AUTH_TOKEN });
   const [acc, pos, dls] = await Promise.all([
     db.execute('SELECT * FROM accounts ORDER BY updated_at DESC LIMIT 1'),
