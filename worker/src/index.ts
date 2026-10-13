@@ -57,8 +57,10 @@ import {
   volumeAnchoredLevel,
   futuresLevelToSpot,
   computeStochastic,
+  scoreRoleReversal,
   VOLUME_SYMBOL,
   type BreakoutProb,
+  type RoleReversal,
   type PaContext,
   type StochReading,
   type Candle,
@@ -903,6 +905,7 @@ interface MtfTf {
   rr: RrSetup | null; // 上位TFスイングを目標にした RR 評価（上位TFが無い/目標無しは null）
   volumeLevel: number | null; // 過去の高出来高の節目価格（30m/1h=2日前・4h=2週前付近。出来高無し=null）
   stoch: StochReading | null; // ストキャスティクス(%K/%D)。足から自前計算（算出不可は null）
+  roleReversal: RoleReversal | null; // ロールリバーサル・ブレイク信用度（0–100・状態・側）。評価不能は null
 }
 interface MtfPayload {
   instrument: string;
@@ -933,9 +936,11 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
   let sessionCloses: number[] = []; // セッション予測用の代表的な終値列（1h優先）
   const sessionStatus = sessionStatusText(new Date()); // 東京/ロンドン/NY の開閉を各TF判定に反映
   const now = Date.now();
+  const tfCandles: Candle[][] = []; // ロールリバーサル評価用に各TFの足を保持（index は timeframes と対応）
   for (const tf of MTF_TIMEFRAMES) {
     const { candles, currentRate: cr } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf]);
     currentRate = cr;
+    tfCandles.push(candles);
     const structure = computeStructure(candles, cr);
     const recentCloses = candles.slice(-12).map((c) => c.close);
     if (tf === '1h' || sessionCloses.length === 0) sessionCloses = recentCloses;
@@ -970,15 +975,26 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       rr: null, // 下の2パス目で算出（上位TFのスイングが必要なため）
       volumeLevel,
       stoch,
+      roleReversal: null, // 下の2パス目で算出（上位TFのコンフルエンスが必要なため）
     });
   }
 
   // RR 評価: 各TFを上位TF（配列後方＝長い足）のスイングを目標に判定し、最良の好機を1件選ぶ。
   let rrOpportunity: (RrSetup & { tf: SlTimeframe }) | null = null;
   timeframes.forEach((t, i) => {
+    const structure = { trend: t.trend, swingHigh: t.swingHigh, swingLow: t.swingLow, currentRate };
+    // ロールリバーサル・ブレイク信用度（上位TFのスイングをコンフルエンス材料に渡す）。
+    const higherLevels = timeframes.slice(i + 1).flatMap((h) => [h.swingHigh, h.swingLow]);
+    t.roleReversal = scoreRoleReversal(tfCandles[i], structure, {
+      instrument,
+      breakout: t.breakout,
+      stoch: t.stoch,
+      volumeLevel: t.volumeLevel,
+      higherLevels,
+    });
+    // RR 評価（従来どおり・ブレイク方向がある TF のみ）。
     const dir = dirFromBreakout(t.breakout);
     if (!dir) return;
-    const structure = { trend: t.trend, swingHigh: t.swingHigh, swingLow: t.swingLow, currentRate };
     const higherSwings = timeframes.slice(i + 1).map((h) => ({ swingHigh: h.swingHigh, swingLow: h.swingLow }));
     t.rr = assessRiskReward(structure, dir.direction, dir.prob, higherSwings, instrument);
     if (t.rr?.qualifies && (!rrOpportunity || t.rr.rr > rrOpportunity.rr)) {

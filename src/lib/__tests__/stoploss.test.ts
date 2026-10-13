@@ -15,6 +15,7 @@ import {
   computeStochastic,
   scanStructuralRr,
   scanStructuralRrAll,
+  scoreRoleReversal,
   type Candle,
   type SessionState,
   type SlStructure,
@@ -293,6 +294,61 @@ describe('scanStructuralRr', () => {
     const r = scanStructuralRr(tfs, 'USD_JPY', 3);
     expect(r!.direction).toBe('short');
     expect(r!.target).toBe(148.0);
+  });
+});
+
+describe('scoreRoleReversal', () => {
+  const mk = (high: number, low: number, close: number, volume?: number): Candle => ({ high, low, close, volume });
+  const UP = { trend: 'up' as const, swingHigh: 100, swingLow: 96, currentRate: 103.5 };
+
+  // レジ100を抜けずに下げる（どのピボット高値も終値で抜けていない）→ 未ブレイク。
+  const noBreak: Candle[] = [
+    mk(98, 96, 97), mk(98.5, 96.5, 97.5), mk(99, 97, 98), mk(98.8, 96.8, 97.8),
+    mk(98.5, 96.5, 97.5), mk(99, 97, 98), mk(100, 98, 98.5), mk(98.5, 96.5, 97.5),
+    mk(98, 96, 97), mk(97.5, 95.5, 96.5), mk(97, 95, 96), mk(96.5, 94.5, 95.5),
+    mk(96, 94, 95), mk(95.5, 93.5, 94.5), mk(95, 93, 94), mk(94.5, 92.5, 93.5),
+  ];
+
+  // レジ100を終値で上抜け→戻り(リテスト100.3)→保持(終値>100継続) → 転換確認。
+  const breakHold: Candle[] = [
+    mk(98, 96, 97), mk(98.5, 96.5, 97.5), mk(99, 97, 98), mk(98.8, 96.8, 97.8),
+    mk(98.5, 96.5, 97.5), mk(99, 97, 98), mk(100, 98, 98.5), mk(99, 97, 98),
+    mk(98.8, 97, 98), mk(99, 97.5, 98.2), mk(102.5, 99, 102), mk(103, 101, 102.5),
+    mk(103, 101, 102.8), mk(101.5, 100.3, 101), mk(102, 101, 101.8), mk(103, 101.5, 102.5),
+    mk(103.5, 102, 103), mk(103.2, 102, 102.8), mk(103.5, 102.5, 103.2), mk(104, 103, 103.5),
+  ];
+
+  it('候補不足なら null', () => {
+    expect(scoreRoleReversal([], UP, { instrument: 'USD_JPY' })).toBeNull();
+    expect(scoreRoleReversal(noBreak.slice(0, 8), UP, { instrument: 'USD_JPY' })).toBeNull();
+  });
+
+  it('上昇トレンドはレジ(resistance)側を評価する', () => {
+    const r = scoreRoleReversal(breakHold, UP, { instrument: 'USD_JPY' });
+    expect(r?.side).toBe('resistance');
+  });
+
+  it('下降トレンドはサポ(support)側を評価する', () => {
+    const down = { trend: 'down' as const, swingHigh: 104, swingLow: 100, currentRate: 96 };
+    const r = scoreRoleReversal(breakHold, down, { instrument: 'USD_JPY' });
+    expect(r?.side).toBe('support');
+  });
+
+  it('未ブレイクは state=none で、ブレイク保持より低スコア', () => {
+    const none = scoreRoleReversal(noBreak, UP, { instrument: 'USD_JPY' });
+    const hold = scoreRoleReversal(breakHold, UP, { instrument: 'USD_JPY' });
+    expect(none?.state).toBe('none');
+    expect(hold?.state).toBe('confirmed');
+    expect(hold!.score).toBeGreaterThan(none!.score);
+    for (const r of [none!, hold!]) {
+      expect(r.score).toBeGreaterThanOrEqual(0);
+      expect(r.score).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it('出来高が無くても（FXスポット想定）スコアは有限', () => {
+    const r = scoreRoleReversal(breakHold, UP, { instrument: 'USD_JPY' });
+    expect(Number.isFinite(r!.score)).toBe(true);
   });
 });
 

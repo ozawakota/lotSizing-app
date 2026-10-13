@@ -314,6 +314,182 @@ export function scanStructuralRr(
 }
 
 // ---------------------------------------------------------------------------
+// ロールリバーサル・ブレイク信用度（0–100）
+// ---------------------------------------------------------------------------
+// 「旧レジサポラインがブレイク→役割転換→リテスト保持」として機能する確度をスコア化する。
+// 構成: ブレイク確認(30) + リテスト保持(25) + トレンド/モメンタム整合(15) + 出来高急増(15) +
+//       ラインの質(15)。出来高が無い(FXスポット=0/欠損)場合は出来高配点を外して再正規化する。
+
+export type RoleReversalState = 'none' | 'broken' | 'retest' | 'confirmed';
+export interface RoleReversal {
+  score: number; // 0–100
+  state: RoleReversalState; // 未ブレイク / ブレイク直後 / リテスト中 / 転換確認
+  side: 'resistance' | 'support'; // 評価したライン（上抜け=resistance / 下抜け=support）
+}
+
+const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
+
+// 平均レンジ(高安幅)。ボラティリティの基準に使う。
+function avgRange(candles: Candle[]): number {
+  if (candles.length === 0) return 0;
+  const sum = candles.reduce((a, c) => a + Math.max(c.high - c.low, 0), 0);
+  return sum / candles.length;
+}
+
+// 前後 k 本の中で極大(high)/極小(low)になる足のインデックス（ピボット）。
+function pivotIndices(candles: Candle[], kind: 'high' | 'low', k = 2): number[] {
+  const out: number[] = [];
+  for (let i = k; i < candles.length - k; i++) {
+    const v = kind === 'high' ? candles[i].high : candles[i].low;
+    let piv = true;
+    for (let j = i - k; j <= i + k && piv; j++) {
+      if (j === i) continue;
+      const w = kind === 'high' ? candles[j].high : candles[j].low;
+      if (kind === 'high' ? w > v : w < v) piv = false;
+    }
+    if (piv) out.push(i);
+  }
+  return out;
+}
+
+/**
+ * 1TFのロールリバーサル・ブレイク信用度を算出する（純関数）。
+ * bias（trend／breakout）で評価する側(resistance/support)を1つ選び、直近で close がそのラインを
+ * 抜けたか（ブレイク）、戻って保持したか（リテスト）を candles から判定してスコア化する。
+ * candles 不足や極小レンジで評価不能なら null。
+ */
+export function scoreRoleReversal(
+  candles: Candle[],
+  structure: SlStructure,
+  opts: {
+    instrument: string;
+    breakout?: BreakoutProb | null;
+    stoch?: StochReading | null;
+    volumeLevel?: number | null;
+    higherLevels?: number[]; // 上位足のスイング価格（コンフルエンス加点）
+  },
+): RoleReversal | null {
+  const win = candles.slice(-80); // 評価窓（直近最大80本）
+  if (win.length < 12) return null;
+  const atr = avgRange(win);
+  if (!(atr > 0)) return null;
+
+  const pip = pipSize(opts.instrument);
+  const buffer = Math.max(atr * 0.25, pip * 3);
+  const cr = structure.currentRate;
+  const b = opts.breakout ?? null;
+
+  // 評価する側（上抜け=resistance / 下抜け=support）を bias で選ぶ。
+  let side: 'resistance' | 'support';
+  if (structure.trend === 'up') side = 'resistance';
+  else if (structure.trend === 'down') side = 'support';
+  else if (b && b.up > b.down && b.up >= b.range) side = 'resistance';
+  else if (b && b.down > b.up && b.down >= b.range) side = 'support';
+  else side = Math.abs(structure.swingHigh - cr) <= Math.abs(cr - structure.swingLow) ? 'resistance' : 'support';
+
+  const isRes = side === 'resistance';
+  const lastClose = win[win.length - 1].close;
+
+  // 「close が抜けたピボット」のうち、抜けた側で現在値に最も近いもの（resistance=最も高い /
+  // support=最も低い）を役割転換ラインとして採用する。未ブレイクなら表示ラインを保留対象に。
+  const pivs = pivotIndices(win, isRes ? 'high' : 'low');
+  let level = isRes ? structure.swingHigh : structure.swingLow; // 未ブレイク時の保留ライン
+  let breakIdx = -1;
+  let bestL = isRes ? -Infinity : Infinity;
+  for (const p of pivs) {
+    const L = isRes ? win[p].high : win[p].low;
+    let bi = -1;
+    for (let i = p + 1; i < win.length; i++) {
+      if (isRes ? win[i].close > L : win[i].close < L) {
+        bi = i;
+        break;
+      }
+    }
+    if (bi < 0) continue; // このピボットは未ブレイク
+    if (isRes ? L > bestL : L < bestL) {
+      bestL = L;
+      level = L;
+      breakIdx = bi;
+    }
+  }
+
+  // --- 各サブスコア（0..1） ---
+  let breakConf = 0;
+  let retestConf = 0;
+  let volumeConf: number | null = null;
+  let state: RoleReversalState = 'none';
+
+  if (breakIdx >= 0) {
+    const bc = win[breakIdx];
+    // ブレイク確認: ラインからの貫通幅 + 足のレンジ拡大。
+    const pen = isRes ? bc.close - level : level - bc.close;
+    const penNorm = clamp01(pen / (atr * 0.75));
+    const rngNorm = clamp01((bc.high - bc.low) / (atr * 1.2));
+    breakConf = clamp01(0.6 * penNorm + 0.4 * rngNorm);
+
+    // リテスト: ブレイク後にラインまで戻ったか／現在も抜け側を保持しているか。
+    let retestTouched = false;
+    for (let i = breakIdx + 1; i < win.length; i++) {
+      const back = isRes ? win[i].low <= level + buffer : win[i].high >= level - buffer;
+      if (back) {
+        retestTouched = true;
+        break;
+      }
+    }
+    const stillBeyond = isRes ? lastClose > level : lastClose < level;
+    if (!retestTouched) {
+      state = 'broken';
+      retestConf = 0;
+    } else if (stillBeyond) {
+      state = 'confirmed';
+      retestConf = 1;
+    } else {
+      state = 'retest';
+      retestConf = 0.5;
+    }
+
+    // 出来高急増: ブレイク足の出来高 ÷ 窓平均。volume 欠損(FXスポット)なら配点から除外。
+    const vols = win.map((c) => c.volume ?? 0).filter((v) => v > 0);
+    if ((bc.volume ?? 0) > 0 && vols.length >= win.length / 2) {
+      const avgVol = vols.reduce((a, v) => a + v, 0) / vols.length;
+      if (avgVol > 0) volumeConf = clamp01((bc.volume! / avgVol - 1) / 1.0); // 2倍で満点
+    }
+  }
+
+  // トレンド/モメンタム整合（常時）。
+  const trendAlign = structure.trend === (isRes ? 'up' : 'down') ? 1 : structure.trend === 'range' ? 0.5 : 0;
+  let stochComp = 0.5;
+  if (opts.stoch) {
+    const k = opts.stoch.k;
+    stochComp = isRes ? (k >= 85 ? 0.4 : k >= 50 ? 0.9 : 0.6) : k <= 15 ? 0.4 : k <= 50 ? 0.9 : 0.6;
+  }
+  const momentum = clamp01(0.6 * trendAlign + 0.4 * stochComp);
+
+  // ラインの質: タッチ回数 + volumeLevel/上位足とのコンフルエンス（常時）。
+  const touches = win.filter((c) =>
+    isRes ? Math.abs(c.high - level) <= buffer : Math.abs(c.low - level) <= buffer,
+  ).length;
+  const touchScore = clamp01(touches / 3);
+  let conf = 0;
+  if (opts.volumeLevel != null && Math.abs(opts.volumeLevel - level) <= buffer * 2) conf += 0.5;
+  if ((opts.higherLevels ?? []).some((h) => Math.abs(h - level) <= buffer * 2)) conf += 0.5;
+  const quality = clamp01(0.5 * touchScore + 0.5 * Math.min(1, conf));
+
+  // 重み付き合算（volume は取得できたときだけ）。
+  const parts: { w: number; v: number }[] = [
+    { w: 0.3, v: breakConf },
+    { w: 0.25, v: retestConf },
+    { w: 0.15, v: momentum },
+    { w: 0.15, v: quality },
+  ];
+  if (volumeConf !== null) parts.push({ w: 0.15, v: volumeConf });
+  const wsum = parts.reduce((a, p) => a + p.w, 0);
+  const score = Math.round((100 * parts.reduce((a, p) => a + p.w * p.v, 0)) / wsum);
+
+  return { score, state, side };
+}
+
+// ---------------------------------------------------------------------------
 // プライスアクション分類: Jev(Choice) / Workers AI(JSON)
 // ---------------------------------------------------------------------------
 export interface JevBody {

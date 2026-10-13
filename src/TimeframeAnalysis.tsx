@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import type {
   BreakoutProb,
   PaClass,
+  RoleReversal,
   RrSetup,
   SessionOutlook,
   SessionPrediction,
@@ -45,6 +46,7 @@ interface MtfTf {
   rr: RrSetup | null;
   volumeLevel: number | null; // 過去の高出来高の節目（30m/1h=2日前・4h=2週前。無し=null）
   stoch: { k: number; d: number } | null; // ストキャスティクス(%K/%D)。算出不可=null
+  roleReversal: RoleReversal | null; // ロールリバーサル・ブレイク信用度（0–100・状態・側）。評価不能=null
 }
 interface MtfResult {
   instrument: string;
@@ -195,6 +197,32 @@ function RrRow({ rr, digits }: { rr: RrSetup | null; digits: number }) {
   );
 }
 
+// ロールリバーサル・ブレイク信用度（0–100）の1行。側（レジ上抜け=緑/サポ下抜け=赤）＋状態＋バー。
+const RR_STATE_LABEL: Record<RoleReversal['state'], string> = {
+  none: '未ブレイク',
+  broken: 'ブレイク直後',
+  retest: 'リテスト中',
+  confirmed: '転換確認',
+};
+function RoleReversalRow({ rr }: { rr: RoleReversal }) {
+  const up = rr.side === 'resistance'; // レジ上抜け＝強気（緑）/ サポ下抜け＝弱気（赤）
+  return (
+    <div className="mt-2">
+      <div className="flex items-center justify-between text-[11px]">
+        <span className="text-gray-500">ロールリバーサル</span>
+        <span className="flex items-center gap-1.5 font-semibold">
+          <span className={up ? 'text-green-700' : 'text-red-700'}>{up ? 'レジ上抜け' : 'サポ下抜け'}</span>
+          <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500">{RR_STATE_LABEL[rr.state]}</span>
+          <span className="tabular-nums text-gray-700">信用度 {rr.score}</span>
+        </span>
+      </div>
+      <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-gray-100">
+        <div className={up ? 'bg-green-500' : 'bg-red-500'} style={{ width: `${rr.score}%`, height: '100%' }} />
+      </div>
+    </div>
+  );
+}
+
 const SCENARIO_LABEL: Record<SessionScenario, string> = {
   reversal: '反転',
   breakout: 'ブレイク',
@@ -323,9 +351,10 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
         <LevelLine side="sup" price={tf.swingLow} distancePips={supDist} digits={digits} />
       </div>
 
-      {/* ブレイク確率バー ＋ RR */}
+      {/* ブレイク確率バー ＋ RR ＋ ロールリバーサル信用度 */}
       <BreakoutRow breakout={tf.breakout} />
       <RrRow rr={tf.rr} digits={digits} />
+      {tf.roleReversal && <RoleReversalRow rr={tf.roleReversal} />}
 
       {/* 補助指標（ストキャス・出来高節目）を1行に集約。無ければ非表示 */}
       {(tf.stoch || tf.volumeLevel != null) && (
