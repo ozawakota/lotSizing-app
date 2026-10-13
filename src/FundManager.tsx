@@ -706,8 +706,8 @@ export default function FundManager() {
             </div>
           </Popup>
 
-          {/* 設定 */}
-          <form onSubmit={saveSettings} className="bg-gray-50 rounded-md p-3 border border-gray-200">
+          {/* 設定: 非制御入力(defaultValue)はマウント時のみ値を読むため、settings が非同期ロードされたら key でフォームを再マウントして反映する。 */}
+          <form key={`${settings.startingBalance}-${settings.currency}`} onSubmit={saveSettings} className="bg-gray-50 rounded-md p-3 border border-gray-200">
             <p className="text-sm font-bold text-gray-700 mb-1">初期設定</p>
             <div className="grid grid-cols-3 gap-2 items-end">
               <label className="text-xs text-gray-600">
