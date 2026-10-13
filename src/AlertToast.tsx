@@ -2,7 +2,7 @@
 // 前回より新しいアラートが出たら画面上部に帯状トーストを表示する（OS通知のON/OFFに依存しない）。
 // 初回ポーリングはベースライン記録のみ（既存の過去分はトーストしない）。
 import { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { Target, X } from 'lucide-react';
 import { fetchAlertHistory, getRrEnabled, isPushConfigured, pickNewAlerts, type AlertHistoryItem } from '@/lib/push';
 
 const POLL_MS = 60_000; // 60秒
@@ -111,9 +111,16 @@ function ToastItem({ toast, onDismiss }: { toast: AlertHistoryItem; onDismiss: (
 
   const opacity = Math.max(0, 1 + dragY / 120); // 上に動くほど薄く
 
+  // RR好機通知（pair が "RR:" 始まり）はインディゴ配色＋🎯＋「好機」ピルで価格変動（オレンジ）と区別する。
+  const isRr = toast.pair.startsWith('RR:');
+  // タイトルは "XAU/USD RR好機 1:3.0"。ピルで「好機」を示すため、本文側は "RR" に簡約して重複を避ける。
+  const displayTitle = (toast.title || toast.pair).replace('RR好機', 'RR');
+
   return (
     <div
-      className="flex w-full max-w-md touch-none items-start gap-2 rounded-lg border-l-4 border-orange-500 bg-white px-3 py-2 shadow-lg"
+      className={`flex w-full max-w-md touch-none items-start gap-2 rounded-lg border-l-4 px-3 py-2 shadow-lg ${
+        isRr ? 'border-indigo-500 bg-indigo-50' : 'border-orange-500 bg-white'
+      }`}
       style={{
         transform: `translateY(${dragY}px)`,
         opacity,
@@ -132,8 +139,16 @@ function ToastItem({ toast, onDismiss }: { toast: AlertHistoryItem; onDismiss: (
         if (e.pointerType !== 'touch') end();
       }}
     >
+      {isRr && <Target className="mt-0.5 h-4 w-4 shrink-0 text-indigo-500" aria-hidden="true" />}
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-bold text-gray-800">{toast.title || toast.pair}</p>
+        <p className="flex items-center gap-1.5 text-sm font-bold text-gray-800">
+          {isRr && (
+            <span className="shrink-0 rounded-full bg-indigo-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
+              好機
+            </span>
+          )}
+          <span className="min-w-0 truncate">{isRr ? displayTitle : toast.title || toast.pair}</span>
+        </p>
         <p className="text-xs text-gray-600">{toast.body}</p>
       </div>
       <button
