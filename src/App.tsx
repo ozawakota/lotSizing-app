@@ -13,8 +13,7 @@ import BottomTabBar, { type AppView } from './components/BottomTabBar';
 import OrderFlow from './OrderFlow'; // 取引量・センチメント ページ
 import FundManager from './FundManager'; // 資金管理（トレードジャーナル）ページ
 import NewsSummary from './NewsSummary'; // 為替ニュース要約＋売買シグナル ページ
-import TimeframeAnalysis from './TimeframeAnalysis'; // マルチタイムフレーム分析 ページ
-import SupportResistance from './SupportResistance'; // レジサポライン分析 ページ
+import TimeframeAnalysis from './TimeframeAnalysis'; // タイムフレーム分析（レジサポ統合）ページ
 import AlertToast from './AlertToast'; // 相場変動の in-app トースト通知
 // 各ページのタイトル（共通ヘッダーに表示）。
 const VIEW_TITLES: Record<AppView, string> = {
@@ -23,12 +22,13 @@ const VIEW_TITLES: Record<AppView, string> = {
   fund: '資金管理',
   news: '為替ニュース',
   mtf: 'タイムフレーム分析',
-  sr: 'レジサポ分析',
 };
 // リロードしても現在のページを保持する（localStorage）。不正値はロット計算にフォールバック。
 const VIEW_STORAGE_KEY = 'app_view';
 const loadView = (): AppView => {
   const v = localStorage.getItem(VIEW_STORAGE_KEY);
+  // 旧「レジサポ(sr)」は TF分析 に統合済み。保存値が 'sr' の人は 'mtf' に移行。
+  if (v === 'sr') return 'mtf';
   return v && v in VIEW_TITLES ? (v as AppView) : 'calculator';
 };
 
@@ -1055,8 +1055,6 @@ const App: FC = () => {
         <NewsSummary />
       ) : view === 'mtf' ? (
         <TimeframeAnalysis />
-      ) : view === 'sr' ? (
-        <SupportResistance />
       ) : (
         <FundManager />
       )}
