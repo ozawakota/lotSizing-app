@@ -37,3 +37,17 @@ export function isSessionOpen(session: MarketSession, at: Date): boolean {
   const isWeekday = weekday >= 1 && weekday <= 5;
   return isWeekday && hour >= session.openHour && hour < session.closeHour;
 }
+
+/** 市場セッション状況テキスト（現在時刻JST＋各セッションの開閉＋重複注記）。Worker の /mtf 文脈で使用。 */
+export function sessionStatusText(now: Date): string {
+  const jst = new Intl.DateTimeFormat('ja-JP', {
+    timeZone: 'Asia/Tokyo',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(now);
+  const statuses = MARKET_SESSIONS.map((s) => `${s.label}:${isSessionOpen(s, now) ? '開場中' : '閉場'}`);
+  const openCount = MARKET_SESSIONS.filter((s) => isSessionOpen(s, now)).length;
+  const overlap = openCount >= 2 ? '（セッション重複中＝流動性・ボラティリティ高めになりやすい）' : '';
+  return `【市場セッション】現在 ${jst} JST｜${statuses.join(' ')}${overlap}`;
+}
