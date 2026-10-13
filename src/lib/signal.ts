@@ -2,7 +2,7 @@
 // Worker とクライアントで共有。算出エンジン（Workers AI / Jev）はこの型に整形するだけで
 // 差し替え可能にする。プロンプト生成と応答パースをここに集約して単体テストする。
 import type { RateSeries } from './strength';
-import type { NewsItem } from './news';
+import type { EconEvent, NewsItem } from './news';
 
 // シグナル対象ペア（直近トレンドを intraday シリーズから得られるものを既定とする）。
 export type SignalPair =
@@ -94,6 +94,7 @@ export function buildSignalPrompt(
   items: NewsItem[],
   trends: PairTrend[],
   pairs: SignalPair[] = SIGNAL_PAIRS,
+  econNote = '', // 高重要度の経済指標ダイジェスト（空なら節を出さない）
 ): string {
   const news = items.map((it, i) => `${i + 1}. ${it.title} — ${it.description}`).join('\n');
   const trendLines = trends
@@ -110,6 +111,10 @@ export function buildSignalPrompt(
     '',
     '# 直近トレンド',
     trendLines,
+    // 高重要度の経済指標を加味（発表前後は様子見・ボラ拡大の可能性を考慮させる）。
+    ...(econNote
+      ? ['', '# 経済指標（高重要度・今週）', econNote, '', '発表前後は様子見やボラティリティ拡大の可能性を考慮してください。']
+      : []),
     '',
     '# 出力ルール',
     `対象ペア: ${pairs.join(', ')}`,
@@ -185,11 +190,15 @@ export function buildJevRequest(
   items: NewsItem[],
   trends: PairTrend[],
   pairs: SignalPair[] = SIGNAL_PAIRS,
+  econEvents: EconEvent[] = [], // 高重要度の経済指標（state に calendar として加味）
 ): JevRequestBody {
   const dirByPair = new Map(trends.map((t) => [t.pair, t.direction]));
   const state = {
     news: items.map((it) => ({ title: it.title, summary: it.description })),
     trends: trends.map((t) => ({ pair: t.pair, direction: t.direction, changePct: t.changePct })),
+    ...(econEvents.length
+      ? { calendar: econEvents.map((e) => ({ date: e.date, country: e.country, title: e.title, forecast: e.forecast, previous: e.previous })) }
+      : {}),
   };
   const questions: Record<string, unknown> = {};
   for (const pair of pairs) {

@@ -27,7 +27,7 @@ import {
   type VolumePeak,
 } from '../../src/lib/flow';
 // /news の為替ニュース＋売買シグナルのロジック/型もフロントと共有。
-import { parseRssItems, type NewsItem } from '../../src/lib/news';
+import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type NewsItem } from '../../src/lib/news';
 import {
   SIGNAL_PAIRS,
   buildJevRequest,
@@ -516,6 +516,8 @@ const SUMMARY_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 const SIGNAL_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 const RSS_FEEDS = ['https://www.fxstreet.com/rss/news', 'https://www.investing.com/rss/forex.rss'];
 const NEWS_UA = 'Mozilla/5.0 (compatible; lotsizing-news/1.0)';
+// 経済指標カレンダー（ForexFactory 週次JSON・キー不要）。High重要度・対象8通貨を加味する。
+const ECON_CALENDAR_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
 
 interface NewsPayload {
   generatedAt: number;
@@ -523,7 +525,15 @@ interface NewsPayload {
   summary: string;
   signals: PairSignal[];
   items: { title: string; link: string; pubDate: string }[];
+  calendar: EconEvent[]; // 高重要度の経済指標（今日〜今週・対象8通貨）
 }
+
+// 経済指標カレンダーを取得し、High重要度・対象通貨・今日以降に絞って返す。失敗時は空配列。
+const fetchEconCalendar = async (): Promise<EconEvent[]> => {
+  const res = await fetch(ECON_CALENDAR_URL, { headers: { 'User-Agent': NEWS_UA } });
+  if (!res.ok) throw new Error(`経済指標API HTTP ${res.status}`);
+  return filterEconEvents(await res.json(), new Date());
+};
 
 // RSS を主→予備の順に取得。最初に項目が取れたフィードを採用。
 const fetchNewsItems = async (): Promise<NewsItem[]> => {
@@ -552,17 +562,20 @@ const aiText = (r: unknown): string => {
   }
 };
 
-// Workers AI で日本語要約。
-const summarizeNews = async (env: Env, items: NewsItem[]): Promise<string> => {
+// Workers AI で日本語要約。econNote（高重要度の経済指標）があれば文脈に加える。
+const summarizeNews = async (env: Env, items: NewsItem[], econNote = ''): Promise<string> => {
   const list = items.map((it, i) => `${i + 1}. ${it.title} — ${it.description}`).join('\n');
+  const econSection = econNote ? `\n\n# 今週の主要経済指標（高重要度）\n${econNote}` : '';
   const r = await env.AI.run(SUMMARY_MODEL, {
     messages: [
       { role: 'system', content: 'あなたはFXアナリストです。英語の為替ニュースを日本語で簡潔に要約します。' },
       {
         role: 'user',
         content:
-          '次の為替ニュースを日本語で要約してください。全体トレンドを2〜3行、続けて主要トピックを3〜5個の箇条書きで。断定的な予測は避け、事実ベースで。\n\n' +
-          list,
+          '次の為替ニュースを日本語で要約してください。全体トレンドを2〜3行、続けて主要トピックを3〜5個の箇条書きで。' +
+          '直近に高重要度の経済指標の発表予定があれば、その点にも触れてください。断定的な予測は避け、事実ベースで。\n\n' +
+          list +
+          econSection,
       },
     ],
   });
@@ -570,11 +583,16 @@ const summarizeNews = async (env: Env, items: NewsItem[]): Promise<string> => {
 };
 
 // シグナル算出（Workers AI）: 厳密JSONを要求し、string/object どちらの応答でもパース。
-const computeSignalsWorkersAI = async (env: Env, items: NewsItem[], trends: PairTrend[]): Promise<PairSignal[]> => {
+const computeSignalsWorkersAI = async (
+  env: Env,
+  items: NewsItem[],
+  trends: PairTrend[],
+  econNote = '',
+): Promise<PairSignal[]> => {
   const r = await env.AI.run(SIGNAL_MODEL, {
     messages: [
       { role: 'system', content: 'あなたはFXの短期シグナル推定器です。指示されたJSONのみを厳密に返します。' },
-      { role: 'user', content: buildSignalPrompt(items, trends) },
+      { role: 'user', content: buildSignalPrompt(items, trends, undefined, econNote) },
     ],
   });
   // response は文字列・オブジェクトどちらでも来得るため、そのまま parse に委ねる。
@@ -585,9 +603,14 @@ const computeSignalsWorkersAI = async (env: Env, items: NewsItem[], trends: Pair
 // 買い%=Choice{buy,sell} の buy 確率、反転継続=Choice{continuation,reversal,neutral}。
 const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 
-const computeSignalsJev = async (env: Env, items: NewsItem[], trends: PairTrend[]): Promise<PairSignal[]> => {
+const computeSignalsJev = async (
+  env: Env,
+  items: NewsItem[],
+  trends: PairTrend[],
+  econEvents: EconEvent[] = [],
+): Promise<PairSignal[]> => {
   if (!env.TYPESAFE_API_KEY) throw new Error('SIGNAL_ENGINE=jev ですが TYPESAFE_API_KEY が未設定です');
-  const body = { model: 'jev-latest', ...buildJevRequest(items, trends) };
+  const body = { model: 'jev-latest', ...buildJevRequest(items, trends, undefined, econEvents) };
   const res = await fetch(JEV_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -602,15 +625,20 @@ const computeSignalsJev = async (env: Env, items: NewsItem[], trends: PairTrend[
 };
 
 // エンジン切替。SIGNAL_ENGINE=jev のときは Jev を使い、失敗時は Workers AI にフォールバック。
-const computeSignals = async (env: Env, items: NewsItem[], trends: PairTrend[]): Promise<PairSignal[]> => {
+const computeSignals = async (
+  env: Env,
+  items: NewsItem[],
+  trends: PairTrend[],
+  calendar: EconEvent[] = [],
+): Promise<PairSignal[]> => {
   if (env.SIGNAL_ENGINE === 'jev') {
     try {
-      return await computeSignalsJev(env, items, trends);
+      return await computeSignalsJev(env, items, trends, calendar);
     } catch (e) {
       console.error('Jev 失敗 → Workers AI にフォールバック:', e);
     }
   }
-  return computeSignalsWorkersAI(env, items, trends);
+  return computeSignalsWorkersAI(env, items, trends, formatEconDigest(calendar));
 };
 
 // ニュース取得→要約＆シグナルを算出して KV に保存。
@@ -622,13 +650,20 @@ const buildNews = async (env: Env): Promise<NewsPayload> => {
   const series = intradayRaw ? (JSON.parse(intradayRaw) as RateSeries) : null;
   const trends = SIGNAL_PAIRS.map((p) => computeRecentTrend(series, p));
 
+  // 経済指標カレンダー（高重要度・今週）。取得失敗は非致命的（空配列）＝要約/シグナルは従来どおり。
+  const calendar = await fetchEconCalendar().catch((e) => {
+    console.error('/news 経済指標取得失敗:', e);
+    return [] as EconEvent[];
+  });
+  const econNote = formatEconDigest(calendar);
+
   // 要約とシグナルは独立コール（シグナルだけ後で Jev に差替え可能）。失敗は安全側に倒す。
   const [summary, signals] = await Promise.all([
-    summarizeNews(env, items).catch((e) => {
+    summarizeNews(env, items, econNote).catch((e) => {
       console.error('/news 要約失敗:', e);
       return '';
     }),
-    computeSignals(env, items, trends).catch((e) => {
+    computeSignals(env, items, trends, calendar).catch((e) => {
       console.error('/news シグナル失敗:', e);
       return parseSignalResponse(''); // 全ペア中立で返す
     }),
@@ -640,6 +675,7 @@ const buildNews = async (env: Env): Promise<NewsPayload> => {
     summary,
     signals,
     items: items.map((it) => ({ title: it.title, link: it.link, pubDate: it.pubDate })),
+    calendar,
   };
   await env.STRENGTH_KV.put(KV_NEWS, JSON.stringify(payload));
   return payload;

@@ -4,6 +4,7 @@
 import { FC, useCallback, useEffect, useState } from 'react';
 import { HelpCircle } from 'lucide-react';
 import type { PairSignal, TrendLabel } from '@/lib/signal';
+import type { EconEvent } from '@/lib/news';
 
 interface NewsPayload {
   generatedAt: number;
@@ -11,6 +12,7 @@ interface NewsPayload {
   summary: string;
   signals: PairSignal[];
   items: { title: string; link: string; pubDate: string }[];
+  calendar?: EconEvent[]; // 高重要度の経済指標（今日〜今週・対象8通貨）。旧キャッシュには無いため任意
 }
 
 const CACHE_KEY = 'news-cache';
@@ -25,6 +27,40 @@ const TREND_CLASS: Record<TrendLabel, string> = {
   reversal: 'bg-amber-100 text-amber-700',
   neutral: 'bg-gray-100 text-gray-600',
 };
+
+// 経済指標イベントの日時を JST で "MM/DD HH:mm" 表示。
+const fmtEcon = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('ja-JP', {
+    timeZone: 'Asia/Tokyo',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+};
+
+// 経済指標1件（通貨バッジ＋イベント名＋JST日時＋予想/前回＋高重要度バッジ）。
+const EconRow: FC<{ e: EconEvent }> = ({ e }) => (
+  <div className="flex items-center gap-2 rounded-lg border border-gray-200 p-2">
+    <span className="shrink-0 rounded bg-gray-800 px-1.5 py-0.5 text-[10px] font-bold text-white">{e.country}</span>
+    <div className="min-w-0 flex-1">
+      <p className="truncate text-xs font-semibold text-gray-800">{e.title}</p>
+      <p className="text-[10px] text-gray-500 tabular-nums">
+        {fmtEcon(e.date)}
+        {(e.forecast || e.previous) && (
+          <>
+            {' '}・予想 <span className="text-gray-700">{e.forecast || '—'}</span> / 前回{' '}
+            <span className="text-gray-700">{e.previous || '—'}</span>
+          </>
+        )}
+      </p>
+    </div>
+    <span className="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700">高</span>
+  </div>
+);
 
 const fetchNews = async (): Promise<NewsPayload> => {
   const url = import.meta.env.VITE_NEWS_URL as string | undefined;
@@ -126,6 +162,21 @@ const NewsSummary: FC = () => {
             <HelpCircle className="h-3 w-3" />
             買い/売りの傾きと、直近トレンドの継続/反転の推定（{data.engine === 'jev' ? 'Jev' : 'Workers AI'}）。
           </p>
+
+          {/* 経済指標（今週・高重要度） */}
+          {data.calendar && data.calendar.length > 0 && (
+            <>
+              <h3 className="mt-4 mb-1 font-bold text-gray-700">経済指標（今週・高重要度）</h3>
+              <div className="space-y-1.5">
+                {data.calendar.map((e, i) => (
+                  <EconRow key={`${e.date}-${e.title}-${i}`} e={e} />
+                ))}
+              </div>
+              <p className="mt-1 text-[10px] text-gray-400">
+                ※ 時刻はJST。予想/前回は発表前の暫定値を含みます（出典: ForexFactory）。
+              </p>
+            </>
+          )}
 
           {/* 要約 */}
           {data.summary && (
