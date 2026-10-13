@@ -1,0 +1,3 @@
+# 本番（OCI）でのみ必要。ローカルのテストは標準ライブラリ(sqlite3)のみで動く。
+# Turso(libSQL) への接続クライアント。sqlite3 互換 API（connect/execute/commit）。
+libsql-experimental>=0.0.30

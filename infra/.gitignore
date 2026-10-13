@@ -1,0 +1,5 @@
+# ローカル実行で生成される SQLite ファイル・キャッシュ。
+*.db
+*.db-journal
+__pycache__/
+*.pyc

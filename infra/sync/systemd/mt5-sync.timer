@@ -1,0 +1,14 @@
+# mt5-sync.service を1分間隔で起動するタイマー。
+# 配置: /etc/systemd/system/mt5-sync.timer
+# 有効化: sudo systemctl enable --now mt5-sync.timer
+[Unit]
+Description=Run MT5 to Turso sync every minute
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=60
+AccuracySec=5s
+Unit=mt5-sync.service
+
+[Install]
+WantedBy=timers.target

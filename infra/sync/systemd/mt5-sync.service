@@ -1,0 +1,15 @@
+# MT5(CSV) → Turso 同期を1回実行する oneshot ユニット。mt5-sync.timer から定期起動する。
+# 配置: /etc/systemd/system/mt5-sync.service
+# コード: /opt/mt5-sync/ に infra/sync/ を配置、env: /etc/mt5-sync.env
+[Unit]
+Description=MT5 to Turso sync (one-shot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# TURSO_DATABASE_URL / TURSO_AUTH_TOKEN / MT5_SYNC_DIR を定義しておく。
+EnvironmentFile=/etc/mt5-sync.env
+WorkingDirectory=/opt/mt5-sync
+ExecStart=/usr/bin/python3 /opt/mt5-sync/sync.py --once --dir ${MT5_SYNC_DIR}
+# 失敗しても次回 timer で再試行する。
