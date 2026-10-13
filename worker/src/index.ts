@@ -73,6 +73,19 @@ import {
   type SlSuggestion,
   type SlTimeframe,
 } from '../../src/lib/stoploss';
+// エッジ分析(/edge)のパターン判定・統計もフロントと共有。
+import {
+  EDGE_HORIZON,
+  EDGE_PAIRS,
+  EDGE_TIMEFRAMES,
+  EDGE_YAHOO,
+  analyzePairEdge,
+  currencyBias,
+  type EdgeSnapshot,
+  type EdgeTimeframe,
+  type OhlcCandle,
+  type PairEdge,
+} from '../../src/lib/edge';
 
 interface Env {
   TWELVE_DATA_API_KEY: string;
@@ -735,20 +748,32 @@ interface YahooChart {
       meta?: { regularMarketPrice?: number };
       timestamp?: number[];
       indicators?: {
-        quote?: { high?: (number | null)[]; low?: (number | null)[]; close?: (number | null)[]; volume?: (number | null)[] }[];
+        quote?: {
+          open?: (number | null)[];
+          high?: (number | null)[];
+          low?: (number | null)[];
+          close?: (number | null)[];
+          volume?: (number | null)[];
+        }[];
       };
     }[];
   };
 }
 
-const fetchYahooCandles = async (symbol: string, interval: string): Promise<{ candles: Candle[]; currentRate: number }> => {
+// range は取得期間（既定1か月）。/edge は統計の母数確保のため長めに取る。
+const fetchYahooCandles = async (
+  symbol: string,
+  interval: string,
+  range = '1mo',
+): Promise<{ candles: Candle[]; currentRate: number }> => {
   const url =
     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
-    `?interval=${encodeURIComponent(interval)}&range=1mo`;
+    `?interval=${encodeURIComponent(interval)}&range=${encodeURIComponent(range)}`;
   const res = await fetch(url, { headers: { 'User-Agent': NEWS_UA } });
   if (!res.ok) throw new Error(`Yahoo HTTP ${res.status}`);
   const r = ((await res.json()) as YahooChart).chart?.result?.[0];
   const q = r?.indicators?.quote?.[0];
+  const opens = q?.open ?? [];
   const highs = q?.high ?? [];
   const lows = q?.low ?? [];
   const closes = q?.close ?? [];
@@ -760,9 +785,17 @@ const fetchYahooCandles = async (symbol: string, interval: string): Promise<{ ca
     const l = lows[i];
     const c = closes[i];
     if (typeof h === 'number' && typeof l === 'number' && typeof c === 'number') {
+      const o = opens[i];
       const v = volumes[i];
       const t = times[i];
-      candles.push({ high: h, low: l, close: c, volume: typeof v === 'number' ? v : undefined, t: typeof t === 'number' ? t : undefined });
+      candles.push({
+        open: typeof o === 'number' ? o : undefined,
+        high: h,
+        low: l,
+        close: c,
+        volume: typeof v === 'number' ? v : undefined,
+        t: typeof t === 'number' ? t : undefined,
+      });
     }
   }
   const currentRate = Number(r?.meta?.regularMarketPrice);
@@ -1106,6 +1139,65 @@ const handleMtf = async (env: Env, url: URL): Promise<Response> => {
   }
 };
 
+// ---- エッジ分析(/edge): ピンバー・包み足の過去統計と最新確定足のシグナル ----
+// 全ペアを一括で Yahoo から取得して集計し、足ごとに KV キャッシュする（AI は使わない）。
+const KV_EDGE_PREFIX = 'edge:';
+const EDGE_TTL_MS: Record<EdgeTimeframe, number> = { '1h': 15 * 60 * 1000, '1d': 3 * 60 * 60 * 1000 };
+
+const buildEdge = async (timeframe: EdgeTimeframe): Promise<EdgeSnapshot> => {
+  const { interval, range } = EDGE_YAHOO[timeframe];
+  const horizon = EDGE_HORIZON[timeframe];
+  const results = await Promise.allSettled(
+    EDGE_PAIRS.map(async (instrument) => {
+      const { candles } = await fetchYahooCandles(YAHOO_SYMBOL[instrument], interval, range);
+      // 始値が欠けた足は判定できないため除外。最終足は形成中なので確定足のみで分析する。
+      const ohlc: OhlcCandle[] = candles
+        .filter((c): c is Candle & { open: number } => typeof c.open === 'number')
+        .map((c) => ({ open: c.open, high: c.high, low: c.low, close: c.close, t: c.t }))
+        .slice(0, -1);
+      if (ohlc.length <= horizon + 1) throw new Error(`${instrument}: ロウソク足が不足`);
+      return analyzePairEdge(ohlc, instrument, horizon);
+    }),
+  );
+  const pairs: PairEdge[] = [];
+  const failed: string[] = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') pairs.push(r.value);
+    else {
+      console.error('/edge 取得失敗:', EDGE_PAIRS[i], r.reason);
+      failed.push(EDGE_PAIRS[i]);
+    }
+  });
+  if (pairs.length === 0) throw new Error('全ペアの取得に失敗');
+  return { timeframe, horizon, pairs, currencies: currencyBias(pairs), failed, generatedAt: Date.now() };
+};
+
+const handleEdge = async (env: Env, url: URL): Promise<Response> => {
+  const tfRaw = url.searchParams.get('timeframe') as EdgeTimeframe | null;
+  const timeframe: EdgeTimeframe = tfRaw && EDGE_TIMEFRAMES.includes(tfRaw) ? tfRaw : '1h';
+  const key = `${KV_EDGE_PREFIX}${timeframe}`;
+  const cached = await env.STRENGTH_KV.get(key);
+  if (cached) {
+    try {
+      const p = JSON.parse(cached) as EdgeSnapshot;
+      if (Date.now() - p.generatedAt < EDGE_TTL_MS[timeframe]) return new Response(cached, { headers: CORS_HEADERS });
+    } catch {
+      // 作り直す
+    }
+  }
+  try {
+    const payload = await buildEdge(timeframe);
+    await env.STRENGTH_KV.put(key, JSON.stringify(payload));
+    return new Response(JSON.stringify(payload), { headers: CORS_HEADERS });
+  } catch (e) {
+    console.error('/edge 失敗:', e);
+    if (cached) return new Response(cached, { headers: CORS_HEADERS });
+    return new Response(JSON.stringify({ error: 'データ取得に失敗しました。少し待って再試行してください' }), {
+      headers: CORS_HEADERS,
+    });
+  }
+};
+
 export default {
   // Cron: event.cron でジョブを出し分け。失敗時は前回値を保持。
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -1137,13 +1229,14 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     // CORS プリフライト。
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
-    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、/mtf=TF分析、他=通貨強弱。
+    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、/mtf=TF分析、/edge=エッジ分析、他=通貨強弱。
     const reqUrl = new URL(req.url);
     const pathname = reqUrl.pathname;
     if (pathname === '/flow') return handleFlow(env);
     if (pathname === '/news') return handleNews(env);
     if (pathname === '/stoploss') return handleStopLoss(env, reqUrl);
     if (pathname === '/mtf') return handleMtf(env, reqUrl);
+    if (pathname === '/edge') return handleEdge(env, reqUrl);
 
     let intradayRaw = await env.STRENGTH_KV.get(KV_INTRADAY);
     let dailyRaw = await env.STRENGTH_KV.get(KV_DAILY);
