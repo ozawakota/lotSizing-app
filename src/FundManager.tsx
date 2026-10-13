@@ -545,17 +545,18 @@ export default function FundManager() {
         </div>
       )}
       {!configured ? (
-        <div className="mx-3 my-3 p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700">
+        <div key="unconfigured" className="mx-3 my-3 p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700">
           未設定です。<code>VITE_GOOGLE_CLIENT_ID</code> と <code>VITE_FUND_URL</code> を設定すると使えます。
         </div>
       ) : !idToken ? (
-        <div className="mx-3 my-4 flex flex-col items-center gap-2">
+        // key を付けて本体UIの div と区別し、React が div を使い回して GIS ボタンの iframe を残さないようにする。
+        <div key="login" className="mx-3 my-4 flex flex-col items-center gap-2">
           <p className="text-sm text-gray-600">Google でログインしてください</p>
           <div ref={btnRef} />
           {error && <p className="text-xs text-red-600">{error}</p>}
         </div>
       ) : (
-        <div className="mx-3 my-2 space-y-3">
+        <div key="app" className="mx-3 my-2 space-y-3">
           <p className="text-[11px] text-gray-400 text-right">{email}</p>
 
           {/* タブ: 記録 / シミュレーション */}
