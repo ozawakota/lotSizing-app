@@ -46,7 +46,6 @@ export const YAHOO_INTERVAL: Record<SlTimeframe, string> = {
 };
 
 export interface Candle {
-  open?: number; // 始値（/edge のローソク足パターン判定で使用）
   high: number;
   low: number;
   close: number;

@@ -1,6 +1,6 @@
 # Project Structure
 
-_updated_at: 2026-10-13 — Rewritten to match the current codebase. The app grew from a single calculator component into a multi-page PWA backed by several server-side runtimes; shared pure logic now lives in `src/lib/` and is imported by both the frontend and the Workers._
+_updated_at: 2026-10-13 — Added `edge-server/` (OCI-hosted Node server) after moving edge analysis off Workers. Earlier: Rewritten to match the current codebase. The app grew from a single calculator component into a multi-page PWA backed by several server-side runtimes; shared pure logic now lives in `src/lib/` and is imported by both the frontend and the Workers._
 
 ## Organization Philosophy
 
@@ -60,6 +60,15 @@ UI (src/*.tsx page) ──fetch──▶ Worker (worker/, alert-worker/, fund-wo
 - `alert-worker/` — price-move detection every minute → Web Push; state in D1
 - `fund-worker/` — Google-authenticated trade journal API backed by Turso (libSQL)
 - Pattern: `scheduled()` does the expensive fetching, `fetch()` only serves; domain logic is imported from `../../src/lib/` rather than duplicated.
+
+### Self-hosted Node Server (Oracle Cloud)
+**Location**: `edge-server/`
+**Purpose**: Workloads that exceed Workers free-tier limits (CPU 10ms/request, account-wide KV writes) — currently edge analysis with 1m bars and multi-year history
+- Long-running Node.js (`tsx`) process under systemd behind Caddy (HTTPS) on an OCI Always Free A1 VM
+- Same split as Workers: a scheduler fetches and computes, the HTTP handler only serves the latest snapshot
+- Data source and storage are injected (`Feed`, `SeriesStore`) so tests in `edge-server/test/` run without network
+- Shared logic is imported from `../../src/lib/` like the Workers
+- **Placement rule**: new backend work goes to Cloudflare Workers by default; move it here only when it hits Workers limits
 
 ### Python Services
 **Location**: `backend/` (FastAPI Elliott-wave/ZigZag API, deployable as a Cloudflare Python Worker), `infra/` (MT5 → Turso sync on OCI: `mt5/` EA, `sync/` Python + systemd, `oci/` provisioning, `db/` schema)
@@ -123,7 +132,7 @@ import { computeSummary, type Trade } from '../../src/lib/fund';
 - Inline component definitions (`UpdateRatesButton`) acceptable for small render-only subcomponents.
 - **Persistence pattern**: For state that should survive reloads, use a lazy `useState` initializer that reads + validates from `localStorage` (falling back to a safe default on invalid/legacy values), paired with a `useEffect` that writes the persisted keys when they change. Storage keys are named constants (e.g. `VIEW_STORAGE_KEY`, `FLOW_ORDER_STORAGE_KEY`).
 - **External-API helpers**: In the calculator, network fetchers (`fetchFromGAS`, `fetchFromExchangeRateAPI`) are local functions inside `App.tsx`, returning `Partial<Record<CurrencyCode, string>>`. The orchestrator (`fetchCurrencyRates`) selects primary/fallback and merges into state via functional updater (`prev => ({ ...prev, ...fetched })`) to avoid clobbering keys not in the response.
-- **Cache-then-serve backends**: third-party data is fetched on a Worker schedule and cached (KV/D1); the client reads the cache instead of calling external APIs directly.
+- **Cache-then-serve backends**: third-party data is fetched on a schedule (Worker Cron → KV/D1, or the edge-server loop → local files) and cached; the client reads the cache instead of calling external APIs directly.
 - **Comments in Japanese**: header and inline comments explain intent and design rationale (often linking an ADR or `CONTEXT.md` term).
 
 ---

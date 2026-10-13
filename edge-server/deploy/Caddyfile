@@ -1,0 +1,6 @@
+# HTTPS 終端（証明書は Let's Encrypt から自動取得・自動更新）。EDGE_DOMAIN は /etc/default/caddy などで設定。
+# 独自ドメインが無い場合は <IPのドットをハイフンに>.sslip.io（例 141-147-1-2.sslip.io）でも取得できる。
+{$EDGE_DOMAIN} {
+	encode gzip
+	reverse_proxy 127.0.0.1:8787
+}

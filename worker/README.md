@@ -76,7 +76,6 @@ npx wrangler deploy              # デプロイ（Cron も同時に設定され�
 デプロイで発行された Worker の URL を、フロントの環境変数に設定する:
 - `VITE_STRENGTH_URL=https://currency-strength.<subdomain>.workers.dev`（通貨強弱）
 - `VITE_FLOW_URL=https://currency-strength.<subdomain>.workers.dev/flow`（取引量・センチメント）
-- `VITE_EDGE_URL=https://currency-strength.<subdomain>.workers.dev/edge`（エッジ分析）
 
 ## 動作確認
 
@@ -108,21 +107,6 @@ npx wrangler dev --test-scheduled
 > **注意**: スポットFXに中央集権的な出来高は無い。ここで言う取引量・建玉割合は **Myfxbook の個人投資家コミュニティの現在ポジション**であり、市場全体ではなく個人投資家層の傾向を表す。
 
 動作確認: `curl "https://currency-strength.<subdomain>.workers.dev/flow"`
-
-## エッジ分析 (`/edge`)
-
-同じ Worker の **`/edge?timeframe=1h|1d` パス**で、8ペア（XAU/USD は金先物 GC=F）について
-ピンバー・包み足の**過去統計（N本先の勝率・平均pips・全足平均とのエッジ）**と、
-**最新確定足**に優位性のあるパターンが出ていれば売買シグナルを返す。通貨別の優位性（シグナルの基軸+/決済−合算）も含む。
-フロントは [`src/EdgeAnalysis.tsx`](../src/EdgeAnalysis.tsx)、判定・統計は [`src/lib/edge.ts`](../src/lib/edge.ts) を共有。
-
-| 項目 | 値 |
-|------|-----|
-| データ | Yahoo Finance（1h=60分足3か月 / 1d=日足2年。キーレス）。形成中の最終足は除外 |
-| 検証本数 | 1h=4本先 / 1d=3本先 |
-| キャッシュ | Workers KV（`edge:1h`=15分 / `edge:1d`=3時間）。取得失敗時は前回値を返す |
-
-動作確認: `curl "https://currency-strength.<subdomain>.workers.dev/edge?timeframe=1d"`
 
 ## 無料枠
 

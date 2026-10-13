@@ -1,7 +1,8 @@
 // エッジ分析ページ。ピンバー・包み足が過去にどれだけ機能したか（N本先の勝率・平均pips・エッジ）を
 // ペアごとに集計し、最新確定足に優位性のあるパターンが出ていれば売買シグナルとして表示する。
 // ペアのシグナルを通貨単位に振り分けた「通貨別の優位性」も表示（買い=基軸+／決済−）。
-// Worker(/edge, VITE_EDGE_URL) が Yahoo足から算出。判定ロジックは src/lib/edge.ts を共有。
+// edge-server（Oracle Cloud 常駐, VITE_EDGE_URL）が Dukascopy の足から算出。判定ロジックは src/lib/edge.ts を共有。
+// 勝率・平均pipsは平均スプレッドを控除済み。表示中の時間足は足の確定に合わせて自動で再取得する。
 // ※過去統計による参考情報・投資助言ではない。
 import { useEffect, useState } from 'react';
 import {
@@ -22,7 +23,16 @@ import {
 const EDGE_URL = import.meta.env.VITE_EDGE_URL as string | undefined;
 const TF_STORAGE_KEY = 'edgeTimeframe';
 
-const TF_LABEL: Record<EdgeTimeframe, string> = { '1h': '1時間足', '1d': '日足' };
+const TF_LABEL: Record<EdgeTimeframe, string> = { '1m': '1分', '5m': '5分', '15m': '15分', '1h': '1時間', '4h': '4時間', '1d': '日足' };
+// 自動再取得の間隔（サーバー側の更新間隔に合わせる）。
+const POLL_MS: Record<EdgeTimeframe, number> = {
+  '1m': 60_000,
+  '5m': 5 * 60_000,
+  '15m': 15 * 60_000,
+  '1h': 15 * 60_000,
+  '4h': 30 * 60_000,
+  '1d': 60 * 60_000,
+};
 const SIGNAL_STYLE: Record<EdgeSignal, string> = {
   buy: 'bg-green-100 text-green-700',
   sell: 'bg-red-100 text-red-700',
@@ -157,7 +167,8 @@ function PairCard({ pair, horizon }: { pair: PairEdge; horizon: number }) {
         </tbody>
       </table>
       <p className="mt-1 text-[10px] text-gray-400">
-        勝率・平均pipsは出現足の終値から{horizon}本先の終値まで（パターン方向基準）。エッジ＝勝率−全足平均の勝率。
+        勝率・平均pipsは出現足の終値から{horizon}本先の終値まで（パターン方向基準、平均スプレッド
+        {pair.spreadPips.toFixed(1)}pips 控除後）。エッジ＝勝率−全足平均の勝率。
       </p>
     </div>
   );
@@ -177,27 +188,33 @@ export default function EdgeAnalysis() {
     }
   }, [timeframe]);
 
-  // 足の切替で自動取得（マウント時も取得）。
+  // 足の切替で取得し、表示中は足の確定に合わせて再取得する（再取得中は前の結果を表示したまま）。
   useEffect(() => {
     if (!EDGE_URL) return;
     let cancelled = false;
-    setLoading(true);
-    setError('');
     setData(null);
-    (async () => {
+    setError('');
+    const load = async (initial: boolean) => {
+      if (initial) setLoading(true);
       try {
         const res = await fetch(`${EDGE_URL}?timeframe=${encodeURIComponent(timeframe)}`);
         const body = (await res.json()) as EdgeSnapshot | { error: string };
         if ('error' in body) throw new Error(body.error);
-        if (!cancelled) setData(body);
+        if (!cancelled) {
+          setData(body);
+          setError('');
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : '取得に失敗しました');
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && initial) setLoading(false);
       }
-    })();
+    };
+    void load(true);
+    const timer = setInterval(() => void load(false), POLL_MS[timeframe]);
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
   }, [timeframe]);
 
@@ -214,13 +231,13 @@ export default function EdgeAnalysis() {
 
   return (
     <div className="mx-auto max-w-md px-3 my-2">
-      <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1">
+      <div className="grid grid-cols-6 gap-1 rounded-lg bg-gray-100 p-1">
         {EDGE_TIMEFRAMES.map((tf) => (
           <button
             key={tf}
             type="button"
             onClick={() => setTimeframe(tf)}
-            className={`rounded-md py-1.5 text-sm font-medium transition-colors ${
+            className={`rounded-md py-1.5 text-xs font-medium transition-colors ${
               timeframe === tf ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500'
             }`}
           >
@@ -243,7 +260,7 @@ export default function EdgeAnalysis() {
           )}
           <p className="text-[10px] leading-relaxed text-gray-400">
             ピンバー＝ヒゲが全値幅の{Math.round(PINBAR_THRESHOLD * 100)}%以上。包み足＝前足の実体を逆向きの実体で包む。
-            出現{MIN_SAMPLES}回未満はサンプル不足として判定しません。XAU/USD は金先物(GC=F)の足で集計。
+            出現{MIN_SAMPLES}回未満はサンプル不足として判定しません。データは Dukascopy（Bid 基準、XAU/USD は現物）。
             {' '}{new Date(data.generatedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })} 更新。
             ※過去統計による参考情報であり、将来の値動きや利益を保証するものではありません。
           </p>

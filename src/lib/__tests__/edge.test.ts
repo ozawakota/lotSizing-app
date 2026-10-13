@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   MIN_SAMPLES,
   analyzePairEdge,
+  closedCandles,
   computePatternStats,
   currencyBias,
   detectPatterns,
@@ -105,6 +106,38 @@ describe('computePatternStats', () => {
   });
 });
 
+describe('取引コスト（スプレッド）の控除', () => {
+  it('平均pipsからコストを差し引き、コストが値動きを上回れば勝てない', () => {
+    const candles = bullishPinbarMarket(20);
+    const pin = (cost: number) =>
+      computePatternStats(candles, 'USD_JPY', 3, undefined, cost).find((s) => s.pattern === 'bull_pinbar')!;
+    expect(pin(1).avgPips).toBeCloseTo(29, 0); // 30pips − 1pips
+    expect(pin(40).winRate).toBe(0); // 30pips の値動きでは 40pips のコストを超えられない
+    expect(pin(40).verdict).not.toBe('strong');
+  });
+
+  it('ベースラインの勝率も同じコストで評価する', () => {
+    const candles = bullishPinbarMarket(20);
+    const base = (cost: number) =>
+      computePatternStats(candles, 'USD_JPY', 3, undefined, cost).find((s) => s.pattern === 'bull_pinbar')!.baselineWinRate;
+    expect(base(0)).toBeGreaterThan(base(10));
+  });
+
+  it('analyzePairEdge はコストを spreadPips として返す', () => {
+    expect(analyzePairEdge(bullishPinbarMarket(20), 'USD_JPY', 3, undefined, 0.84).spreadPips).toBe(0.8);
+  });
+});
+
+describe('closedCandles', () => {
+  it('足の終了時刻が現在以前のものだけ残す（形成中の足を除外）', () => {
+    const at = (t: number): OhlcCandle => ({ open: 1, high: 1, low: 1, close: 1, t });
+    const now = 1_700_000_000_000; // ms
+    const bars = [at(now / 1000 - 180), at(now / 1000 - 120), at(now / 1000 - 60), at(now / 1000 - 30)];
+    expect(closedCandles(bars, '1m', now).map((b) => b.t)).toEqual([now / 1000 - 180, now / 1000 - 120, now / 1000 - 60]);
+    expect(closedCandles([{ open: 1, high: 1, low: 1, close: 1 }], '1m', now)).toEqual([]); // 時刻なしは除外
+  });
+});
+
 describe('analyzePairEdge', () => {
   it('最新確定足に優位性のあるパターンが出ていれば買いシグナル', () => {
     const candles = bullishPinbarMarket(20);
@@ -129,6 +162,7 @@ describe('analyzePairEdge', () => {
 describe('currencyBias', () => {
   const pair = (instrument: string, score: number): PairEdge => ({
     instrument,
+    spreadPips: 0,
     lastClosedAt: null,
     stats: [],
     current: [],

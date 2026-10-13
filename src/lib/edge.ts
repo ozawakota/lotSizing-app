@@ -1,21 +1,35 @@
-// エッジ分析（プライスアクションの優位性検証）の純粋ドメインロジック。Worker とクライアントで共有する。
+// エッジ分析（プライスアクションの優位性検証）の純粋ドメインロジック。edge-server とクライアントで共有する。
 // ピンバー・包み足を OHLC から機械判定し、過去に同じパターンが出た後 N 本先の値動き（順方向pips）を
 // 集計して「そのペア・その足でパターンに優位性があるか」を勝率・平均pips・プロフィットファクターで示す。
 // 比較対象（ベースライン）は「全ての足で同方向に建てた場合」の勝率。差分(エッジ)がプラスなら優位性あり。
+// 短い足ほどスプレッドの影響が大きいため、1回の取引コスト（平均スプレッド, pips）を差し引いて集計する。
 //
-// 判定は確定足のみで行う（Yahoo の最終足は形成中のため呼び出し側で除外して渡す）。
+// 判定は確定足のみで行う（形成中の足は呼び出し側で除外して渡す）。
 // ※過去統計による参考情報であり、将来の値動きを保証しない。
 import { pipSize } from './stoploss';
 
-export type EdgeTimeframe = '1h' | '1d';
-export const EDGE_TIMEFRAMES: EdgeTimeframe[] = ['1h', '1d'];
+export type EdgeTimeframe = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
+export const EDGE_TIMEFRAMES: EdgeTimeframe[] = ['1m', '5m', '15m', '1h', '4h', '1d'];
 
-// 足ごとの Yahoo 取得設定（統計の母数を確保するため期間は長め）と、検証する保有本数。
-export const EDGE_YAHOO: Record<EdgeTimeframe, { interval: string; range: string }> = {
-  '1h': { interval: '60m', range: '3mo' },
-  '1d': { interval: '1d', range: '2y' },
+export const TIMEFRAME_MS: Record<EdgeTimeframe, number> = {
+  '1m': 60_000,
+  '5m': 5 * 60_000,
+  '15m': 15 * 60_000,
+  '1h': 60 * 60_000,
+  '4h': 4 * 60 * 60_000,
+  '1d': 24 * 60 * 60_000,
 };
-export const EDGE_HORIZON: Record<EdgeTimeframe, number> = { '1h': 4, '1d': 3 };
+// 統計に使う過去期間（日数）。短い足は本数が多いので短く、長い足は母数確保のため長く取る。
+export const EDGE_HISTORY_DAYS: Record<EdgeTimeframe, number> = {
+  '1m': 30,
+  '5m': 90,
+  '15m': 180,
+  '1h': 730,
+  '4h': 1825,
+  '1d': 3650,
+};
+// 検証する保有本数（出現足の終値 → N本先の終値）。
+export const EDGE_HORIZON: Record<EdgeTimeframe, number> = { '1m': 5, '5m': 6, '15m': 4, '1h': 4, '4h': 3, '1d': 3 };
 
 export const EDGE_PAIRS: string[] = [
   'USD_JPY',
@@ -108,7 +122,7 @@ export interface PatternStats {
   pattern: PatternKey;
   count: number; // 検証できた出現回数（N本先が存在するもの）
   winRate: number; // 順方向に動いた割合（%）
-  avgPips: number; // N本先までの順方向の平均値幅（pips）
+  avgPips: number; // N本先までの順方向の平均値幅（pips, 取引コスト控除後）
   profitFactor: number | null; // 総利益 ÷ 総損失（損失0なら null）
   baselineWinRate: number; // 全足で同方向に建てた場合の勝率（%）
   edge: number; // winRate − baselineWinRate（%ポイント）
@@ -128,6 +142,7 @@ export function verdictOf(count: number, edge: number, avgPips: number): EdgeVer
 
 /**
  * パターンごとに「出現足の終値 → horizon 本先の終値」の順方向pipsを集計する。
+ * costPips（1回の取引コスト＝スプレッド）を各取引から差し引き、ベースラインも同条件で比べる。
  * 最後の horizon 本は結果が未確定のため母数から除く。
  */
 export function computePatternStats(
@@ -135,6 +150,7 @@ export function computePatternStats(
   instrument: string,
   horizon: number,
   threshold = PINBAR_THRESHOLD,
+  costPips = 0,
 ): PatternStats[] {
   const pip = pipSize(instrument);
   const last = candles.length - 1 - horizon; // 検証可能な最後の添字
@@ -143,12 +159,12 @@ export function computePatternStats(
   let downCount = 0;
   let total = 0;
   for (let i = 0; i <= last; i++) {
-    const diff = candles[i + horizon].close - candles[i].close;
+    const diffPips = (candles[i + horizon].close - candles[i].close) / pip;
     total++;
-    if (diff > 0) upCount++;
-    else if (diff < 0) downCount++;
+    if (diffPips - costPips > 0) upCount++;
+    if (-diffPips - costPips > 0) downCount++;
     for (const p of detectPatterns(candles, i, threshold)) {
-      moves[p].push((diff * PATTERN_DIRECTION[p]) / pip);
+      moves[p].push(diffPips * PATTERN_DIRECTION[p] - costPips);
     }
   }
   const baseUp = total > 0 ? (upCount / total) * 100 : 0;
@@ -182,6 +198,7 @@ export const SIGNAL_LABEL: Record<EdgeSignal, string> = { buy: '買い優位', s
 
 export interface PairEdge {
   instrument: string;
+  spreadPips: number; // 集計に用いた取引コスト（平均スプレッド, pips）
   lastClosedAt: number | null; // 最新確定足の時刻（UNIX秒）
   stats: PatternStats[];
   current: PatternKey[]; // 最新確定足で成立しているパターン
@@ -198,8 +215,9 @@ export function analyzePairEdge(
   instrument: string,
   horizon: number,
   threshold = PINBAR_THRESHOLD,
+  costPips = 0,
 ): PairEdge {
-  const stats = computePatternStats(candles, instrument, horizon, threshold);
+  const stats = computePatternStats(candles, instrument, horizon, threshold, costPips);
   const lastIdx = candles.length - 1;
   const current = lastIdx >= 0 ? detectPatterns(candles, lastIdx, threshold) : [];
   let score = 0;
@@ -209,7 +227,15 @@ export function analyzePairEdge(
   }
   score = round1(score);
   const signal: EdgeSignal = score > 0 ? 'buy' : score < 0 ? 'sell' : 'neutral';
-  return { instrument, lastClosedAt: candles[lastIdx]?.t ?? null, stats, current, signal, score };
+  return {
+    instrument,
+    spreadPips: round1(costPips),
+    lastClosedAt: candles[lastIdx]?.t ?? null,
+    stats,
+    current,
+    signal,
+    score,
+  };
 }
 
 export interface CurrencyBias {
@@ -240,5 +266,12 @@ export interface EdgeSnapshot {
   pairs: PairEdge[];
   currencies: CurrencyBias[];
   failed: string[]; // 取得に失敗したペア
+  source: string; // データ元（例 'dukascopy'）
   generatedAt: number;
+}
+
+/** 確定済みの足だけを返す（足の開始時刻 t[秒] + 足の長さ ≤ now）。形成中の足を判定に使わないため。 */
+export function closedCandles<T extends OhlcCandle>(candles: T[], timeframe: EdgeTimeframe, nowMs: number): T[] {
+  const len = TIMEFRAME_MS[timeframe];
+  return candles.filter((c) => c.t !== undefined && c.t * 1000 + len <= nowMs);
 }
