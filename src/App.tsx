@@ -14,7 +14,6 @@ import OrderFlow from './OrderFlow'; // 取引量・センチメント ページ
 import FundManager from './FundManager'; // 資金管理（トレードジャーナル）ページ
 import NewsSummary from './NewsSummary'; // 為替ニュース要約＋売買シグナル ページ
 import TimeframeAnalysis from './TimeframeAnalysis'; // タイムフレーム分析（レジサポ統合）ページ
-import Mt5Monitor from './Mt5Monitor'; // 自動売買（MT5）監視ページ
 import AlertToast from './AlertToast'; // 相場変動の in-app トースト通知
 // 各ページのタイトル（共通ヘッダーに表示）。
 const VIEW_TITLES: Record<AppView, string> = {
@@ -23,7 +22,6 @@ const VIEW_TITLES: Record<AppView, string> = {
   fund: '資金管理',
   news: '為替ニュース',
   mtf: 'タイムフレーム分析',
-  autotrade: '自動売買（MT5）',
 };
 // リロードしても現在のページを保持する（localStorage）。不正値はロット計算にフォールバック。
 const VIEW_STORAGE_KEY = 'app_view';
@@ -775,8 +773,8 @@ const App: FC = () => {
       {/* コンテンツ（下部タブバー分の余白を確保） */}
       <div className="pb-20 pt-2">
 
-      {/* 市場時刻（東京/ロンドン/NY）。資金管理・自動売買（口座系）以外で表示 */}
-      {view !== 'fund' && view !== 'autotrade' && <WorldClock />}
+      {/* 市場時刻（東京/ロンドン/NY）。資金管理以外の全ページで表示 */}
+      {view !== 'fund' && <WorldClock />}
 
       {view === 'calculator' ? (
       <>
@@ -1057,8 +1055,6 @@ const App: FC = () => {
         <NewsSummary />
       ) : view === 'mtf' ? (
         <TimeframeAnalysis />
-      ) : view === 'autotrade' ? (
-        <Mt5Monitor />
       ) : (
         <FundManager />
       )}

@@ -1,7 +1,7 @@
 // 下部タブバー（モバイル定番のナビ）。各ページを常時表示し、現在地をオレンジで示す。
-import { BarChart3, Bot, Calculator, Layers, Newspaper, Wallet } from 'lucide-react';
+import { BarChart3, Calculator, Layers, Newspaper, Wallet } from 'lucide-react';
 
-export type AppView = 'calculator' | 'flow' | 'fund' | 'news' | 'mtf' | 'autotrade';
+export type AppView = 'calculator' | 'flow' | 'fund' | 'news' | 'mtf';
 
 const TABS: { key: AppView; label: string; Icon: typeof Calculator }[] = [
   { key: 'calculator', label: '計算', Icon: Calculator },
@@ -9,7 +9,6 @@ const TABS: { key: AppView; label: string; Icon: typeof Calculator }[] = [
   { key: 'news', label: 'ニュース', Icon: Newspaper },
   { key: 'mtf', label: 'TF分析', Icon: Layers },
   { key: 'fund', label: '資金管理', Icon: Wallet },
-  { key: 'autotrade', label: '自動売買', Icon: Bot },
 ];
 
 export default function BottomTabBar({ view, onChange }: { view: AppView; onChange: (v: AppView) => void }) {
