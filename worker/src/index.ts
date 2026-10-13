@@ -13,7 +13,19 @@
 import { type JpyPairCurrency, type RateSeries } from '../../src/lib/strength';
 import { sessionStatusText } from '../../src/lib/session';
 // 取引量・センチメント(/flow)のロジック/型もフロントと共有: ../../src/lib/flow.ts
-import { FLOW_PAIRS, computeDelta, toPairFlow, updatePeak, type FlowPair, type PairFlow, type VolumePeak } from '../../src/lib/flow';
+import {
+  FLOW_PAIRS,
+  computeDelta,
+  normalizeNet,
+  toPairCot,
+  toPairFlow,
+  updatePeak,
+  type CotCurrency,
+  type FlowPair,
+  type FlowSnapshot,
+  type PairFlow,
+  type VolumePeak,
+} from '../../src/lib/flow';
 // /news の為替ニュース＋売買シグナルのロジック/型もフロントと共有。
 import { parseRssItems, type NewsItem } from '../../src/lib/news';
 import {
@@ -81,6 +93,7 @@ const KV_DAILY = 'daily';
 const KV_FLOW = 'flow';
 const KV_MFB_SESSION = 'mfb_session';
 const KV_FLOW_PEAKS = 'flow_peaks'; // ペアごとの合計取引量ピーク（記録開始以降・自前蓄積）
+const KV_COT = 'cot'; // 投機筋（CFTC COT）の通貨別ネット（週次・自前キャッシュ）
 
 // 1回の /flow 更新で取得するスポットレートの上限（Twelve Data 8 credits/分 制限の回避）。
 const MAX_RATE_FETCH = 7;
@@ -343,7 +356,116 @@ const updateFlow = async (env: Env): Promise<PairFlow[]> => {
   return result;
 };
 
-// /flow のレスポンスを組み立てる。未取得なら初回のみ lazy 取得。
+// ---------------------------------------------------------------------------
+// 投機筋（CFTC COT / Legacy 非商業 Non-Commercial）を取得・キャッシュする
+// ---------------------------------------------------------------------------
+// CFTC Socrata Open Data API（Legacy Futures-only, resource 6dca-aqww）から
+// 各通貨先物＋金＋USDインデックスの非商業ネットを取得し、正規化して KV に保存。
+// 週次データ（毎週金曜に火曜時点を発表）のため、毎時 /flow cron では「6h超古い時だけ」更新する。
+const CFTC_URL = 'https://publicreporting.cftc.gov/resource/6dca-aqww.json';
+const COT_STALE_MS = 6 * 60 * 60 * 1000; // 6時間
+const COT_UA = 'Mozilla/5.0 (compatible; lotsizing-cot/1.0)';
+
+// CFTC Legacy コントラクトコード（通貨先物は対USD / 金はCOMEX / USDはICEドル指数）。
+const COT_CODE: Record<CotCurrency, string> = {
+  JPY: '097741', // JAPANESE YEN - CME
+  EUR: '099741', // EURO FX - CME
+  GBP: '096742', // BRITISH POUND - CME
+  AUD: '232741', // AUSTRALIAN DOLLAR - CME
+  NZD: '112741', // NZ DOLLAR - CME
+  CAD: '090741', // CANADIAN DOLLAR - CME
+  CHF: '092741', // SWISS FRANC - CME
+  XAU: '088691', // GOLD - COMEX
+  USD: '098662', // USD INDEX - ICE FUTURES U.S.
+};
+
+interface CftcRow {
+  cftc_contract_market_code: string;
+  report_date_as_yyyy_mm_dd: string;
+  noncomm_positions_long_all: string;
+  noncomm_positions_short_all: string;
+  change_in_noncomm_long_all: string;
+  change_in_noncomm_short_all: string;
+}
+
+// KV に保存する投機筋キャッシュ（通貨別の正規化ネット・当週/前週）。
+interface CotCache {
+  reportDate: string; // CFTC 報告日（ISO8601・火曜時点）
+  updatedAt: string; // Worker が取得した時刻（ISO8601）
+  net: Partial<Record<CotCurrency, number>>; // 当週の正規化ネット
+  prevNet: Partial<Record<CotCurrency, number>>; // 前週の正規化ネット（change列から復元）
+}
+
+// CFTC から対象コントラクトの最新行を取得し、通貨別の正規化ネットに変換する。
+const fetchCot = async (): Promise<CotCache> => {
+  const codes = Object.values(COT_CODE)
+    .map((c) => `'${c}'`)
+    .join(',');
+  const params = new URLSearchParams({
+    $select:
+      'cftc_contract_market_code,report_date_as_yyyy_mm_dd,noncomm_positions_long_all,noncomm_positions_short_all,change_in_noncomm_long_all,change_in_noncomm_short_all',
+    $where: `cftc_contract_market_code in(${codes})`,
+    $order: 'report_date_as_yyyy_mm_dd DESC',
+    $limit: '60',
+  });
+  const res = await fetch(`${CFTC_URL}?${params.toString()}`, { headers: { 'User-Agent': COT_UA } });
+  if (!res.ok) throw new Error(`CFTC HTTP ${res.status}`);
+  const rows = (await res.json()) as CftcRow[];
+
+  // コードごとに最新行（DESC 並びの先頭）を採用。
+  const latest = new Map<string, CftcRow>();
+  for (const r of rows) {
+    if (!latest.has(r.cftc_contract_market_code)) latest.set(r.cftc_contract_market_code, r);
+  }
+
+  const net: Partial<Record<CotCurrency, number>> = {};
+  const prevNet: Partial<Record<CotCurrency, number>> = {};
+  let reportDate = '';
+  for (const [cur, code] of Object.entries(COT_CODE) as [CotCurrency, string][]) {
+    const r = latest.get(code);
+    if (!r) continue;
+    const long = Number(r.noncomm_positions_long_all);
+    const short = Number(r.noncomm_positions_short_all);
+    if (Number.isNaN(long) || Number.isNaN(short)) continue;
+    net[cur] = normalizeNet(long, short);
+    const chLong = Number(r.change_in_noncomm_long_all);
+    const chShort = Number(r.change_in_noncomm_short_all);
+    if (!Number.isNaN(chLong) && !Number.isNaN(chShort)) {
+      // 前週 = 当週 − 週次変化（change列）。
+      prevNet[cur] = normalizeNet(long - chLong, short - chShort);
+    }
+    if (!reportDate && r.report_date_as_yyyy_mm_dd) reportDate = r.report_date_as_yyyy_mm_dd;
+  }
+  if (Object.keys(net).length === 0) throw new Error('CFTC データが取得できませんでした');
+  return { reportDate, updatedAt: new Date().toISOString(), net, prevNet };
+};
+
+// CFTC を取得して KV に保存する。
+const updateCot = async (env: Env): Promise<CotCache> => {
+  const cot = await fetchCot();
+  await env.STRENGTH_KV.put(KV_COT, JSON.stringify(cot));
+  return cot;
+};
+
+// COT キャッシュが無い or 6h超古い時だけ再取得する（週次データを安価に鮮度維持）。失敗は非致命的。
+const refreshCotIfStale = async (env: Env): Promise<void> => {
+  const raw = await env.STRENGTH_KV.get(KV_COT);
+  if (raw) {
+    try {
+      const cur = JSON.parse(raw) as CotCache;
+      if (Date.now() - new Date(cur.updatedAt).getTime() < COT_STALE_MS) return;
+    } catch {
+      // 壊れていれば再取得に進む
+    }
+  }
+  try {
+    await updateCot(env);
+  } catch (e) {
+    console.error('COT 取得 失敗（前回値を保持）:', e);
+  }
+};
+
+// /flow のレスポンスを組み立てる。未取得なら初回のみ lazy 取得。投機筋(COT)も併せて返す。
 const handleFlow = async (env: Env): Promise<Response> => {
   let pairsRaw = await env.STRENGTH_KV.get(KV_FLOW);
   try {
@@ -358,8 +480,29 @@ const handleFlow = async (env: Env): Promise<Response> => {
       { headers: CORS_HEADERS },
     );
   }
-  const body = `{"updatedAt":"${new Date().toISOString()}","pairs":${pairsRaw}}`;
-  return new Response(body, { headers: CORS_HEADERS });
+
+  // 投機筋(COT)を読み、無ければ初回のみ lazy 取得。失敗しても建玉情報だけ返す（非致命的）。
+  let cot: CotCache | null = null;
+  try {
+    const cotRaw = (await env.STRENGTH_KV.get(KV_COT)) ?? JSON.stringify(await updateCot(env));
+    cot = JSON.parse(cotRaw) as CotCache;
+  } catch (e) {
+    console.error('/flow COT 取得 失敗:', e);
+  }
+
+  const pairs = JSON.parse(pairsRaw) as PairFlow[];
+  if (cot) {
+    for (const p of pairs) {
+      const c = toPairCot(cot.net, cot.prevNet, p.pair);
+      if (c) p.cot = c;
+    }
+  }
+  const snapshot: FlowSnapshot = {
+    updatedAt: new Date().toISOString(),
+    pairs,
+    ...(cot ? { cotReportDate: cot.reportDate, cotUpdatedAt: cot.updatedAt } : {}),
+  };
+  return new Response(JSON.stringify(snapshot), { headers: CORS_HEADERS });
 };
 
 // ---------------------------------------------------------------------------
@@ -920,7 +1063,11 @@ export default {
         job = updateDaily; // 日足（年初起点）1日1回
         break;
       case '15 * * * *':
-        job = updateFlow; // /flow の建玉情報（Myfxbook）、毎時
+        // /flow の建玉情報（Myfxbook）、毎時。あわせて投機筋(CFTC COT)を stale 時だけ更新。
+        job = async (e: Env) => {
+          await updateFlow(e);
+          await refreshCotIfStale(e);
+        };
         break;
       default:
         job = updateIntraday; // '0 */2 * * *' 15分足（4時間前/当日）2時間ごと

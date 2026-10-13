@@ -8,6 +8,8 @@ const WORKER_URL = 'https://currency-strength.example.workers.dev/flow';
 
 const body: FlowSnapshot = {
   updatedAt: '2026-10-02T06:00:00.000Z',
+  cotReportDate: '2026-10-06T00:00:00.000Z',
+  cotUpdatedAt: '2026-10-10T21:00:00.000Z',
   pairs: [
     {
       pair: 'USD/JPY',
@@ -18,6 +20,7 @@ const body: FlowSnapshot = {
       dominant: 'buy',
       peak: { volume: 2500, datetime: '2026-10-02T08:00:00.000Z', rate: 157.84 },
       delta: { value: 200, direction: 'entry' },
+      cot: { net: -0.5, lean: 'sell', deltaNet: -0.2 },
     },
     {
       pair: 'EUR/JPY',
@@ -27,6 +30,7 @@ const body: FlowSnapshot = {
       shortVolume: 900,
       dominant: 'sell',
       delta: { value: -250, direction: 'settlement' },
+      cot: { net: 0.3, lean: 'buy' },
     },
   ],
 };
@@ -81,6 +85,22 @@ describe('OrderFlow', () => {
     // 減=巻き戻し（決済優勢）、符号付き −250（全角マイナス）
     expect(screen.getByText('巻き戻し')).toBeTruthy();
     expect(screen.getByText('−250')).toBeTruthy();
+  });
+
+  it('投機筋（CFTC COT）の方向・強さ・前週比・リテール対比と報告日（週次）を表示する', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
+    render(<OrderFlow />);
+
+    await waitFor(() => expect(screen.getByText('USD/JPY')).toBeTruthy());
+    expect(screen.getAllByText('投機筋').length).toBeGreaterThan(0); // サブブロック見出し
+    // USD/JPY: cot net=-0.5(sell/中), deltaNet=-0.2 → 売り越しを強化。retail=buy → 逆行
+    expect(screen.getByText('売り越し・中')).toBeTruthy();
+    expect(screen.getByText('売り越しを強化')).toBeTruthy();
+    expect(screen.getByText('リテール(買い)と逆行')).toBeTruthy();
+    // EUR/JPY: cot net=0.3(buy/弱), retail=sell → 逆行
+    expect(screen.getByText('買い越し・弱')).toBeTruthy();
+    expect(screen.getByText('リテール(売り)と逆行')).toBeTruthy();
+    expect(screen.getByText('投機筋 10/06時点（週次）')).toBeTruthy(); // 報告日チップ
   });
 
   it('「見方」ボタンから説明モーダルを開ける', async () => {

@@ -4,7 +4,7 @@
 // 行はドラッグ&ドロップで並び替え可能（@dnd-kit）。順序は localStorage に保存し、
 // ページ遷移・リロード後も維持する。クライアントはKVキャッシュを読むだけ。
 import { FC, useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronRight, GripVertical, Info, Minus, TrendingDown, TrendingUp, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, ChevronRight, GripVertical, Info, Minus, TrendingDown, TrendingUp, type LucideIcon } from 'lucide-react';
 import {
   DndContext,
   KeyboardSensor,
@@ -22,7 +22,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { FLOW_ORDER_STORAGE_KEY, FLOW_PAIRS, FlowDelta, FlowPair, FlowSnapshot, Lean, PairFlow, applyPairOrder } from '@/lib/flow';
+import { FLOW_ORDER_STORAGE_KEY, FLOW_PAIRS, FlowDelta, FlowPair, FlowSnapshot, Lean, PairCot, PairFlow, SpecStrength, applyPairOrder, specStrength } from '@/lib/flow';
 import FlowInfoModal from './FlowInfoModal';
 
 const REFRESH_MS = 60 * 60 * 1000; // 1時間
@@ -67,6 +67,92 @@ const formatDeltaValue = (value: number): string => {
   if (value === 0) return '±0';
   const sign = value > 0 ? '+' : '−';
   return `${sign}${Math.abs(value).toLocaleString()}`;
+};
+
+// 投機筋（CFTC COT）の買い越し/売り越し/中立ラベルと色。リテールとは別語彙で区別する。
+const COT_LABEL: Record<Lean, string> = { buy: '買い越し', sell: '売り越し', neutral: '中立' };
+const COT_TEXT: Record<Lean, string> = { buy: 'text-green-600', sell: 'text-red-600', neutral: 'text-gray-400' };
+const COT_STRENGTH_LABEL: Record<SpecStrength, string> = { weak: '弱', mid: '中', strong: '強' };
+
+// 投機筋ネット(−2〜+2)を中央起点のダイバージングバーで表す（右=買い越し緑 / 左=売り越し赤）。
+// リテールの0-100分割バーと視覚的に区別するため中央線を持つ。
+const SpecBar: FC<{ net: number }> = ({ net }) => {
+  const mag = Math.min(Math.abs(net) / 2, 1) * 50; // 片側最大50%（中央から）
+  const buy = net > 0;
+  return (
+    <div className="relative h-2 overflow-hidden rounded-full bg-gray-200" aria-hidden="true">
+      <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-gray-400" />
+      <div
+        className={`absolute top-0 h-full ${buy ? 'bg-green-500' : 'bg-red-500'}`}
+        style={buy ? { left: '50%', width: `${mag}%` } : { right: '50%', width: `${mag}%` }}
+      />
+    </div>
+  );
+};
+
+// 投機筋（CFTC COT）サブブロック。リテール建玉の下に並べ、方向＋強さ・前週比・リテールとの対比を示す。
+const SpecBlock: FC<{ cot: PairCot; retail: Lean }> = ({ cot, retail }) => {
+  const leanLabel = COT_LABEL[cot.lean];
+  // 中立以外は「弱/中/強」を付す（偏りの大きさ）。
+  const strengthLabel = cot.lean === 'neutral' ? '' : `・${COT_STRENGTH_LABEL[specStrength(cot.net)]}`;
+
+  // 前週比：ネットが現在のリーン方向へ進めば「強化」、戻せば「縮小」。中立は増減方向のみ示す。
+  const wow = (() => {
+    if (cot.deltaNet === undefined || cot.deltaNet === 0) return null;
+    const towardBuy = cot.deltaNet > 0;
+    const Icon = towardBuy ? TrendingUp : TrendingDown;
+    const color = towardBuy ? 'text-green-600' : 'text-red-600';
+    let text: string;
+    if (cot.lean === 'neutral') {
+      text = towardBuy ? '買い越し方向へ' : '売り越し方向へ';
+    } else {
+      const strengthen = cot.net > 0 === towardBuy; // ネットの符号と変化方向が一致＝リーン強化
+      text = `${leanLabel}を${strengthen ? '強化' : '縮小'}`;
+    }
+    return { Icon, color, text };
+  })();
+
+  // 対比：リテール（建玉優勢）と投機筋リーンが共に明確な売買のときのみ、一致/逆行を示す。
+  const contrast = (() => {
+    if (cot.lean === 'neutral' || retail === 'neutral') return null;
+    return cot.lean === retail
+      ? { text: 'リテールと同方向', cls: 'bg-gray-100 text-gray-600', warn: false }
+      : { text: `リテール(${DOM_LABEL[retail]})と逆行`, cls: 'bg-amber-50 text-amber-700', warn: true };
+  })();
+
+  return (
+    <div className="mt-1.5 border-t border-gray-100 pt-1">
+      <div className="flex items-center justify-between text-[10px]">
+        <span className="font-semibold text-gray-500">投機筋</span>
+        <span className={`font-bold ${COT_TEXT[cot.lean]}`}>
+          {leanLabel}
+          {strengthLabel}
+        </span>
+      </div>
+      <div className="mt-0.5">
+        <SpecBar net={cot.net} />
+      </div>
+      {wow && (
+        <div className={`mt-0.5 flex items-center gap-0.5 text-[10px] ${wow.color}`}>
+          <wow.Icon className="h-2.5 w-2.5 shrink-0" aria-hidden="true" />
+          <span>{wow.text}</span>
+        </div>
+      )}
+      {contrast && (
+        <div className={`mt-0.5 flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold ${contrast.cls}`}>
+          {contrast.warn && <AlertTriangle className="h-2.5 w-2.5 shrink-0" aria-hidden="true" />}
+          <span>{contrast.text}</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ISO8601 → "MM/DD"（CFTC 報告日の簡易表示・週次）。
+const formatReportDate = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('ja-JP', { month: '2-digit', day: '2-digit' });
 };
 
 // ISO8601 → "MM/DD HH:mm"（ローカル表示）。
@@ -134,6 +220,8 @@ const SortablePairRow: FC<{ pair: FlowPair; flow?: PairFlow }> = ({ pair, flow }
               </div>
             );
           })()}
+          {/* 投機筋（CFTC COT）: リテール建玉の下に並べて対比。取得できたペアのみ表示 */}
+          {flow.cot && <SpecBlock cot={flow.cot} retail={flow.dominant} />}
           {/* 記録開始以降で合計取引量が最大だった時点。ヘッダー常時表示＋詳細はアコーディオン */}
           {flow.peak && (
             <div className="mt-1 border-t border-gray-100 pt-1 text-[10px] text-gray-500">
@@ -252,7 +340,10 @@ const OrderFlow: FC = () => {
             見方
           </button>
         </span>
-        {data?.updatedAt && <span className="text-gray-400">{new Date(data.updatedAt).toLocaleString('ja-JP')}</span>}
+        <span className="flex flex-col items-end text-gray-400">
+          {data?.updatedAt && <span>{new Date(data.updatedAt).toLocaleString('ja-JP')}</span>}
+          {data?.cotReportDate && <span>投機筋 {formatReportDate(data.cotReportDate)}時点（週次）</span>}
+        </span>
       </div>
 
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>

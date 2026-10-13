@@ -65,6 +65,36 @@ const FlowInfoModal: FC<FlowInfoModalProps> = ({ isOpen, onClose }) => {
           </li>
         </ul>
 
+        <h4 className="mt-4 mb-1 font-bold">投機筋（CFTC COT）</h4>
+        <p className="mb-2">
+          米 <span className="font-semibold">CFTC</span> が公表する COT（Commitments of Traders）の
+          <span className="font-semibold">非商業（Non-Commercial＝大口投機筋）</span>のネットポジションです。
+          CME 先物の「スマートマネー」の傾向を表し、上の Myfxbook（リテール）と対比できます。
+        </p>
+        <ul className="mb-3 list-none space-y-2">
+          <li className="rounded-md bg-green-50 px-2 py-1">
+            <span className="font-semibold text-green-700">買い越し（中央バーが右・緑）</span>
+            <br />
+            投機筋がそのペアを差し引きで買い持ち。バーが長いほど偏りが強い。
+          </li>
+          <li className="rounded-md bg-red-50 px-2 py-1">
+            <span className="font-semibold text-red-700">売り越し（中央バーが左・赤）</span>
+            <br />
+            投機筋がそのペアを差し引きで売り持ち。
+          </li>
+        </ul>
+        <p className="mb-4">
+          各通貨の先物ネットを正規化し、ペア X/Y のネット ＝ <span className="font-semibold">X − Y</span> で算出します
+          （クロス円も合成）。「前週比」は前週からのネットの増減です。
+        </p>
+
+        <h4 className="mt-4 mb-1 font-bold">リテールと投機筋の違い</h4>
+        <p className="mb-4">
+          リテール（Myfxbook）は<span className="font-semibold">逆張り傾向</span>で過熱時は反対に振れやすく、
+          投機筋（CFTC）は<span className="font-semibold">トレンド追随</span>とされます。
+          両者が一致/逆行しているかを見ると地合いの参考になります。
+        </p>
+
         <h4 className="mt-4 mb-1 font-bold">注意点</h4>
         <ul className="list-disc space-y-2 pl-5">
           <li>
@@ -78,6 +108,10 @@ const FlowInfoModal: FC<FlowInfoModalProps> = ({ isOpen, onClose }) => {
           <li>
             これは「今ポジションが積み増されているか巻き戻されているか」という
             <span className="font-semibold">状態</span>を示す指標であり、売買シグナル（転換／継続）ではありません。
+          </li>
+          <li>
+            投機筋（CFTC COT）は<span className="font-semibold">週次</span>で、毎週金曜に火曜時点が発表されます
+            （約3日遅れ）。毎時更新のリテールとは鮮度が異なる点にご注意ください。
           </li>
         </ul>
       </div>

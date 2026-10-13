@@ -59,6 +59,72 @@ export interface VolumePeak {
   rate: number | null; // ピーク時のスポットレート（取得失敗時は null）
 }
 
+// ---------------------------------------------------------------------------
+// 投機筋（CFTC COT / Legacy 非商業 Non-Commercial）
+// ---------------------------------------------------------------------------
+// Myfxbook が「リテール（個人投資家）」の建玉なのに対し、CFTC COT は CME 先物の
+// 大口投機筋（スマートマネー）のネットポジション。週次（毎週金曜に火曜時点を発表）。
+// CME 通貨先物は「対USD」で建つため、各通貨のネットを正規化し、ペア X/Y の
+// 投機筋リーン = net(X) − net(Y) として全11ペア（クロス含む）を合成する。
+// これにより USD/JPY は net(USD)−net(JPY) となり、符号反転（JPY買い越し＝USD/JPY売り）も自動で処理される。
+
+// COT で扱う通貨・金（CFTC 先物が存在する単位）。
+export type CotCurrency = 'USD' | 'JPY' | 'EUR' | 'GBP' | 'AUD' | 'NZD' | 'CAD' | 'CHF' | 'XAU';
+
+// 1ペア分の投機筋ポジション（CFTC 由来・合成）。
+export interface PairCot {
+  net: number; // 投機筋ネット = net(base) − net(quote)。範囲 −2〜+2（正=買い越し / 負=売り越し）
+  lean: Lean; // 買い越し=buy / 売り越し=sell / 中立=neutral
+  deltaNet?: number; // 前週比のネット変化（符号付き）。前週データが無ければ undefined
+}
+
+// |net| がこの範囲内なら中立扱いにするデッドバンド。
+const SPEC_LEAN_DEADBAND = 0.05;
+
+/** 投機筋のグロス建玉からネットを正規化する: (long − short) / (long + short)。範囲 −1〜+1。建玉ゼロは 0。 */
+export function normalizeNet(long: number, short: number): number {
+  const total = long + short;
+  if (total <= 0) return 0;
+  return (long - short) / total;
+}
+
+/** 正規化ネット差（−2〜+2）から買い越し/売り越し/中立を判定する。 */
+export function specLean(pairNet: number): Lean {
+  if (pairNet > SPEC_LEAN_DEADBAND) return 'buy';
+  if (pairNet < -SPEC_LEAN_DEADBAND) return 'sell';
+  return 'neutral';
+}
+
+// 投機筋リーンの強さ（偏りの大きさ）。現実的な範囲（概ね ±1）を3等分して弱/中/強に区分。
+export type SpecStrength = 'weak' | 'mid' | 'strong';
+export function specStrength(pairNet: number): SpecStrength {
+  const a = Math.abs(pairNet);
+  if (a < 0.34) return 'weak';
+  if (a < 0.67) return 'mid';
+  return 'strong';
+}
+
+/** ペア X/Y の投機筋ネット = net(X) − net(Y)。どちらかの通貨が欠ければ undefined。 */
+export function pairSpecNet(net: Partial<Record<CotCurrency, number>>, pair: FlowPair): number | undefined {
+  const [base, quote] = pair.split('/') as [CotCurrency, CotCurrency];
+  const b = net[base];
+  const q = net[quote];
+  if (b === undefined || q === undefined) return undefined;
+  return b - q;
+}
+
+/** 当週・前週の通貨別ネットから 1ペア分の PairCot を組み立てる。合成できなければ undefined。 */
+export function toPairCot(
+  net: Partial<Record<CotCurrency, number>>,
+  prevNet: Partial<Record<CotCurrency, number>>,
+  pair: FlowPair,
+): PairCot | undefined {
+  const value = pairSpecNet(net, pair);
+  if (value === undefined) return undefined;
+  const prev = pairSpecNet(prevNet, pair);
+  return { net: value, lean: specLean(value), deltaNet: prev === undefined ? undefined : value - prev };
+}
+
 // 1ペア分の建玉情報（Myfxbook 由来）。
 export interface PairFlow {
   pair: FlowPair;
@@ -69,12 +135,15 @@ export interface PairFlow {
   dominant: Lean; // 取引量(volume)の多い方
   peak?: VolumePeak; // 記録開始以降の合計取引量ピーク
   delta?: FlowDelta; // 前回スナップショット比の合計取引量の動き（初回は無し）
+  cot?: PairCot; // 投機筋（CFTC COT）のネットポジション（取得できたペアのみ）
 }
 
 // Worker が /flow で返すスナップショット。
 export interface FlowSnapshot {
   pairs: PairFlow[];
   updatedAt: string; // ISO8601（Worker が算出した時刻）
+  cotReportDate?: string; // CFTC 報告日（火曜時点・ISO8601）。COT を取得できた場合のみ
+  cotUpdatedAt?: string; // Worker が CFTC を取得した時刻（ISO8601）
 }
 
 // ユーザーが並び替えた表示順を保存する localStorage キー。
