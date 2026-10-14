@@ -103,11 +103,9 @@ export default function AlertBell() {
         headerText="相場変動通知"
         buttons={[{ text: '閉じる', handler: () => setOpen(false) }]}
       >
-        {/* ポップアップ本文全体を1つのスクロール領域にする（Mobiscroll内でのネストスクロール不可を回避）。 */}
-        <div
-          className="p-4 min-w-[260px] space-y-3 max-h-[75vh] overflow-y-auto overscroll-contain"
-          style={{ WebkitOverflowScrolling: 'touch' }}
-        >
+        {/* 本文に独自の overflow は付けず、Mobiscroll 本体(.mbsc-popup-content)に縦スクロールを任せる
+            （入れ子のスクロール領域は Mobiscroll のタッチ処理と競合してスクロールできなくなるため）。 */}
+        <div className="p-4 min-w-[260px] space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-bold text-gray-700">相場変動通知</p>
