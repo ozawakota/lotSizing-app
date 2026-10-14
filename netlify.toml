@@ -13,6 +13,8 @@
   VITE_CHAT_URL = "https://currency-strength.ozawa19890413.workers.dev/chat"
   # タイムフレーム分析（同じ Worker の /mtf パス）
   VITE_MTF_URL = "https://currency-strength.ozawa19890413.workers.dev/mtf"
+  # 通貨ランキング（同じ Worker の /ranking パス）
+  VITE_RANKING_URL = "https://currency-strength.ozawa19890413.workers.dev/ranking"
   # 相場変動通知（Alert Worker + VAPID 公開鍵。いずれも公開値）
   VITE_ALERT_URL = "https://lotsizing-alert.ozawa19890413.workers.dev"
   VITE_VAPID_PUBLIC_KEY = "BDMQvoZB44nljNEEXuR3OAB-cvo6jhjTZVO0C8XAn3MtRkM8M7tv4KAeHAz1_aKQytj_zs9heXVZ9SUoPvPVhto"
