@@ -46,6 +46,7 @@ export const YAHOO_INTERVAL: Record<SlTimeframe, string> = {
 };
 
 export interface Candle {
+  open?: number; // 始値（ローソク足パターン判定用。Yahoo から取得。無い足は判定スキップ）
   high: number;
   low: number;
   close: number;
@@ -508,6 +509,7 @@ export interface PaContext {
   sessionStatus?: string; // 東京/ロンドン/NY の開閉状況
   volumeLevel?: number | null; // 過去の高出来高の節目価格
   stoch?: StochReading | null; // ストキャスティクス(%K/%D)
+  candlePattern?: { label: string; barsAgo: number } | null; // 直近のローソク足パターン(ピンバー/包み足)
 }
 
 const paState = (structure: SlStructure, recentCloses: number[], ctx: PaContext = {}): unknown => ({
@@ -520,6 +522,7 @@ const paState = (structure: SlStructure, recentCloses: number[], ctx: PaContext 
   ...(ctx.sessionStatus ? { sessionStatus: ctx.sessionStatus } : {}),
   ...(ctx.volumeLevel != null ? { volumeLevel: ctx.volumeLevel } : {}),
   ...(ctx.stoch ? { stochastic: { k: ctx.stoch.k, d: ctx.stoch.d } } : {}),
+  ...(ctx.candlePattern ? { candlePattern: { pattern: ctx.candlePattern.label, barsAgo: ctx.candlePattern.barsAgo } } : {}),
 });
 
 /** Jev systemone リクエスト body（model 以外）。1問の Choice でプライスアクションを分類。
@@ -532,7 +535,10 @@ export function buildPaJevRequest(structure: SlStructure, recentCloses: number[]
   const stochNote = ctx.stoch
     ? '。ストキャスティクス(stochastic.k/%K, stochastic.d/%D)の買われすぎ(80以上)/売られすぎ(20以下)や%Kと%Dのクロスも考慮してください'
     : '';
-  const note = sessionNote + volumeNote + stochNote;
+  const candleNote = ctx.candlePattern
+    ? `。直近のローソク足パターン(candlePattern.pattern=${ctx.candlePattern.label}、${ctx.candlePattern.barsAgo}本前)は反転/継続の手がかりとして重視してください`
+    : '';
+  const note = sessionNote + volumeNote + stochNote + candleNote;
   return {
     state: paState(structure, recentCloses, ctx),
     questions: {
@@ -681,6 +687,7 @@ export function buildPaPrompt(structure: SlStructure, recentCloses: number[], ct
     ctx.sessionStatus ? `現在のセッション状況も考慮してください: ${ctx.sessionStatus}` : '',
     ctx.volumeLevel != null ? `過去に出来高が膨らんだ価格(${ctx.volumeLevel})は重要なレジサポとして考慮してください。` : '',
     ctx.stoch ? `ストキャスティクス %K=${ctx.stoch.k} / %D=${ctx.stoch.d}（80以上=買われすぎ, 20以下=売られすぎ）も考慮してください。` : '',
+    ctx.candlePattern ? `直近のローソク足パターン: ${ctx.candlePattern.label}（${ctx.candlePattern.barsAgo}本前）も反転/継続の手がかりとして考慮してください。` : '',
     JSON.stringify(paState(structure, recentCloses, ctx)),
     '分類の定義:',
     ...Object.entries(PA_CRITERIA).map(([k, v]) => `- ${k}: ${v}`),

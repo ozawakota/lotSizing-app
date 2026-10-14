@@ -28,6 +28,8 @@ import {
 } from '../../src/lib/flow';
 // /news の為替ニュース＋売買シグナルのロジック/型もフロントと共有。
 import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type NewsItem } from '../../src/lib/news';
+// ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
+import { latestPatternInWindow, PATTERN_LABEL, type OhlcCandle } from '../../src/lib/edge';
 import {
   SIGNAL_PAIRS,
   buildJevRequest,
@@ -735,7 +737,7 @@ interface YahooChart {
       meta?: { regularMarketPrice?: number };
       timestamp?: number[];
       indicators?: {
-        quote?: { high?: (number | null)[]; low?: (number | null)[]; close?: (number | null)[]; volume?: (number | null)[] }[];
+        quote?: { open?: (number | null)[]; high?: (number | null)[]; low?: (number | null)[]; close?: (number | null)[]; volume?: (number | null)[] }[];
       };
     }[];
   };
@@ -749,6 +751,7 @@ const fetchYahooCandles = async (symbol: string, interval: string): Promise<{ ca
   if (!res.ok) throw new Error(`Yahoo HTTP ${res.status}`);
   const r = ((await res.json()) as YahooChart).chart?.result?.[0];
   const q = r?.indicators?.quote?.[0];
+  const opens = q?.open ?? [];
   const highs = q?.high ?? [];
   const lows = q?.low ?? [];
   const closes = q?.close ?? [];
@@ -760,9 +763,17 @@ const fetchYahooCandles = async (symbol: string, interval: string): Promise<{ ca
     const l = lows[i];
     const c = closes[i];
     if (typeof h === 'number' && typeof l === 'number' && typeof c === 'number') {
+      const o = opens[i];
       const v = volumes[i];
       const t = times[i];
-      candles.push({ high: h, low: l, close: c, volume: typeof v === 'number' ? v : undefined, t: typeof t === 'number' ? t : undefined });
+      candles.push({
+        open: typeof o === 'number' ? o : undefined,
+        high: h,
+        low: l,
+        close: c,
+        volume: typeof v === 'number' ? v : undefined,
+        t: typeof t === 'number' ? t : undefined,
+      });
     }
   }
   const currentRate = Number(r?.meta?.regularMarketPrice);
@@ -906,6 +917,7 @@ interface MtfTf {
   volumeLevel: number | null; // 過去の高出来高の節目価格（30m/1h=2日前・4h=2週前付近。出来高無し=null）
   stoch: StochReading | null; // ストキャスティクス(%K/%D)。足から自前計算（算出不可は null）
   roleReversal: RoleReversal | null; // ロールリバーサル・ブレイク信用度（0–100・状態・側）。評価不能は null
+  candlePattern: { key: string; label: string; barsAgo: number } | null; // 直近ウィンドウのローソク足パターン(ピンバー/包み足)
 }
 interface MtfPayload {
   instrument: string;
@@ -918,6 +930,9 @@ interface MtfPayload {
   sessionOutlook: SessionOutlook | null; // 東京/ロンドン/NY のシナリオ予測（Jev。失敗時 null）
   generatedAt: number;
 }
+
+// ローソク足パターン(ピンバー/包み足)を探す直近ウィンドウの本数。15m/30m/1h=直近2日、4h=直近2週。
+const PA_WINDOW_BARS: Record<SlTimeframe, number> = { '15m': 192, '30m': 96, '1h': 48, '4h': 84 };
 
 // 各TFの出来高アンカー: 参照する過去時点と前後の窓（ミリ秒）。30m/1h=2日前±12h, 4h=2週前±2日。
 const DAY_MS = 86_400_000;
@@ -961,7 +976,19 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
     }
     // ストキャスティクス(%K/%D)を足から自前計算（API不要）。Jev の判定材料にも含める。
     const stoch = computeStochastic(candles);
-    const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses, { sessionStatus, volumeLevel, stoch });
+    // 直近ウィンドウ(2日・4hは2週)のローソク足からピンバー/包み足を検出。末尾(形成中)の足は除外。
+    const ohlc: OhlcCandle[] = candles
+      .filter((c) => typeof c.open === 'number')
+      .map((c) => ({ open: c.open as number, high: c.high, low: c.low, close: c.close, t: c.t }));
+    const rp = latestPatternInWindow(ohlc.slice(0, -1), PA_WINDOW_BARS[tf]);
+    const candlePattern = rp ? { key: rp.key, label: PATTERN_LABEL[rp.key], barsAgo: rp.barsAgo } : null;
+
+    const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses, {
+      sessionStatus,
+      volumeLevel,
+      stoch,
+      candlePattern: candlePattern ? { label: candlePattern.label, barsAgo: candlePattern.barsAgo } : null,
+    });
     paEngine = eng;
     timeframes.push({
       tf,
@@ -976,6 +1003,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       volumeLevel,
       stoch,
       roleReversal: null, // 下の2パス目で算出（上位TFのコンフルエンスが必要なため）
+      candlePattern,
     });
   }
 

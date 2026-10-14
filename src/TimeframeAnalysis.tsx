@@ -47,6 +47,7 @@ interface MtfTf {
   volumeLevel: number | null; // 過去の高出来高の節目（30m/1h=2日前・4h=2週前。無し=null）
   stoch: { k: number; d: number } | null; // ストキャスティクス(%K/%D)。算出不可=null
   roleReversal: RoleReversal | null; // ロールリバーサル・ブレイク信用度（0–100・状態・側）。評価不能=null
+  candlePattern: { key: string; label: string; barsAgo: number } | null; // 直近のローソク足パターン(ピンバー/包み足)
 }
 interface MtfResult {
   instrument: string;
@@ -355,6 +356,21 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
       <BreakoutRow breakout={tf.breakout} />
       <RrRow rr={tf.rr} digits={digits} />
       {tf.roleReversal && <RoleReversalRow rr={tf.roleReversal} />}
+
+      {/* 直近のローソク足パターン（ピンバー/包み足）。Jev のシグナル判定にも反映済み */}
+      {tf.candlePattern && (
+        <div className="mt-2 flex items-center justify-between text-[11px]">
+          <span className="text-gray-500">ローソク足</span>
+          <span className="flex items-center gap-1.5 font-semibold">
+            <span className={tf.candlePattern.key.startsWith('bull') ? 'text-green-700' : 'text-red-700'}>
+              {tf.candlePattern.label}
+            </span>
+            <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500">
+              {tf.candlePattern.barsAgo === 0 ? '確定足' : `${tf.candlePattern.barsAgo}本前`}
+            </span>
+          </span>
+        </div>
+      )}
 
       {/* 補助指標（ストキャス・出来高節目）を1行に集約。無ければ非表示 */}
       {(tf.stoch || tf.volumeLevel != null) && (
