@@ -214,14 +214,29 @@ export function computeStopLoss(
 // ---------------------------------------------------------------------------
 // リスクリワード（RR）評価: 上位TFのスイングを利確目標にした 1:N 判定（/mtf 用）
 // ---------------------------------------------------------------------------
+// ペアごとの一般的なスプレッドの目安（pips。国内FX業者の通常時の水準を保守的に丸めた値）。
+// RR 通知で「エントリー時に払うコスト」として、リスクに足しリワードから引く。未登録ペアは 1.0。
+export const TYPICAL_SPREAD_PIPS: Record<string, number> = {
+  USD_JPY: 0.3,
+  EUR_JPY: 0.5,
+  GBP_JPY: 1.0,
+  AUD_JPY: 0.6,
+  EUR_USD: 0.3,
+  GBP_USD: 0.8,
+  AUD_USD: 0.5,
+  XAU_USD: 4.0, // 0.4ドル（XAU の pip=0.1ドル）
+};
+export const typicalSpreadPips = (instrument: string): number => TYPICAL_SPREAD_PIPS[instrument] ?? 1.0;
+
 /** あるTFの「狙える setup」。リスク=構造的損切りまで, リワード=上位TFスイングまで。 */
 export interface RrSetup {
   direction: SlDirection;
   entry: number;
   stop: number; // 損切り価格
   target: number; // 利確目標価格（上位TFスイング）
-  riskPips: number;
-  rewardPips: number;
+  riskPips: number; // spreadPips 込み
+  rewardPips: number; // spreadPips 控除後
+  spreadPips: number; // 計算に含めたスプレッド（0=考慮なし）
   rr: number; // リワード/リスク（小数1桁）
   qualifies: boolean; // rr>=minRr かつ 方向のブレイク確率>=minProb
 }
@@ -232,6 +247,7 @@ export interface RrSetup {
  * - リワード: 進行方向で現在値より先にある最も近い上位TFスイング（ロング=上の最も近い高値 /
  *   ショート=下の最も近い安値）までの距離。候補が無ければ null。
  * - 「狙える」= rr>=minRr かつ その方向のブレイク確率>=minProb。
+ * - spreadPips（>0 のとき）: エントリー時のスプレッドをリスクに足し、リワードから引く（保守的な実質 RR）。
  */
 export function assessRiskReward(
   structure: SlStructure,
@@ -241,12 +257,14 @@ export function assessRiskReward(
   instrument: string,
   minRr = 3,
   minProb = 50,
+  spreadPips = 0,
 ): RrSetup | null {
   const entry = structure.currentRate;
   const pip = pipSize(instrument);
   const sl = computeStopLoss(structure, direction, null, instrument);
-  const riskPips = sl.distancePips;
-  if (riskPips <= 0) return null;
+  if (sl.distancePips <= 0) return null;
+  const round1 = (n: number) => Math.round(n * 10) / 10;
+  const riskPips = round1(sl.distancePips + spreadPips);
 
   let target: number | null = null;
   if (direction === 'long') {
@@ -258,8 +276,8 @@ export function assessRiskReward(
   }
   if (target == null) return null; // 上位TFに進行方向の目標が無い
 
-  const rewardPips = Math.round((Math.abs(target - entry) / pip) * 10) / 10;
-  const rr = Math.round((rewardPips / riskPips) * 10) / 10;
+  const rewardPips = round1(Math.max(Math.abs(target - entry) / pip - spreadPips, 0));
+  const rr = round1(rewardPips / riskPips);
   return {
     direction,
     entry,
@@ -267,6 +285,7 @@ export function assessRiskReward(
     target,
     riskPips,
     rewardPips,
+    spreadPips,
     rr,
     qualifies: rr >= minRr && directionProb >= minProb,
   };
@@ -282,11 +301,14 @@ export interface RrScanResult extends RrSetup {
  * 各TFで方向をトレンドから決め（up=ロング/down=ショート/range=除外）、上位TFスイングを
  * 目標に RR を評価し、rr>=minRr を満たす setup を「TFごとに全件」返す。確率フィルタは使わない。
  * tfStructures は短い足→長い足の順で渡す（上位TF＝後方）。渡した順（短い足→長い足）で返す。
+ * 最も長い足は上位TF（利確目標）が無いため setup にならず、目標の供給元としてだけ使われる。
+ * spreadPips を渡すとスプレッド込みの実質 RR で判定する（assessRiskReward 参照）。
  */
 export function scanStructuralRrAll(
   tfStructures: { tf: SlTimeframe; structure: SlStructure }[],
   instrument: string,
   minRr = 3,
+  spreadPips = 0,
 ): RrScanResult[] {
   const results: RrScanResult[] = [];
   tfStructures.forEach(({ tf, structure }, i) => {
@@ -294,7 +316,7 @@ export function scanStructuralRrAll(
     if (!direction) return; // レンジは方向なし＝対象外
     const higherSwings = tfStructures.slice(i + 1).map((h) => ({ swingHigh: h.structure.swingHigh, swingLow: h.structure.swingLow }));
     // directionProb=100 / minProb=0 で確率条件を無効化（構造的 RR のみで qualifies）。
-    const rr = assessRiskReward(structure, direction, 100, higherSwings, instrument, minRr, 0);
+    const rr = assessRiskReward(structure, direction, 100, higherSwings, instrument, minRr, 0, spreadPips);
     if (rr?.qualifies) results.push({ ...rr, tf });
   });
   return results;

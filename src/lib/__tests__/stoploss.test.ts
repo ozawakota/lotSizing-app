@@ -258,6 +258,16 @@ describe('assessRiskReward', () => {
     expect(rr!.qualifies).toBe(false);
   });
 
+  it('spreadPips を渡すとリスクに足しリワードから引いた実質 RR になる', () => {
+    const base = assessRiskReward(structure, 'long', 60, [{ swingHigh: 152.0, swingLow: 149.0 }], 'USD_JPY');
+    const withSpread = assessRiskReward(structure, 'long', 60, [{ swingHigh: 152.0, swingLow: 149.0 }], 'USD_JPY', 3, 50, 2);
+    expect(base!.spreadPips).toBe(0);
+    expect(withSpread!.spreadPips).toBe(2);
+    expect(withSpread!.riskPips).toBeCloseTo(base!.riskPips + 2, 5);
+    expect(withSpread!.rewardPips).toBeCloseTo(base!.rewardPips - 2, 5);
+    expect(withSpread!.rr).toBeLessThan(base!.rr);
+  });
+
   it('returns null when no higher-TF swing lies ahead in the trade direction', () => {
     // すべての上位TF高値が現在値より下 → ロングの目標が無い
     const rr = assessRiskReward(structure, 'long', 60, [{ swingHigh: 150.2, swingLow: 149.0 }], 'USD_JPY');
@@ -371,6 +381,17 @@ describe('scanStructuralRrAll', () => {
     expect(all.every((r) => r.rr >= 2.5)).toBe(true);
     // 従来の best 版は rr 最大の1件（1h）のみ。
     expect(scanStructuralRr(tfs, 'USD_JPY', 2.5)!.tf).toBe('1h');
+  });
+
+  it('スプレッド込みでは RR が下がり、ぎりぎりの setup は条件から外れる', () => {
+    const tfs = [
+      { tf: '15m' as const, structure: { trend: 'up' as const, swingHigh: 150.1, swingLow: 149.95, currentRate: 150.0 } },
+      { tf: '1h' as const, structure: { trend: 'range' as const, swingHigh: 150.2, swingLow: 149.9, currentRate: 150.0 } },
+    ];
+    const [noSpread] = scanStructuralRrAll(tfs, 'USD_JPY', 2.5);
+    expect(noSpread.rr).toBeGreaterThanOrEqual(2.5);
+    // 同じ setup でも、RR の閾値を素の RR ちょうどにするとスプレッド分で不成立になる。
+    expect(scanStructuralRrAll(tfs, 'USD_JPY', noSpread.rr, 1)).toEqual([]);
   });
 });
 

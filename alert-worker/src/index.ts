@@ -24,6 +24,7 @@ import {
 import {
   computeStructure,
   scanStructuralRrAll,
+  typicalSpreadPips,
   YAHOO_SYMBOL as SL_YAHOO_SYMBOL,
   YAHOO_INTERVAL as SL_YAHOO_INTERVAL,
   type Candle,
@@ -187,6 +188,8 @@ const runDetection = async (env: Env): Promise<void> => {
 //   建玉が取れないときは従来どおり通知する（フィルタは補助なので通知を止めない）。
 // ---------------------------------------------------------------------------
 const RR_INSTRUMENTS = ['XAU_USD', 'USD_JPY', 'EUR_USD', 'GBP_USD'];
+// 構造を取る足（短い→長い）。4h は利確目標（上位TFスイング）の供給元としてだけ使う:
+// それより上の足を見ていないため 4h 自体の setup は成立せず、通知対象は 15m/30m/1h。
 const RR_TFS: SlTimeframe[] = ['15m', '30m', '1h', '4h'];
 const RR_MIN = 2.5; // 1:2.5 以上
 const RR_SCAN_INTERVAL_MS = 15 * 60 * 1000; // 走査間隔（毎分 scheduled の中でゲート）
@@ -265,7 +268,8 @@ const runRrDetection = async (env: Env): Promise<void> => {
         tfStructures.push({ tf, structure: computeStructure(candles, currentRate) });
       }
       // 条件を満たしたTFを全件通知（最良1件に集約しない＝粒度を上げる）。
-      const setups = scanStructuralRrAll(tfStructures, inst, RR_MIN);
+      // ペアごとの一般的なスプレッドをリスクに足しリワードから引いた、実質 RR で判定する。
+      const setups = scanStructuralRrAll(tfStructures, inst, RR_MIN, typicalSpreadPips(inst));
       const disp = RR_DISPLAY[inst] ?? inst;
       for (const setup of setups) {
         // クールダウン判定（同 ペア＋TF＋方向 は RR_COOLDOWN_MS 再通知しない）。TFごとに独立。
@@ -286,7 +290,7 @@ const runRrDetection = async (env: Env): Promise<void> => {
         const dirJa = setup.direction === 'long' ? 'ロング' : 'ショート';
         const title = `${disp} RR好機 1:${setup.rr.toFixed(1)}`;
         const retail = pf && bias ? `／個人 買い${Math.round(pf.longPct)}%・売り${Math.round(pf.shortPct)}%（${RETAIL_LABEL[bias.verdict]}）` : '';
-        const body = `${RR_TF_LABEL[setup.tf]} ${dirJa}／リスク${setup.riskPips}pips・リワード${setup.rewardPips}pips が狙えます${retail}`;
+        const body = `${RR_TF_LABEL[setup.tf]} ${dirJa}／リスク${setup.riskPips}pips・リワード${setup.rewardPips}pips が狙えます（スプレッド${setup.spreadPips}pips込み）${retail}`;
         // pair 欄に "RR:" を付け、価格アラート(tag=pair)と別タグにして通知が衝突しないようにする。
         await env.DB.prepare('INSERT INTO alerts (pair, title, body, created_at) VALUES (?, ?, ?, ?)')
           .bind(`RR:${disp}`, title, body, now)

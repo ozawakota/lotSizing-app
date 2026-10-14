@@ -29,7 +29,9 @@
 ## RR好機通知
 
 15分ごとに 4ペア（XAU/USD・USD/JPY・EUR/USD・GBP/USD）× 15m/30m/1h/4h の Yahoo 足から構造的 RR を評価し、
-**1:2.5 以上**の時間足を通知する（同じ ペア＋TF＋方向 は2時間再通知しない。ヘッダーの RR トグルが ON の購読のみ）。
+**1:2.5 以上**の時間足を通知する。通知対象は **15m/30m/1h**（4h は利確目標＝上位TFスイングの供給元としてだけ使う）。
+RR は**ペアごとの一般的なスプレッド**（`TYPICAL_SPREAD_PIPS`、例 USD/JPY 0.3pips・XAU/USD 4pips）をリスクに足し
+リワードから引いた実質値で判定する（同じ ペア＋TF＋方向 は2時間再通知しない。ヘッダーの RR トグルが ON の購読のみ）。
 判定は [`../src/lib/stoploss.ts`](../src/lib/stoploss.ts) の `scanStructuralRrAll`。
 
 **個人投資家の建玉（Myfxbook）による逆張りフィルタ**: currency-strength Worker の `/flow` を Service Binding（`STRENGTH`）経由で呼び、
