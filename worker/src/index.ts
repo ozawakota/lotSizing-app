@@ -44,6 +44,10 @@ import {
 } from '../../src/lib/signal';
 // 損切り提案のロジック/型もフロントと共有。
 import {
+  RR_MIN,
+  RR_MIN_DIRECTION_PROB,
+  trendToDirection,
+  typicalSpreadPips,
   SL_TIMEFRAMES,
   YAHOO_INTERVAL,
   YAHOO_SYMBOL,
@@ -1023,11 +1027,23 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       volumeLevel: t.volumeLevel,
       higherLevels,
     });
-    // RR 評価（従来どおり・ブレイク方向がある TF のみ）。
-    const dir = dirFromBreakout(t.breakout);
-    if (!dir) return;
+    // RR 評価: 方向は RR好機通知と同じくトレンドで決める（レンジは対象外）。基準も通知と共通
+    // （RR_MIN・スプレッド込み）。Jev のブレイク確率が取れたときだけ「その方向の確率 ≥ RR_MIN_DIRECTION_PROB」を
+    // 追加条件にする（取れないときは確率条件なし＝通知と同じ判定）。
+    const direction = trendToDirection(t.trend);
+    if (!direction) return;
+    const dirProb = t.breakout ? (direction === 'long' ? t.breakout.up : t.breakout.down) : 100;
     const higherSwings = timeframes.slice(i + 1).map((h) => ({ swingHigh: h.swingHigh, swingLow: h.swingLow }));
-    t.rr = assessRiskReward(structure, dir.direction, dir.prob, higherSwings, instrument);
+    t.rr = assessRiskReward(
+      structure,
+      direction,
+      dirProb,
+      higherSwings,
+      instrument,
+      RR_MIN,
+      RR_MIN_DIRECTION_PROB,
+      typicalSpreadPips(instrument),
+    );
     if (t.rr?.qualifies && (!rrOpportunity || t.rr.rr > rrOpportunity.rr)) {
       rrOpportunity = { ...t.rr, tf: t.tf };
     }

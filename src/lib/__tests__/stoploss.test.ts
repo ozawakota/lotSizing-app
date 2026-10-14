@@ -15,6 +15,7 @@ import {
   computeStochastic,
   scanStructuralRr,
   scanStructuralRrAll,
+  trendToDirection,
   scoreRoleReversal,
   type Candle,
   type SessionState,
@@ -433,5 +434,13 @@ describe('parseSessionJev', () => {
   it('returns null when any of the three sessions is missing', () => {
     expect(parseSessionJev({ tokyo: { choice: 'range' }, london: { choice: 'range' } })).toBeNull();
     expect(parseSessionJev(undefined)).toBeNull();
+  });
+});
+
+describe('trendToDirection（TF分析ページと RR好機通知で共通の方向）', () => {
+  it('上昇=ロング / 下降=ショート / レンジ=対象外', () => {
+    expect(trendToDirection('up')).toBe('long');
+    expect(trendToDirection('down')).toBe('short');
+    expect(trendToDirection('range')).toBeNull();
   });
 });

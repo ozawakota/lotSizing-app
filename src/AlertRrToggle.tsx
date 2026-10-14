@@ -1,10 +1,11 @@
-// ヘッダーのRR好機通知アイコン（ベルの左）。タップでポップアップを開き、RR≥1:3 の
+// ヘッダーのRR好機通知アイコン（ベルの左）。タップでポップアップを開き、RR≥1:RR_MIN の
 // バックグラウンド通知を端末ごとに ON/OFF する。OFF で OS通知・アプリ内トーストの両方を止める。
 // env 未設定/非対応なら非表示（AlertBell と同条件）。
 import { useState } from 'react';
 import { Target } from 'lucide-react';
 import { Popup } from '@mobiscroll/react';
 import { getRrEnabled, isPushConfigured, isPushSupported, setRrEnabled } from '@/lib/push';
+import { RR_MIN } from '@/lib/stoploss';
 
 // RR通知の監視対象（alert-worker の RR_INSTRUMENTS と対応）。
 const RR_PAIRS = ['XAU/USD', 'USD/JPY', 'EUR/USD', 'GBP/USD'];
@@ -52,7 +53,7 @@ export default function AlertRrToggle() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-bold text-gray-700">RR好機通知</p>
-              <p className="text-xs text-gray-500">リスクリワード1:3以上が狙える時間足を検知したら通知</p>
+              <p className="text-xs text-gray-500">リスクリワード1:{RR_MIN}以上（スプレッド込み）が狙える時間足を検知したら通知</p>
             </div>
             <button
               type="button"

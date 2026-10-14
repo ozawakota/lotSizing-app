@@ -228,6 +228,16 @@ export const TYPICAL_SPREAD_PIPS: Record<string, number> = {
 };
 export const typicalSpreadPips = (instrument: string): number => TYPICAL_SPREAD_PIPS[instrument] ?? 1.0;
 
+// RR 好機の共通基準（TF分析ページと RR好機通知で同じ値を使う）。スプレッド込みの実質 RR で判定する。
+export const RR_MIN = 2.5;
+// TF分析ページで、Jev のブレイク確率が取れたときに追加で課す「トレンド方向の確率」の下限（%）。
+export const RR_MIN_DIRECTION_PROB = 50;
+
+/** RR の方向はトレンドで決める（上昇=ロング / 下降=ショート / レンジ=対象外）。ページと通知で共通。 */
+export function trendToDirection(trend: SlStructure['trend']): SlDirection | null {
+  return trend === 'up' ? 'long' : trend === 'down' ? 'short' : null;
+}
+
 /** あるTFの「狙える setup」。リスク=構造的損切りまで, リワード=上位TFスイングまで。 */
 export interface RrSetup {
   direction: SlDirection;
@@ -312,7 +322,7 @@ export function scanStructuralRrAll(
 ): RrScanResult[] {
   const results: RrScanResult[] = [];
   tfStructures.forEach(({ tf, structure }, i) => {
-    const direction: SlDirection | null = structure.trend === 'up' ? 'long' : structure.trend === 'down' ? 'short' : null;
+    const direction = trendToDirection(structure.trend);
     if (!direction) return; // レンジは方向なし＝対象外
     const higherSwings = tfStructures.slice(i + 1).map((h) => ({ swingHigh: h.structure.swingHigh, swingLow: h.structure.swingLow }));
     // directionProb=100 / minProb=0 で確率条件を無効化（構造的 RR のみで qualifies）。

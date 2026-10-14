@@ -15,7 +15,7 @@ import type {
   SlDirection,
   SlTimeframe,
 } from '@/lib/stoploss';
-import { pipSize } from '@/lib/stoploss';
+import { RR_MIN, pipSize } from '@/lib/stoploss';
 import { MARKET_SESSIONS, isSessionOpen } from '@/lib/session';
 import { fetchGoldSpot } from '@/lib/goldSpot';
 import TfCountdown from '@/components/TfCountdown';
@@ -181,7 +181,7 @@ function BreakoutRow({ breakout }: { breakout: BreakoutProb | null }) {
 const DIR_LABEL: Record<SlDirection, string> = { long: 'ロング', short: 'ショート' };
 const DIR_STYLE: Record<SlDirection, string> = { long: 'text-green-700', short: 'text-red-700' };
 
-// 上位TFスイングを目標にした RR 評価の1行。狙える(qualifies)ときはオレンジ＋✓で強調。
+// 上位TFスイングを目標にした RR 評価の1行（方向はトレンド、スプレッド込み）。狙える(qualifies)ときはオレンジ＋✓で強調。
 function RrRow({ rr, digits }: { rr: RrSetup | null; digits: number }) {
   if (!rr) return <p className="mt-1 text-[10px] text-gray-400">RR{'　'}上位TF目標なし —</p>;
   const ok = rr.qualifies;
@@ -461,7 +461,7 @@ export default function TimeframeAnalysis() {
     };
   }, [instrument]);
 
-  // 分析完了時、RR 1:3 以上の好機があればポップアップを1回開く（新しい分析ごとに再判定）。
+  // 分析完了時、RR 好機（RR_MIN 以上・トレンド方向）があればポップアップを1回開く（新しい分析ごとに再判定）。
   useEffect(() => {
     if (result?.rrOpportunity) setShowRrPopup(true);
   }, [result]);
@@ -541,7 +541,7 @@ export default function TimeframeAnalysis() {
         <p className="mt-3 text-center text-gray-400">ペアを選ぶと自動で分析します。</p>
       )}
 
-      {/* RR 1:3 以上の好機ポップアップ（分析完了時に自動表示） */}
+      {/* RR 好機ポップアップ（分析完了時に自動表示） */}
       {showRrPopup && result?.rrOpportunity && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
@@ -551,7 +551,7 @@ export default function TimeframeAnalysis() {
             className="w-full max-w-xs rounded-xl bg-white p-5 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <p className="text-center text-base font-bold text-orange-600">🎯 RR 1:3 以上の好機</p>
+            <p className="text-center text-base font-bold text-orange-600">🎯 RR 1:{RR_MIN} 以上の好機</p>
             <p className="mt-2 text-center text-sm font-semibold text-gray-800">
               {result.instrument.replace('_', '/')}{'　'}<span className="font-mono">{result.rrOpportunity.tf}</span>
               <span className={DIR_STYLE[result.rrOpportunity.direction]}>

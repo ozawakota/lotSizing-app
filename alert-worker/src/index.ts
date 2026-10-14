@@ -25,6 +25,7 @@ import {
   computeStructure,
   scanStructuralRrAll,
   typicalSpreadPips,
+  RR_MIN, // 1:2.5 以上（TF分析ページと共通の基準）
   YAHOO_SYMBOL as SL_YAHOO_SYMBOL,
   YAHOO_INTERVAL as SL_YAHOO_INTERVAL,
   type Candle,
@@ -191,7 +192,6 @@ const RR_INSTRUMENTS = ['XAU_USD', 'USD_JPY', 'EUR_USD', 'GBP_USD'];
 // 構造を取る足（短い→長い）。4h は利確目標（上位TFスイング）の供給元としてだけ使う:
 // それより上の足を見ていないため 4h 自体の setup は成立せず、通知対象は 15m/30m/1h。
 const RR_TFS: SlTimeframe[] = ['15m', '30m', '1h', '4h'];
-const RR_MIN = 2.5; // 1:2.5 以上
 const RR_SCAN_INTERVAL_MS = 15 * 60 * 1000; // 走査間隔（毎分 scheduled の中でゲート）
 const RR_COOLDOWN_MS = 2 * 60 * 60 * 1000; // 同「ペア＋TF＋方向」の再通知休止
 const RR_DISPLAY: Record<string, string> = { XAU_USD: 'XAU/USD', USD_JPY: 'USD/JPY', EUR_USD: 'EUR/USD', GBP_USD: 'GBP/USD' };
