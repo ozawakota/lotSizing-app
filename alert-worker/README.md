@@ -26,6 +26,16 @@
 
 ペイロードを暗号化(RFC8291)しないため実装が軽い。通知文は SW が `/recent` から取得する。
 
+## RR好機通知
+
+15分ごとに 4ペア（XAU/USD・USD/JPY・EUR/USD・GBP/USD）× 15m/30m/1h/4h の Yahoo 足から構造的 RR を評価し、
+**1:2.5 以上**の時間足を通知する（同じ ペア＋TF＋方向 は2時間再通知しない。ヘッダーの RR トグルが ON の購読のみ）。
+判定は [`../src/lib/stoploss.ts`](../src/lib/stoploss.ts) の `scanStructuralRrAll`。
+
+**個人投資家の建玉（Myfxbook）による逆張りフィルタ**: currency-strength Worker の `/flow` を Service Binding（`STRENGTH`）経由で呼び、
+setup と**同じ向きに 65% 以上**偏っていれば見送る。**逆向きに 60% 以上**なら本文に「逆張り支持」と付記する。
+建玉を取得できないときはフィルタなしで通知する。判定は [`../src/lib/flow.ts`](../src/lib/flow.ts) の `retailBias`。
+
 ## 無料枠
 
 - Cloudflare Cron はアカウント合計5本。`currency-strength`(3) + 本Worker(1) = 4本で収まる。

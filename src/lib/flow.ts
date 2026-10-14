@@ -222,3 +222,34 @@ export function toPairFlow(
 ): PairFlow {
   return { pair, longPct, shortPct, longVolume, shortVolume, dominant: dominantByVolume(longVolume, shortVolume) };
 }
+
+// ---------------------------------------------------------------------------
+// 個人投資家（Myfxbook）建玉の偏りによる逆張りフィルタ（RR好機通知で使用）
+// ---------------------------------------------------------------------------
+// 個人投資家は逆張り指標として扱う: 自分と同じ向きに建玉が偏っていれば不利、逆向きに偏っていれば有利。
+export const RETAIL_CROWDED_PCT = 65; // 同じ向きの建玉がこの割合以上 → 群集と同方向として見送る
+export const RETAIL_SUPPORT_PCT = 60; // 逆向きの建玉がこの割合以上 → 逆張りの裏付けあり
+
+export type RetailBiasVerdict = 'supports' | 'neutral' | 'against';
+export interface RetailBias {
+  sameSidePct: number; // 自分と同じ向き（ロング=買い / ショート=売り）の建玉割合 %
+  verdict: RetailBiasVerdict; // supports=逆張り支持 / neutral=偏りなし / against=群集と同方向
+}
+
+/**
+ * ロング/ショートの setup に対する個人投資家建玉の偏りを判定する。
+ * 例: ロングで個人の売りが 72% → 逆張り支持（supports）。ロングで個人の買いが 70% → against。
+ */
+export function retailBias(flow: Pick<PairFlow, 'longPct' | 'shortPct'>, direction: 'long' | 'short'): RetailBias {
+  const same = direction === 'long' ? flow.longPct : flow.shortPct;
+  const opposite = direction === 'long' ? flow.shortPct : flow.longPct;
+  const verdict: RetailBiasVerdict =
+    same >= RETAIL_CROWDED_PCT ? 'against' : opposite >= RETAIL_SUPPORT_PCT ? 'supports' : 'neutral';
+  return { sameSidePct: same, verdict };
+}
+
+/** 'USD_JPY' 形式の instrument を FlowPair（'USD/JPY'）に変換する。対象外は null。 */
+export function instrumentToFlowPair(instrument: string): FlowPair | null {
+  const pair = instrument.replace('_', '/');
+  return (FLOW_PAIRS as string[]).includes(pair) ? (pair as FlowPair) : null;
+}
