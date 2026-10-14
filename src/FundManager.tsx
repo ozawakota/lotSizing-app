@@ -7,12 +7,13 @@ import { Popup } from '@mobiscroll/react';
 import {
   aggregateByTag,
   computeSummary,
+  dualGrowthPoints,
   growthDetail,
   pnlOf,
-  simulateGrowth,
+  simpleDetail,
   type Cashflow,
+  type DualGrowthPoints,
   type FundSettings,
-  type GrowthResult,
   type Trade,
 } from '@/lib/fund';
 import TradeCalendar from './TradeCalendar';
@@ -90,27 +91,58 @@ const formatMonths = (m: number | null): string => {
   return mo === 0 ? `${y}年` : `${y}年${mo}ヶ月`;
 };
 
-// リスク%別の資金推移を重ね描きする折れ線グラフ。縦軸=起点〜目標・横軸=0〜maxMonths。
-function GrowthChart({ result, startingBalance, targetBalance }: { result: GrowthResult; startingBalance: number; targetBalance: number }) {
+// 複利 vs 単利の色（凡例・線・カードで共通）。
+const COMPOUND_COLOR = '#2563eb'; // 複利＝加速（青）
+const SIMPLE_COLOR = '#f59e0b'; // 単利＝直線（アンバー）
+
+// 1兆未満をコンパクト表記（軸ラベル用）。例: 1,000,000→100万 / 50,000→5万。
+const yenCompact = (n: number): string => {
+  if (n >= 1_0000_0000) return `${(n / 1_0000_0000).toFixed(n % 1_0000_0000 ? 1 : 0)}億`;
+  if (n >= 1_0000) return `${(n / 1_0000).toFixed(n % 1_0000 ? 1 : 0)}万`;
+  return n.toLocaleString();
+};
+
+// 複利・単利の資金推移を同一軸に重ね描き。縦軸=起点〜目標・横軸=0〜maxMonths。
+// 左に金額ラベル（起点/目標）、下に月マーカー（0/中間/最大）を添える。
+function DualGrowthChart({ points, startingBalance, targetBalance, currency }: { points: DualGrowthPoints; startingBalance: number; targetBalance: number; currency: string }) {
   const w = 300;
   const h = 150;
   const span = targetBalance - startingBalance || 1;
-  const xOf = (month: number) => (result.maxMonths > 0 ? (month / result.maxMonths) * w : 0);
+  const mm = points.maxMonths;
+  const xOf = (month: number) => (mm > 0 ? (month / mm) * w : 0);
   const yOf = (balance: number) => h - ((balance - startingBalance) / span) * h;
+  const path = (pts: { month: number; balance: number }[]) =>
+    pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${xOf(p.month).toFixed(1)},${yOf(p.balance).toFixed(1)}`).join(' ');
+  const midMonth = Math.round(mm / 2);
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-40">
-      {/* 目標ライン（上端） */}
-      <line x1="0" y1={yOf(targetBalance)} x2={w} y2={yOf(targetBalance)} stroke="#9ca3af" strokeWidth="1" strokeDasharray="4 3" />
-      {result.lines.map((l) => (
-        <path
-          key={l.riskPercent}
-          d={l.points.map((p, i) => `${i === 0 ? 'M' : 'L'}${xOf(p.month).toFixed(1)},${yOf(p.balance).toFixed(1)}`).join(' ')}
-          fill="none"
-          stroke={RISK_COLORS[l.riskPercent] ?? '#6b7280'}
-          strokeWidth="2"
-        />
-      ))}
-    </svg>
+    <div className="flex gap-1">
+      {/* 金額ラベル */}
+      <div className="flex flex-col justify-between text-right text-[10px] text-gray-500 py-px w-10 shrink-0">
+        <span>{yenCompact(targetBalance)}</span>
+        <span>{yenCompact(startingBalance)}</span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-40" preserveAspectRatio="none">
+          {/* 目標ライン（上端） */}
+          <line x1="0" y1={yOf(targetBalance)} x2={w} y2={yOf(targetBalance)} stroke="#9ca3af" strokeWidth="1" strokeDasharray="4 3" />
+          {/* 単利（先に描いて複利を前面に） */}
+          <path d={path(points.simple)} fill="none" stroke={SIMPLE_COLOR} strokeWidth="2.5" />
+          <path d={path(points.compound)} fill="none" stroke={COMPOUND_COLOR} strokeWidth="2.5" />
+        </svg>
+        {/* 月マーカー */}
+        <div className="flex justify-between text-[10px] text-gray-500 mt-0.5">
+          <span>0</span>
+          <span>{midMonth}ヶ月</span>
+          <span>{mm}ヶ月</span>
+        </div>
+        {/* 凡例 */}
+        <div className="flex gap-3 justify-center text-[11px] mt-1">
+          <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.75 rounded" style={{ backgroundColor: COMPOUND_COLOR }} />複利</span>
+          <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.75 rounded" style={{ backgroundColor: SIMPLE_COLOR }} />単利</span>
+          <span className="text-gray-400">単位: {currency}</span>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -218,8 +250,9 @@ function SimulationTab({
     }),
     [startingBalance, targetBalance, winRatePct, tradesPerMonth, rewardRatio],
   );
-  const result = useMemo(() => simulateGrowth(simParams), [simParams]);
+  const points = useMemo(() => dualGrowthPoints(simParams, selectedRisk), [simParams, selectedRisk]);
   const detail = useMemo(() => growthDetail(simParams, selectedRisk), [simParams, selectedRisk]);
+  const simple = useMemo(() => simpleDetail(simParams, selectedRisk), [simParams, selectedRisk]);
 
   const inputCls = 'rounded border border-gray-300 px-2 py-1 text-sm bg-white w-full';
   const valid = startingBalance > 0 && targetBalance > startingBalance && tradesPerMonth > 0;
@@ -250,6 +283,26 @@ function SimulationTab({
         <p className="text-[11px] text-gray-500">
           起点資金（記録タブの初期残高）: <span className="font-bold text-gray-700">{yen(startingBalance)} {currency}</span>
         </p>
+        {/* リスク%（1トレードで賭ける割合）を選択 */}
+        <div>
+          <p className="text-xs text-gray-600 mb-1">1トレードのリスク（%）</p>
+          <div className="flex gap-1.5">
+            {RISK_PERCENTS.map((rp) => {
+              const active = rp === selectedRisk;
+              return (
+                <button
+                  key={rp}
+                  type="button"
+                  onClick={() => onSelectRisk(rp)}
+                  className={`flex-1 rounded-md py-1.5 text-sm font-bold border transition-colors ${active ? 'text-white' : 'bg-white text-gray-600 border-gray-300'}`}
+                  style={active ? { backgroundColor: RISK_COLORS[rp], borderColor: RISK_COLORS[rp] } : undefined}
+                >
+                  {rp}%
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       {!valid ? (
@@ -260,100 +313,103 @@ function SimulationTab({
         </div>
       ) : (
         <>
-          {/* グラフ */}
-          <div className="bg-blue-50 rounded-md p-3 border border-blue-200">
-            <div className="flex justify-between items-baseline mb-1">
-              <p className="text-sm text-gray-600">資金推移（複利・リスク%別）</p>
+          {/* 資金推移グラフ（複利 vs 単利） */}
+          <div className="bg-white rounded-md p-3 border border-gray-200">
+            <div className="flex justify-between items-baseline mb-2">
+              <p className="text-sm font-bold text-gray-700">資金推移（リスク{selectedRisk}%）</p>
               <p className="text-xs text-gray-500">目標 {yen(targetBalance)} {currency}</p>
             </div>
-            <GrowthChart result={result} startingBalance={startingBalance} targetBalance={targetBalance} />
+            <DualGrowthChart points={points} startingBalance={startingBalance} targetBalance={targetBalance} currency={currency} />
           </div>
 
-          {/* 到達一覧（タップで詳細表示するリスク%を選択） */}
-          <div className="bg-white rounded-md border border-gray-200 divide-y">
-            {result.lines.map((l) => {
-              const active = l.riskPercent === selectedRisk;
-              return (
-                <button
-                  type="button"
-                  key={l.riskPercent}
-                  onClick={() => onSelectRisk(l.riskPercent)}
-                  className={`w-full flex items-center justify-between px-3 py-2 text-sm text-left ${active ? 'bg-orange-50' : 'bg-white'}`}
-                >
-                  <span className="flex items-center gap-2">
-                    <span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: RISK_COLORS[l.riskPercent] }} />
-                    <span className={active ? 'font-bold text-orange-700' : ''}>リスク {l.riskPercent}%</span>
-                  </span>
-                  <span className={l.monthsToTarget === null ? 'text-red-600 text-xs' : 'font-bold text-gray-800'}>
-                    {l.monthsToTarget === null ? '未到達（期待値マイナス）' : `${formatMonths(l.monthsToTarget)}で到達`}
-                  </span>
-                </button>
-              );
-            })}
+          {/* 到達比較カード（パターン1 複利 / パターン2 単利） */}
+          <div className="grid grid-cols-2 gap-2">
+            {/* パターン1 複利 */}
+            <div className="rounded-md border-2 p-3 space-y-1.5" style={{ borderColor: COMPOUND_COLOR }}>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-bold" style={{ color: COMPOUND_COLOR }}>パターン1 複利</p>
+                {detail.monthsToTarget !== null && simple.monthsToTarget !== null && detail.monthsToTarget <= simple.monthsToTarget && (
+                  <span className="text-[10px] font-bold text-white px-1.5 py-0.5 rounded" style={{ backgroundColor: COMPOUND_COLOR }}>最速</span>
+                )}
+              </div>
+              <p className="text-lg font-bold text-gray-800 leading-tight">
+                {detail.monthsToTarget === null ? '未到達' : formatMonths(detail.monthsToTarget)}
+              </p>
+              <p className="text-[11px] text-gray-500">
+                {detail.tradesToTarget === null ? '期待値マイナス' : `約${detail.tradesToTarget}回のトレード`}
+              </p>
+              <p className="text-[11px] text-gray-500">
+                月利 <span className={`font-bold ${detail.monthlyRatePct >= 0 ? 'text-green-600' : 'text-red-600'}`}>{detail.monthlyRatePct >= 0 ? '+' : ''}{detail.monthlyRatePct.toFixed(1)}%</span>
+              </p>
+            </div>
+            {/* パターン2 単利 */}
+            <div className="rounded-md border-2 p-3 space-y-1.5" style={{ borderColor: SIMPLE_COLOR }}>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-bold" style={{ color: SIMPLE_COLOR }}>パターン2 単利</p>
+                {simple.monthsToTarget !== null && (detail.monthsToTarget === null || simple.monthsToTarget < detail.monthsToTarget) && (
+                  <span className="text-[10px] font-bold text-white px-1.5 py-0.5 rounded" style={{ backgroundColor: SIMPLE_COLOR }}>最速</span>
+                )}
+              </div>
+              <p className="text-lg font-bold text-gray-800 leading-tight">
+                {simple.monthsToTarget === null ? '未到達' : formatMonths(simple.monthsToTarget)}
+              </p>
+              <p className="text-[11px] text-gray-500">
+                {simple.tradesToTarget === null ? '期待値マイナス' : `約${simple.tradesToTarget}回のトレード`}
+              </p>
+              <p className="text-[11px] text-gray-500">
+                月間 <span className={`font-bold ${simple.monthlyGain >= 0 ? 'text-green-600' : 'text-red-600'}`}>{simple.monthlyGain >= 0 ? '+' : ''}{yen(Math.round(simple.monthlyGain))}</span>
+              </p>
+            </div>
           </div>
 
-          {/* 選択リスク%の詳細 */}
-          <div className="rounded-md border p-3 space-y-3" style={{ borderColor: RISK_COLORS[selectedRisk] ?? '#d1d5db' }}>
-            <p className="text-sm font-bold text-gray-700">
-              リスク {selectedRisk}% の詳細
-              <span className="font-normal text-[11px] text-gray-500"> ・初回リスク額 {yen(Math.round(detail.initialRiskAmount))} {currency}</span>
+          {/* 1トレードの内訳（複利・単利で共通の期待値） */}
+          <div className="rounded-md border border-gray-200 p-3">
+            <p className="text-xs font-bold text-gray-600 mb-1">
+              1トレードの内訳（平均）
+              <span className="font-normal text-gray-400"> ・初回リスク額 {yen(Math.round(detail.initialRiskAmount))} {currency}</span>
             </p>
-
-            {/* 1トレードの内訳（算術平均） */}
-            <div>
-              <p className="text-xs font-bold text-gray-600 mb-1">1トレードの内訳（平均）</p>
-              <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                <div className="bg-green-50 rounded py-1">
-                  <p className="text-gray-500">勝ち（{winRatePct}%）</p>
-                  <p className="font-bold text-green-600">+{detail.winPct.toFixed(1)}%</p>
-                  <p className="text-[11px] text-gray-500">+{yen(Math.round(detail.initialWinAmount))}</p>
-                </div>
-                <div className="bg-red-50 rounded py-1">
-                  <p className="text-gray-500">負け（{100 - winRatePct}%）</p>
-                  <p className="font-bold text-red-600">−{detail.lossPct.toFixed(1)}%</p>
-                  <p className="text-[11px] text-gray-500">−{yen(Math.round(detail.initialRiskAmount))}</p>
-                </div>
-                <div className="bg-blue-50 rounded py-1">
-                  <p className="text-gray-500">期待値</p>
-                  <p className={`font-bold ${detail.expectancyPct >= 0 ? 'text-blue-700' : 'text-red-600'}`}>
-                    {detail.expectancyPct >= 0 ? '+' : ''}{detail.expectancyPct.toFixed(2)}%
-                  </p>
-                  <p className="text-[11px] text-gray-500">
-                    {detail.initialExpectancyAmount >= 0 ? '+' : ''}{yen(Math.round(detail.initialExpectancyAmount))}
-                  </p>
-                </div>
+            <div className="grid grid-cols-3 gap-2 text-center text-xs">
+              <div className="bg-green-50 rounded py-1">
+                <p className="text-gray-500">勝ち（{winRatePct}%）</p>
+                <p className="font-bold text-green-600">+{detail.winPct.toFixed(1)}%</p>
+                <p className="text-[11px] text-gray-500">+{yen(Math.round(detail.initialWinAmount))}</p>
+              </div>
+              <div className="bg-red-50 rounded py-1">
+                <p className="text-gray-500">負け（{100 - winRatePct}%）</p>
+                <p className="font-bold text-red-600">−{detail.lossPct.toFixed(1)}%</p>
+                <p className="text-[11px] text-gray-500">−{yen(Math.round(detail.initialRiskAmount))}</p>
+              </div>
+              <div className="bg-blue-50 rounded py-1">
+                <p className="text-gray-500">期待値</p>
+                <p className={`font-bold ${detail.expectancyPct >= 0 ? 'text-blue-700' : 'text-red-600'}`}>
+                  {detail.expectancyPct >= 0 ? '+' : ''}{detail.expectancyPct.toFixed(2)}%
+                </p>
+                <p className="text-[11px] text-gray-500">
+                  {detail.initialExpectancyAmount >= 0 ? '+' : ''}{yen(Math.round(detail.initialExpectancyAmount))}
+                </p>
               </div>
             </div>
+          </div>
 
-            {/* 複利の推移（幾何平均） */}
-            <div>
-              <p className="text-xs font-bold text-gray-600 mb-1">複利の推移</p>
-              <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                <div>
-                  <p className="text-gray-500">月利</p>
-                  <p className={`font-bold ${detail.monthlyRatePct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {detail.monthlyRatePct >= 0 ? '+' : ''}{detail.monthlyRatePct.toFixed(1)}%
-                  </p>
-                </div>
-                <div>
-                  <p className="text-gray-500">初月の増加額</p>
-                  <p className={`font-bold ${detail.firstMonthGain >= 0 ? 'text-gray-800' : 'text-red-600'}`}>
-                    {detail.firstMonthGain >= 0 ? '+' : ''}{yen(Math.round(detail.firstMonthGain))}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-gray-500">目標到達</p>
-                  <p className="font-bold text-gray-800">
-                    {detail.monthsToTarget === null ? '未到達' : `${formatMonths(detail.monthsToTarget)}`}
-                  </p>
-                  {detail.tradesToTarget !== null && <p className="text-[11px] text-gray-500">約{detail.tradesToTarget}回</p>}
-                </div>
-              </div>
-            </div>
+          {/* アクションプラン（入力から自動生成） */}
+          <div className="bg-indigo-50 border border-indigo-200 rounded-md p-3">
+            <p className="text-xs font-bold text-indigo-700 mb-1">▸ アクションプラン</p>
+            {detail.expectancyPct < 0 ? (
+              <p className="text-xs text-gray-700 leading-relaxed">
+                現在の条件（勝率{winRatePct}%・RRR1:{rewardRatio}）では1トレードの期待値がマイナスのため、資金は目標に向かいません。勝率かリスクリワードの改善が必要です。
+              </p>
+            ) : (
+              <p className="text-xs text-gray-700 leading-relaxed">
+                月{tradesPerMonth}回・リスク{selectedRisk}%・RRR1:{rewardRatio}・勝率{winRatePct}%を継続すると、
+                <span className="font-bold" style={{ color: COMPOUND_COLOR }}>複利で約{formatMonths(detail.monthsToTarget)}（{detail.tradesToTarget}回）</span>、
+                <span className="font-bold" style={{ color: SIMPLE_COLOR }}>単利で約{formatMonths(simple.monthsToTarget)}（{simple.tradesToTarget}回）</span>
+                で目標{yen(targetBalance)}{currency}に到達する見込みです。1トレードの期待値は+{detail.expectancyPct.toFixed(2)}%（+{yen(Math.round(detail.initialExpectancyAmount))}{currency}）。まずは手法の優位性（勝率・RRR）を実績で検証しながら、毎月のトレード回数を安定させましょう。
+              </p>
+            )}
           </div>
 
           <p className="text-[11px] text-gray-400">
-            ※ 毎トレード「その時点の残高×リスク%」を賭ける複利・期待値モデル。内訳は1トレードの平均（算術）、推移グラフ・到達月は幾何平均（典型値）ベース。実際の成績を保証するものではありません。
+            ※ 複利＝毎トレード「その時点の残高×リスク%」、単利＝毎トレード「起点残高×リスク%」の固定額を賭けるモデル。複利の到達月は幾何平均（典型値）ベース。実際の成績を保証するものではありません。
           </p>
         </>
       )}

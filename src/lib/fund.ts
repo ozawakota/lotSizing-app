@@ -283,3 +283,60 @@ export function growthDetail(params: GrowthParams, riskPercent: number): GrowthD
     tradesToTarget: monthsToTarget === null ? null : Math.ceil(monthsToTarget * m),
   };
 }
+
+// 単利（固定ロット）モデル。毎トレード「起点残高×リスク%」の一定額を賭ける。
+// 1トレードの期待損益は常に B×expectancyFrac で一定 → 残高は直線的に増える。
+export interface SimpleDetail {
+  perTradeGain: number; // 1トレードの期待損益（一定）B×expectancyFrac
+  monthlyGain: number; // 月間の期待増加額 m×perTradeGain
+  monthsToTarget: number | null; // 目標到達までの月数（未到達・期待値マイナスは null）
+  tradesToTarget: number | null; // 目標到達までの総トレード回数（切り上げ・未到達は null）
+}
+
+export function simpleDetail(params: GrowthParams, riskPercent: number): SimpleDetail {
+  const { startingBalance: B, targetBalance, winRate: p, tradesPerMonth: m, rewardRatio: RR } = params;
+  const r = riskPercent / 100;
+  const expectancyFrac = r * (p * RR - (1 - p));
+  const perTradeGain = B * expectancyFrac;
+  const valid = B > 0 && targetBalance > B && m > 0 && perTradeGain > 0;
+  const tradesExact = valid ? (targetBalance - B) / perTradeGain : null;
+  return {
+    perTradeGain,
+    monthlyGain: m * perTradeGain,
+    monthsToTarget: tradesExact === null ? null : tradesExact / m,
+    tradesToTarget: tradesExact === null ? null : Math.ceil(tradesExact),
+  };
+}
+
+// 複利 vs 単利の資金推移を同一の横軸で描くための月次points。
+// 横軸は両者の到達月のうち長い方（＝通常は単利側）まで取り、両曲線が目標に届くまでを見せる。
+export interface DualGrowthPoints {
+  compound: { month: number; balance: number }[];
+  simple: { month: number; balance: number }[];
+  maxMonths: number;
+}
+
+export function dualGrowthPoints(params: GrowthParams, riskPercent: number): DualGrowthPoints {
+  const { startingBalance: B, targetBalance, winRate: p, tradesPerMonth: m, rewardRatio: RR } = params;
+  const r = riskPercent / 100;
+  const g = growthPerTrade(p, RR, r);
+  const expectancyFrac = r * (p * RR - (1 - p));
+  const valid = B > 0 && targetBalance > B && m > 0;
+
+  const cMonths = monthsToReach(B, targetBalance, m, g);
+  const sMonths = valid && expectancyFrac > 0 ? (targetBalance - B) / (B * expectancyFrac) / m : null;
+  const reachable = [cMonths, sMonths].filter((x): x is number => x !== null);
+  const maxMonths = reachable.length
+    ? Math.min(GROWTH_MONTH_CAP, Math.max(1, Math.ceil(Math.max(...reachable))))
+    : GROWTH_DEFAULT_MONTHS;
+
+  const compound: { month: number; balance: number }[] = [];
+  const simple: { month: number; balance: number }[] = [];
+  for (let month = 0; month <= maxMonths; month++) {
+    const c = valid ? B * Math.pow(g, m * month) : B;
+    const s = valid ? B * (1 + m * month * expectancyFrac) : B;
+    compound.push({ month, balance: Math.min(c, targetBalance) });
+    simple.push({ month, balance: Math.min(s, targetBalance) });
+  }
+  return { compound, simple, maxMonths };
+}

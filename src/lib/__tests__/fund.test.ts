@@ -3,10 +3,12 @@ import {
   aggregateByTag,
   computeSummary,
   dailyPnl,
+  dualGrowthPoints,
   growthDetail,
   growthPerTrade,
   monthGrid,
   pnlOf,
+  simpleDetail,
   simulateGrowth,
   type Cashflow,
   type FundSettings,
@@ -250,5 +252,69 @@ describe('growthDetail', () => {
     const d = growthDetail({ ...base, winRate: 0.2 }, 3);
     expect(d.monthsToTarget).toBeNull();
     expect(d.tradesToTarget).toBeNull();
+  });
+});
+
+describe('simpleDetail（単利・固定ロット）', () => {
+  const base: GrowthParams = {
+    startingBalance: 50_000,
+    targetBalance: 1_000_000,
+    winRate: 0.6,
+    tradesPerMonth: 10,
+    rewardRatio: 3,
+    riskPercents: [2, 3, 4, 5],
+  };
+
+  it('1トレードの期待損益は起点ベースで一定（+1,400円）・月間はその10倍', () => {
+    const s = simpleDetail(base, 2);
+    expect(s.perTradeGain).toBeCloseTo(1_400, 6); // 50,000 ×0.028
+    expect(s.monthlyGain).toBeCloseTo(14_000, 6);
+  });
+
+  it('到達回数は (目標−起点)/1トレード額 の切り上げ・月数はそれ÷毎月回数', () => {
+    const s = simpleDetail(base, 2);
+    const tradesExact = (1_000_000 - 50_000) / 1_400;
+    expect(s.tradesToTarget).toBe(Math.ceil(tradesExact));
+    expect(s.monthsToTarget).toBeCloseTo(tradesExact / 10, 8);
+  });
+
+  it('期待値マイナスなら到達月・総回数は null', () => {
+    const s = simpleDetail({ ...base, winRate: 0.2 }, 3);
+    expect(s.monthsToTarget).toBeNull();
+    expect(s.tradesToTarget).toBeNull();
+  });
+});
+
+describe('dualGrowthPoints（複利 vs 単利）', () => {
+  const base: GrowthParams = {
+    startingBalance: 100_000,
+    targetBalance: 1_000_000,
+    winRate: 0.6,
+    tradesPerMonth: 10,
+    rewardRatio: 3,
+    riskPercents: [2, 3, 4, 5],
+  };
+
+  it('両系列とも月0は起点・目標でクランプされる', () => {
+    const { compound, simple } = dualGrowthPoints(base, 2);
+    expect(compound[0].balance).toBe(100_000);
+    expect(simple[0].balance).toBe(100_000);
+    expect(Math.max(...compound.map((p) => p.balance))).toBeLessThanOrEqual(1_000_000);
+    expect(Math.max(...simple.map((p) => p.balance))).toBeLessThanOrEqual(1_000_000);
+  });
+
+  it('同じ期待値でも複利の方が単利より早く（同月で）残高が大きい', () => {
+    const { compound, simple } = dualGrowthPoints(base, 2);
+    const mid = Math.floor(compound.length / 2);
+    expect(compound[mid].balance).toBeGreaterThan(simple[mid].balance);
+  });
+
+  it('横軸は複利・単利の到達月のうち長い方（＝単利側）を切り上げたもの', () => {
+    const { maxMonths } = dualGrowthPoints(base, 2);
+    const g = growthPerTrade(0.6, 3, 0.02);
+    const cMonths = Math.log(10) / (10 * Math.log(g));
+    const sMonths = (1_000_000 - 100_000) / (100_000 * 0.028) / 10;
+    expect(sMonths).toBeGreaterThan(cMonths);
+    expect(maxMonths).toBe(Math.ceil(sMonths));
   });
 });
