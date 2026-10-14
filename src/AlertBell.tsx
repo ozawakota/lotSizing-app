@@ -1,6 +1,6 @@
 // ヘッダーの通知ベル。タップでポップアップを開き、相場変動通知の ON/OFF を切り替える。
 // （旧 MarketAlertCard のロジックをヘッダー用に移設。env 未設定/非対応なら非表示。）
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Bell } from 'lucide-react';
 import { Popup } from '@mobiscroll/react';
 import {
@@ -41,6 +41,21 @@ export default function AlertBell() {
   // isPushSupported() が false になるが、インストール案内を見せるために
   // ベルは表示する。実際の購読操作は supported のときのみ有効。
   const visible = supported || (isPushConfigured() && needsInstall);
+
+  // アラート一覧のスクロール用コールバック ref。Mobiscroll のポップアップは touchmove を
+  // 横取りして（ボトムシートのドラッグ判定などで）入れ子スクロールを妨げるため、リスト上の
+  // touch イベントを stopPropagation して Mobiscroll へ伝播させない。これで PC のホイールと
+  // Android/iOS のタッチの両方でスクロールできる（preventDefault はせずネイティブ scroll は許可）。
+  const alertListRef = useCallback((el: HTMLUListElement | null) => {
+    if (!el) return;
+    const stop = (e: Event) => e.stopPropagation();
+    el.addEventListener('touchstart', stop, { passive: true });
+    el.addEventListener('touchmove', stop, { passive: true });
+    return () => {
+      el.removeEventListener('touchstart', stop);
+      el.removeEventListener('touchmove', stop);
+    };
+  }, []);
 
   useEffect(() => {
     if (supported) isSubscribed().then(setOn);
@@ -159,7 +174,11 @@ export default function AlertBell() {
             {shownHistory.length === 0 ? (
               <p className="text-[11px] text-gray-400">まだありません</p>
             ) : (
-              <ul className="space-y-1">
+              <ul
+                ref={alertListRef}
+                className="max-h-48 space-y-1 overflow-y-auto overscroll-contain"
+                style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
+              >
                 {shownHistory.map((a) => (
                   <li key={a.id} className="rounded bg-gray-50 px-2 py-1">
                     <div className="flex items-baseline justify-between gap-2">
