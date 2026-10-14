@@ -346,6 +346,12 @@ describe('scoreRoleReversal', () => {
     }
   });
 
+  it('評価したラインの価格を返す（ブレイク済み=抜けたピボット / 未ブレイク=スイング高値）', () => {
+    // 終値で抜けたピボット高値は 100（idx6）と 103（idx12、終値103.2で上抜け）。現在値に近い高い方を採る。
+    expect(scoreRoleReversal(breakHold, UP, { instrument: 'USD_JPY' })?.level).toBe(103);
+    expect(scoreRoleReversal(noBreak, UP, { instrument: 'USD_JPY' })?.level).toBe(UP.swingHigh);
+  });
+
   it('出来高が無くても（FXスポット想定）スコアは有限', () => {
     const r = scoreRoleReversal(breakHold, UP, { instrument: 'USD_JPY' });
     expect(Number.isFinite(r!.score)).toBe(true);
