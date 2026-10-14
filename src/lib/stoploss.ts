@@ -399,7 +399,7 @@ function avgRange(candles: Candle[]): number {
 }
 
 // 前後 k 本の中で極大(high)/極小(low)になる足のインデックス（ピボット）。
-function pivotIndices(candles: Candle[], kind: 'high' | 'low', k = 2): number[] {
+export function pivotIndices(candles: Candle[], kind: 'high' | 'low', k = 2): number[] {
   const out: number[] = [];
   for (let i = k; i < candles.length - k; i++) {
     const v = kind === 'high' ? candles[i].high : candles[i].low;

@@ -18,6 +18,7 @@ import type {
 import { RR_MIN, pipSize } from '@/lib/stoploss';
 import { MARKET_SESSIONS, isSessionOpen } from '@/lib/session';
 import { fetchGoldSpot } from '@/lib/goldSpot';
+import { CONFIRMATION_LABEL, type PatternRead } from '@/lib/candleRead';
 import TfCountdown from '@/components/TfCountdown';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
@@ -48,6 +49,7 @@ interface MtfTf {
   stoch: { k: number; d: number } | null; // ストキャスティクス(%K/%D)。算出不可=null
   roleReversal: RoleReversal | null; // ロールリバーサル・ブレイク信用度（0–100・状態・側）。評価不能=null
   candlePattern: { key: string; label: string; barsAgo: number } | null; // 直近のローソク足パターン(ピンバー/包み足)
+  candlePatterns?: PatternRead[]; // 期間内のパターン（新しい順・最大3件、質・場所・確定/否定つき）。旧キャッシュには無い
 }
 interface MtfResult {
   instrument: string;
@@ -214,6 +216,41 @@ function RrRow({ rr, digits }: { rr: RrSetup | null; digits: number }) {
       </span>
     </div>
     <StopBasis rr={rr} />
+    </div>
+  );
+}
+
+// ローソク足パターンの一覧（期間内・新しい順）。1行 = パターン名・何本前・確定/否定・形の質・出た場所。
+const CONF_STYLE: Record<PatternRead['confirmation'], string> = {
+  confirmed: 'bg-blue-50 text-blue-700',
+  pending: 'bg-gray-100 text-gray-500',
+  invalidated: 'bg-gray-100 text-gray-400 line-through',
+};
+const PATTERN_PERIOD_LABEL: Record<SlTimeframe, string> = { '15m': '6時間', '30m': '12時間', '1h': '1日', '4h': '3日' };
+function PatternList({ reads, tf }: { reads: PatternRead[]; tf: SlTimeframe }) {
+  return (
+    <div className="mt-2 text-[11px]">
+      <div className="flex items-center justify-between">
+        <span className="text-gray-500">ローソク足</span>
+        <span className="text-[10px] text-gray-400">直近{PATTERN_PERIOD_LABEL[tf]}</span>
+      </div>
+      {reads.length === 0 ? (
+        <p className="mt-0.5 text-[10px] text-gray-400">パターンなし</p>
+      ) : (
+        <ul className="mt-0.5 space-y-0.5">
+          {reads.map((r, idx) => (
+            <li key={`${r.key}-${r.barsAgo}-${idx}`} className="flex flex-wrap items-center gap-x-1.5">
+              <span className={`font-semibold ${r.key.startsWith('bull') ? 'text-green-700' : 'text-red-700'}`}>{r.label}</span>
+              <span className="text-[10px] text-gray-400">{r.barsAgo === 0 ? '確定足' : `${r.barsAgo}本前`}</span>
+              <span className={`rounded px-1 text-[10px] ${CONF_STYLE[r.confirmation]}`}>{CONFIRMATION_LABEL[r.confirmation]}</span>
+              <span className={`text-[10px] ${r.quality >= 70 ? 'font-semibold text-gray-800' : 'text-gray-500'}`}>質{r.quality}</span>
+              <span className={`text-[10px] ${r.zone === 'key' ? 'text-orange-600' : 'text-gray-400'}`}>
+                {r.zone === 'key' ? `@${r.zoneReasons.join('・')}` : 'ライン外'}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -405,19 +442,23 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
         <RoleReversalRow rr={tf.roleReversal} instrument={instrument} currentRate={currentRate} digits={digits} />
       )}
 
-      {/* 直近のローソク足パターン（ピンバー/包み足）。Jev のシグナル判定にも反映済み */}
-      {tf.candlePattern && (
-        <div className="mt-2 flex items-center justify-between text-[11px]">
-          <span className="text-gray-500">ローソク足</span>
-          <span className="flex items-center gap-1.5 font-semibold">
-            <span className={tf.candlePattern.key.startsWith('bull') ? 'text-green-700' : 'text-red-700'}>
-              {tf.candlePattern.label}
+      {/* ローソク足パターン（新しい順・最大3件）。旧キャッシュ（candlePatterns 無し）は従来の1件表示 */}
+      {tf.candlePatterns ? (
+        <PatternList reads={tf.candlePatterns} tf={tf.tf} />
+      ) : (
+        tf.candlePattern && (
+          <div className="mt-2 flex items-center justify-between text-[11px]">
+            <span className="text-gray-500">ローソク足</span>
+            <span className="flex items-center gap-1.5 font-semibold">
+              <span className={tf.candlePattern.key.startsWith('bull') ? 'text-green-700' : 'text-red-700'}>
+                {tf.candlePattern.label}
+              </span>
+              <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500">
+                {tf.candlePattern.barsAgo === 0 ? '確定足' : `${tf.candlePattern.barsAgo}本前`}
+              </span>
             </span>
-            <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500">
-              {tf.candlePattern.barsAgo === 0 ? '確定足' : `${tf.candlePattern.barsAgo}本前`}
-            </span>
-          </span>
-        </div>
+          </div>
+        )
       )}
 
       {/* 補助指標（ストキャス・出来高節目）を1行に集約。無ければ非表示 */}

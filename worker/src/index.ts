@@ -30,6 +30,8 @@ import {
 import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type NewsItem } from '../../src/lib/news';
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
 import { latestPatternInWindow, PATTERN_DIRECTION, PATTERN_LABEL, type OhlcCandle } from '../../src/lib/edge';
+// TF分析カードのローソク足パターン読み（質・場所・確定/否定）。フロントと共有。
+import { PATTERN_WINDOW_BARS, readCandlePatterns, type PatternRead } from '../../src/lib/candleRead';
 // 通貨優位性ランキングのスコア計算（純粋関数）をフロントと共有。
 import { buildRanking, RANKING_MIN_RR, RANKING_PAIRS, RANKING_TIMEFRAMES, type RankingSnapshot, type TfSignal } from '../../src/lib/ranking';
 import {
@@ -926,7 +928,8 @@ interface MtfTf {
   volumeLevel: number | null; // 過去の高出来高の節目価格（30m/1h=2日前・4h=2週前付近。出来高無し=null）
   stoch: StochReading | null; // ストキャスティクス(%K/%D)。足から自前計算（算出不可は null）
   roleReversal: RoleReversal | null; // ロールリバーサル・ブレイク信用度（0–100・状態・側）。評価不能は null
-  candlePattern: { key: string; label: string; barsAgo: number } | null; // 直近ウィンドウのローソク足パターン(ピンバー/包み足)
+  candlePattern: { key: string; label: string; barsAgo: number } | null; // 直近ウィンドウのローソク足パターン(ピンバー/包み足)。Jev の判定材料
+  candlePatterns: PatternRead[]; // カード表示用: 足ごとの期間内のパターン（新しい順・最大3件、質・場所・確定/否定つき）
 }
 interface MtfPayload {
   instrument: string;
@@ -961,6 +964,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
   const sessionStatus = sessionStatusText(new Date()); // 東京/ロンドン/NY の開閉を各TF判定に反映
   const now = Date.now();
   const tfCandles: Candle[][] = []; // ロールリバーサル評価用に各TFの足を保持（index は timeframes と対応）
+  const tfOhlc: OhlcCandle[][] = []; // パターン読み用の確定足（OHLC。index は timeframes と対応）
   for (const tf of MTF_TIMEFRAMES) {
     const { candles, currentRate: cr } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf]);
     currentRate = cr;
@@ -991,6 +995,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       .map((c) => ({ open: c.open as number, high: c.high, low: c.low, close: c.close, t: c.t }));
     const rp = latestPatternInWindow(ohlc.slice(0, -1), PA_WINDOW_BARS[tf]);
     const candlePattern = rp ? { key: rp.key, label: PATTERN_LABEL[rp.key], barsAgo: rp.barsAgo } : null;
+    tfOhlc.push(ohlc.slice(0, -1)); // カード用のパターン読み（2パス目）で使う確定足
 
     const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses, {
       sessionStatus,
@@ -1013,6 +1018,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       stoch,
       roleReversal: null, // 下の2パス目で算出（上位TFのコンフルエンスが必要なため）
       candlePattern,
+      candlePatterns: [], // 下の2パス目で算出（上位TF・ロールリバーサルのラインが必要なため）
     });
   }
 
@@ -1028,6 +1034,18 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       stoch: t.stoch,
       volumeLevel: t.volumeLevel,
       higherLevels,
+    });
+    // ローソク足パターンの読み（質・出た場所・確定/否定）。場所の判定に上位足の高安・ロールリバーサル・出来高節目を使う。
+    const higherTfs = timeframes.slice(i + 1).map((h) => ({ tf: h.tf, structure: h }));
+    t.candlePatterns = readCandlePatterns(tfOhlc[i] ?? [], {
+      instrument,
+      windowBars: PATTERN_WINDOW_BARS[t.tf],
+      levels: [
+        ...higherStopLevels(higherTfs, 'long'),
+        ...higherStopLevels(higherTfs, 'short'),
+        ...(t.roleReversal ? [{ price: t.roleReversal.level, label: 'ロールリバーサル' }] : []),
+        ...(t.volumeLevel != null ? [{ price: t.volumeLevel, label: '出来高節目' }] : []),
+      ],
     });
     // RR 評価: 方向は RR好機通知と同じくトレンドで決める（レンジは対象外）。基準も通知と共通
     // （RR_MIN・スプレッド込み）。Jev のブレイク確率が取れたときだけ「その方向の確率 ≥ RR_MIN_DIRECTION_PROB」を
