@@ -42,7 +42,12 @@ export const EDGE_PAIRS: string[] = [
   'XAU_USD',
 ];
 
-export const PINBAR_THRESHOLD = 0.66; // ヒゲが全値幅に占める割合のしきい値
+export const PINBAR_THRESHOLD = 0.66; // 長ヒゲが全値幅に占める割合のしきい値
+export const PINBAR_OPP_WICK_MAX = 0.15; // 反対側ヒゲ ÷ 全値幅 の上限（“ノーズ”が小さい本物のピンバーのみ）
+export const PINBAR_BODY_MAX = 0.3; // 実体 ÷ 全値幅 の上限（コマ足/十字線を排除）
+export const ATR_PERIOD = 14; // ATR(平均レンジ=高安幅)の算出本数
+export const ATR_RANGE_FACTOR = 0.5; // 対象足レンジが ATR×この倍率 未満ならパターン対象外（ノイズ除去）
+export const ATR_MIN_BARS = 5; // ATR ゲートを適用する最低履歴本数（これ未満は従来どおり判定）
 export const MIN_SAMPLES = 8; // これ未満の出現回数は「サンプル不足」として優位性を判定しない
 
 export interface OhlcCandle {
@@ -68,20 +73,39 @@ export const PATTERN_LABEL: Record<PatternKey, string> = {
   bear_engulfing: '弱気の包み足',
 };
 
-/** 強気のピンバー（下ヒゲ）: 下ヒゲ ÷ 全値幅 ≥ threshold。 */
+/** 強気のピンバー（下ヒゲ）: 下ヒゲ≥threshold かつ 反対側ヒゲ・実体が小さい（本物のピンバー）。 */
 export function isBullishPinbar(c: OhlcCandle, threshold = PINBAR_THRESHOLD): boolean {
   const range = c.high - c.low;
   if (!(range > 0)) return false;
   const lowerWick = Math.min(c.open, c.close) - c.low;
-  return lowerWick / range >= threshold;
+  const upperWick = c.high - Math.max(c.open, c.close);
+  const body = Math.abs(c.close - c.open);
+  return lowerWick / range >= threshold && upperWick / range <= PINBAR_OPP_WICK_MAX && body / range <= PINBAR_BODY_MAX;
 }
 
-/** 弱気のピンバー（上ヒゲ）: 上ヒゲ ÷ 全値幅 ≥ threshold。 */
+/** 弱気のピンバー（上ヒゲ）: 上ヒゲ≥threshold かつ 反対側ヒゲ・実体が小さい（本物のピンバー）。 */
 export function isBearishPinbar(c: OhlcCandle, threshold = PINBAR_THRESHOLD): boolean {
   const range = c.high - c.low;
   if (!(range > 0)) return false;
   const upperWick = c.high - Math.max(c.open, c.close);
-  return upperWick / range >= threshold;
+  const lowerWick = Math.min(c.open, c.close) - c.low;
+  const body = Math.abs(c.close - c.open);
+  return upperWick / range >= threshold && lowerWick / range <= PINBAR_OPP_WICK_MAX && body / range <= PINBAR_BODY_MAX;
+}
+
+/** 対象足 i の直前 period 本の平均レンジ(高安幅)＝ATR。履歴が無ければ null。 */
+export function averageRange(candles: OhlcCandle[], i: number, period = ATR_PERIOD): number | null {
+  const start = Math.max(0, i - period);
+  let sum = 0;
+  let n = 0;
+  for (let j = start; j < i; j++) {
+    const r = candles[j].high - candles[j].low;
+    if (r > 0) {
+      sum += r;
+      n++;
+    }
+  }
+  return n > 0 ? sum / n : null;
 }
 
 /** 強気の包み足: 前足が陰線・今足が陽線で、今足の実体が前足の実体を包む。 */
@@ -98,6 +122,11 @@ export function isBearishEngulfing(prev: OhlcCandle, curr: OhlcCandle): boolean 
 export function detectPatterns(candles: OhlcCandle[], i: number, threshold = PINBAR_THRESHOLD): PatternKey[] {
   const c = candles[i];
   if (!c) return [];
+  // ATR ノイズ除去: 直近平均レンジに対して小さすぎる足は対象外（履歴が ATR_MIN_BARS 未満なら無効）。
+  if (i >= ATR_MIN_BARS) {
+    const atr = averageRange(candles, i);
+    if (atr != null && c.high - c.low < ATR_RANGE_FACTOR * atr) return [];
+  }
   const out: PatternKey[] = [];
   if (isBullishPinbar(c, threshold)) out.push('bull_pinbar');
   if (isBearishPinbar(c, threshold)) out.push('bear_pinbar');

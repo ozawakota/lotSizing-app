@@ -205,3 +205,34 @@ describe('latestPatternInWindow', () => {
     expect(latestPatternInWindow([bullPin], 10)).toBeNull();
   });
 });
+
+describe('ピンバー厳格化（反対ヒゲ・実体）', () => {
+  it('下ヒゲ66%でも反対側(上)ヒゲが大きいと強気ピンバーにしない', () => {
+    // range=1.0: 下ヒゲ0.66 / 上ヒゲ0.2(>15%) / 実体0.14 → 旧ロジックでは成立していた
+    expect(isBullishPinbar(c(0.66, 1.0, 0.0, 0.8))).toBe(false);
+  });
+  it('長ヒゲ66%でも実体が大きい(>30%)とピンバーにしない', () => {
+    expect(isBullishPinbar(c(0.66, 1.0, 0.0, 0.98))).toBe(false); // 実体0.32
+  });
+  it('反対ヒゲも実体も小さければ成立', () => {
+    expect(isBullishPinbar(c(0.9, 1.0, 0.0, 0.95))).toBe(true); // 下ヒゲ0.9 / 上ヒゲ0.05 / 実体0.05
+  });
+});
+
+describe('ATRノイズ除去ゲート', () => {
+  // 大きいレンジ(≈1.0)の非パターン足を並べた文脈
+  const big = c(0.4, 1.0, 0.0, 0.6); // range1.0・パターンではない
+  const tinyPin = c(0.09, 0.1, 0.0, 0.095); // range0.1 の強気ピンバー（単体では成立）
+
+  it('単体では tinyPin はピンバー成立', () => {
+    expect(isBullishPinbar(tinyPin)).toBe(true);
+  });
+  it('直近ATRに対して小さすぎる足はパターン対象外（index≥5）', () => {
+    const arr = [big, big, big, big, big, big, tinyPin]; // tinyPin は index6
+    expect(detectPatterns(arr, 6)).toEqual([]); // 0.1 < 0.5×1.0 で除外
+  });
+  it('履歴が ATR_MIN_BARS 未満なら ゲート無効で従来どおり検出', () => {
+    const arr = [big, big, tinyPin]; // tinyPin は index2(<5)
+    expect(detectPatterns(arr, 2)).toContain('bull_pinbar');
+  });
+});
