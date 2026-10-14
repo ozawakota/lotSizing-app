@@ -109,6 +109,27 @@ export function detectPatterns(candles: OhlcCandle[], i: number, threshold = PIN
   return out;
 }
 
+export interface RecentPattern {
+  key: PatternKey;
+  barsAgo: number; // 末尾(最新確定足)からの本数。0 = 最新確定足
+}
+
+/**
+ * 末尾（最新確定足）から windowBars 本の範囲で、最も新しいローソク足パターンを返す。
+ * 包み足は1本前が必要なため i>=1 のみ探索。見つからなければ null。
+ * 呼び出し側は「確定足のみ」を渡す想定（形成中の足は除外して渡す）。
+ */
+export function latestPatternInWindow(candles: OhlcCandle[], windowBars: number): RecentPattern | null {
+  const end = candles.length - 1;
+  if (end < 1) return null;
+  const minI = Math.max(1, end - Math.max(windowBars, 1) + 1);
+  for (let i = end; i >= minI; i--) {
+    const pats = detectPatterns(candles, i);
+    if (pats.length > 0) return { key: pats[0], barsAgo: end - i };
+  }
+  return null;
+}
+
 export type EdgeVerdict = 'strong' | 'weak' | 'none' | 'negative' | 'insufficient';
 export const VERDICT_LABEL: Record<EdgeVerdict, string> = {
   strong: '優位性あり',

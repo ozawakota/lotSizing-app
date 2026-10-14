@@ -24,7 +24,10 @@ export const dukascopyFeed: Feed = {
       ignoreFlats: true, // 週末などの値動き無し足を除く
       batchSize: 10,
       pauseBetweenBatchesMs: 500,
-      retryCount: 3,
+      // Dukascopy は未生成ファイルに HTTP 202（準備中）を返す。間隔を空けて多めにリトライし、
+      // サーバがファイルを用意する時間を与える（間隔なしの即時リトライでは 202 のまま失敗する）。
+      retryCount: 8,
+      pauseBetweenRetriesMs: 3000,
     } as const;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dukascopy-node の instrument は巨大な列挙型
     const bid = (await getHistoricalRates({ ...base, priceType: 'bid' } as any)) as Row[];

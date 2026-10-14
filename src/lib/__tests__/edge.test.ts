@@ -10,6 +10,7 @@ import {
   isBearishPinbar,
   isBullishEngulfing,
   isBullishPinbar,
+  latestPatternInWindow,
   verdictOf,
   type OhlcCandle,
   type PairEdge,
@@ -177,5 +178,30 @@ describe('currencyBias', () => {
     expect(score('JPY')).toBe(-6); // −10 +4
     expect(score('USD')).toBe(-6); // −4 −2
     expect(bias[0].currency).toBe('GBP');
+  });
+});
+
+describe('latestPatternInWindow', () => {
+  const neutral = c(1.0, 1.01, 0.99, 1.005); // パターン無し
+  const bullPin = c(1.009, 1.01, 1.0, 1.0095); // 下ヒゲピンバー
+
+  it('ウィンドウ内で最も新しいパターンを barsAgo 付きで返す', () => {
+    const arr = [neutral, neutral, neutral, neutral, neutral, bullPin, neutral, neutral, neutral];
+    const r = latestPatternInWindow(arr, 10);
+    expect(r).toEqual({ key: 'bull_pinbar', barsAgo: 3 }); // index5, end=8 → 3本前
+  });
+
+  it('末尾(最新確定足)のパターンは barsAgo=0', () => {
+    const arr = [neutral, neutral, bullPin];
+    expect(latestPatternInWindow(arr, 10)).toEqual({ key: 'bull_pinbar', barsAgo: 0 });
+  });
+
+  it('ウィンドウが狭いと範囲外の古いパターンは拾わない', () => {
+    const arr = [neutral, neutral, neutral, neutral, neutral, bullPin, neutral, neutral, neutral];
+    expect(latestPatternInWindow(arr, 2)).toBeNull(); // 直近2本(index7,8)は neutral
+  });
+
+  it('2本未満は null', () => {
+    expect(latestPatternInWindow([bullPin], 10)).toBeNull();
   });
 });
