@@ -518,7 +518,7 @@ const handleFlow = async (env: Env): Promise<Response> => {
 // FXStreet RSS（主）/ Investing.com（予備）→ Workers AI で要約＆シグナル。
 // オンデマンド＋KVに TTL キャッシュ（新 Cron なし）。シグナルはエンジン切替可能。
 const KV_NEWS = 'news';
-const NEWS_TTL_MS = 60 * 60 * 1000; // 60分
+const NEWS_TTL_MS = 3 * 60 * 60 * 1000; // 3時間（Workers AI の無料枠 1万 neurons/日 を節約するため 60分から延長）
 const SUMMARY_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 const SIGNAL_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 const RSS_FEEDS = ['https://www.fxstreet.com/rss/news', 'https://www.investing.com/rss/forex.rss'];
