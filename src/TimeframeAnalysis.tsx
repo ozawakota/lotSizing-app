@@ -216,6 +216,12 @@ function RrRow({ rr, digits }: { rr: RrSetup | null; digits: number }) {
       </span>
     </div>
     <StopBasis rr={rr} />
+    {rr.patternNote && (
+      <p className={`mt-0.5 text-[10px] ${rr.patternSupport === 'aligned' ? 'text-green-700' : 'text-gray-500'}`}>
+        {rr.patternSupport === 'aligned' ? '◎ ' : '× '}
+        {rr.patternNote}
+      </p>
+    )}
     </div>
   );
 }

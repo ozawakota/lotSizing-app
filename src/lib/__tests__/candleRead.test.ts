@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { patternConfirmation, patternQuality, patternZone, readCandlePatterns } from '../candleRead';
+import { applyPatternToRr, patternConfirmation, patternDetail, patternQuality, patternZone, pickValidPattern, readCandlePatterns, type PatternRead } from '../candleRead';
+import type { RrSetup } from '../stoploss';
 import type { OhlcCandle } from '../edge';
 
 const c = (open: number, high: number, low: number, close: number): OhlcCandle => ({ open, high, low, close });
@@ -74,5 +75,40 @@ describe('readCandlePatterns', () => {
     expect(reads.every((r) => r.key === 'bull_pinbar' && r.label === '下ヒゲピンバー')).toBe(true);
     const narrow = readCandlePatterns(bars, { instrument: 'USD_JPY', windowBars: 1 });
     expect(narrow.map((r) => r.barsAgo)).toEqual([0]);
+  });
+});
+
+describe('有効なパターン（確定・ライン上・質60以上）', () => {
+  const read = (o: Partial<PatternRead>): PatternRead => ({
+    key: 'bull_pinbar', label: '下ヒゲピンバー', barsAgo: 0, quality: 80, zone: 'key', zoneReasons: ['押し安値'], confirmation: 'confirmed', ...o,
+  });
+
+  it('新しい順の読みから、条件をすべて満たす最も新しいものを選ぶ', () => {
+    const reads = [
+      read({ barsAgo: 0, confirmation: 'pending' }), // 未確定
+      read({ barsAgo: 1, zone: 'mid', zoneReasons: [] }), // ライン外
+      read({ barsAgo: 2, quality: 59 }), // 質不足
+      read({ barsAgo: 3 }), // 有効
+      read({ barsAgo: 5 }),
+    ];
+    expect(pickValidPattern(reads)?.barsAgo).toBe(3);
+    expect(pickValidPattern([read({ confirmation: 'invalidated' })])).toBeNull();
+  });
+
+  it('patternDetail は確定・場所・質を1行にまとめる', () => {
+    expect(patternDetail(read({ zoneReasons: ['押し安値', '1時間足の安値'], quality: 82 }))).toBe('確定・押し安値・1時間足の安値付近・質82');
+  });
+
+  it('RR と同じ向きなら裏付け、逆向きなら見送り（qualifies=false）、パターンが無ければそのまま', () => {
+    const rr = { direction: 'long', entry: 150, stop: 149.8, target: 150.6, riskPips: 20, rewardPips: 60, spreadPips: 0, rr: 3, qualifies: true } as RrSetup;
+    const aligned = applyPatternToRr(rr, read({}))!;
+    expect(aligned.qualifies).toBe(true);
+    expect(aligned.patternSupport).toBe('aligned');
+    const against = applyPatternToRr(rr, read({ key: 'bear_engulfing', label: '弱気の包み足' }))!;
+    expect(against.qualifies).toBe(false);
+    expect(against.patternSupport).toBe('against');
+    expect(against.patternNote).toContain('弱気の包み足');
+    expect(applyPatternToRr(rr, null)).toBe(rr);
+    expect(applyPatternToRr(null, read({}))).toBeNull();
   });
 });

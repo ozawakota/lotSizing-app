@@ -29,9 +29,16 @@ import {
 // /news の為替ニュース＋売買シグナルのロジック/型もフロントと共有。
 import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type NewsItem } from '../../src/lib/news';
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
-import { latestPatternInWindow, PATTERN_DIRECTION, PATTERN_LABEL, type OhlcCandle } from '../../src/lib/edge';
+import { latestPatternInWindow, PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
 // TF分析カードのローソク足パターン読み（質・場所・確定/否定）。フロントと共有。
-import { PATTERN_WINDOW_BARS, readCandlePatterns, type PatternRead } from '../../src/lib/candleRead';
+import {
+  PATTERN_WINDOW_BARS,
+  applyPatternToRr,
+  patternDetail,
+  pickValidPattern,
+  readCandlePatterns,
+  type PatternRead,
+} from '../../src/lib/candleRead';
 // 通貨優位性ランキングのスコア計算（純粋関数）をフロントと共有。
 import { buildRanking, RANKING_MIN_RR, RANKING_PAIRS, RANKING_TIMEFRAMES, type RankingSnapshot, type TfSignal } from '../../src/lib/ranking';
 import {
@@ -965,6 +972,14 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
   const now = Date.now();
   const tfCandles: Candle[][] = []; // ロールリバーサル評価用に各TFの足を保持（index は timeframes と対応）
   const tfOhlc: OhlcCandle[][] = []; // パターン読み用の確定足（OHLC。index は timeframes と対応）
+  // 1パス目で集める各TFの材料（パターンの読みは全TFの構造がそろってから）。
+  const prep: {
+    tf: SlTimeframe;
+    structure: SlStructure;
+    recentCloses: number[];
+    volumeLevel: number | null;
+    stoch: StochReading | null;
+  }[] = [];
   for (const tf of MTF_TIMEFRAMES) {
     const { candles, currentRate: cr } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf]);
     currentRate = cr;
@@ -993,15 +1008,33 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
     const ohlc: OhlcCandle[] = candles
       .filter((c) => typeof c.open === 'number')
       .map((c) => ({ open: c.open as number, high: c.high, low: c.low, close: c.close, t: c.t }));
-    const rp = latestPatternInWindow(ohlc.slice(0, -1), PA_WINDOW_BARS[tf]);
-    const candlePattern = rp ? { key: rp.key, label: PATTERN_LABEL[rp.key], barsAgo: rp.barsAgo } : null;
-    tfOhlc.push(ohlc.slice(0, -1)); // カード用のパターン読み（2パス目）で使う確定足
+    tfOhlc.push(ohlc.slice(0, -1)); // パターン読みに使う確定足（末尾の形成中の足は除外）
+    prep.push({ tf, structure, recentCloses, volumeLevel, stoch });
+  }
+
+  // 全TFの足がそろってから、パターンの読み（質・出た場所・確定/否定）を求め、
+  // 「有効なパターン」（確定・ライン上・質が高い）だけを Jev の判定材料に渡す。
+  // 出た場所の判定には上位足の高安と出来高節目を使う（ロールリバーサルは Jev の結果に依存するため含めない）。
+  for (let i = 0; i < prep.length; i++) {
+    const { tf, structure, recentCloses, volumeLevel, stoch } = prep[i];
+    const higherTfs = prep.slice(i + 1).map((h) => ({ tf: h.tf, structure: h.structure }));
+    const candlePatterns = readCandlePatterns(tfOhlc[i] ?? [], {
+      instrument,
+      windowBars: PATTERN_WINDOW_BARS[tf],
+      levels: [
+        ...higherStopLevels(higherTfs, 'long'),
+        ...higherStopLevels(higherTfs, 'short'),
+        ...(volumeLevel != null ? [{ price: volumeLevel, label: '出来高節目' }] : []),
+      ],
+    });
+    const valid = pickValidPattern(candlePatterns);
+    const candlePattern = valid ? { key: valid.key, label: valid.label, barsAgo: valid.barsAgo } : null;
 
     const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses, {
       sessionStatus,
       volumeLevel,
       stoch,
-      candlePattern: candlePattern ? { label: candlePattern.label, barsAgo: candlePattern.barsAgo } : null,
+      candlePattern: valid ? { label: valid.label, barsAgo: valid.barsAgo, detail: patternDetail(valid) } : null,
     });
     paEngine = eng;
     timeframes.push({
@@ -1018,7 +1051,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       stoch,
       roleReversal: null, // 下の2パス目で算出（上位TFのコンフルエンスが必要なため）
       candlePattern,
-      candlePatterns: [], // 下の2パス目で算出（上位TF・ロールリバーサルのラインが必要なため）
+      candlePatterns,
     });
   }
 
@@ -1034,18 +1067,6 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       stoch: t.stoch,
       volumeLevel: t.volumeLevel,
       higherLevels,
-    });
-    // ローソク足パターンの読み（質・出た場所・確定/否定）。場所の判定に上位足の高安・ロールリバーサル・出来高節目を使う。
-    const higherTfs = timeframes.slice(i + 1).map((h) => ({ tf: h.tf, structure: h }));
-    t.candlePatterns = readCandlePatterns(tfOhlc[i] ?? [], {
-      instrument,
-      windowBars: PATTERN_WINDOW_BARS[t.tf],
-      levels: [
-        ...higherStopLevels(higherTfs, 'long'),
-        ...higherStopLevels(higherTfs, 'short'),
-        ...(t.roleReversal ? [{ price: t.roleReversal.level, label: 'ロールリバーサル' }] : []),
-        ...(t.volumeLevel != null ? [{ price: t.volumeLevel, label: '出来高節目' }] : []),
-      ],
     });
     // RR 評価: 方向は RR好機通知と同じくトレンドで決める（レンジは対象外）。基準も通知と共通
     // （RR_MIN・スプレッド込み）。Jev のブレイク確率が取れたときだけ「その方向の確率 ≥ RR_MIN_DIRECTION_PROB」を
@@ -1079,6 +1100,8 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       typicalSpreadPips(instrument),
       stop,
     );
+    // 有効なローソク足パターン（確定・ライン上・質が高い）で補正: 同じ向き=裏付け / 逆向き=見送り。
+    t.rr = applyPatternToRr(t.rr, pickValidPattern(t.candlePatterns));
     if (t.rr?.qualifies && (!rrOpportunity || t.rr.rr > rrOpportunity.rr)) {
       rrOpportunity = { ...t.rr, tf: t.tf };
     }

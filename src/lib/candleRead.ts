@@ -15,7 +15,7 @@ import {
   type OhlcCandle,
   type PatternKey,
 } from './edge';
-import { pivotIndices, type SlTimeframe, type StopLevelRef } from './stoploss';
+import { pivotIndices, type RrSetup, type SlTimeframe, type StopLevelRef } from './stoploss';
 
 // 足ごとの探索期間（本数）: 15m=6時間 / 30m=12時間 / 1h=1日 / 4h=3日。古いパターンは表示しない。
 export const PATTERN_WINDOW_BARS: Record<SlTimeframe, number> = { '15m': 24, '30m': 24, '1h': 24, '4h': 18 };
@@ -141,4 +141,34 @@ export function readCandlePatterns(
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// 「有効なパターン」＝ 確定済み・意識されるライン上・形の質が高い。売買判断（Jev の入力・RR）に使うのはこれだけ。
+// ---------------------------------------------------------------------------
+export const VALID_PATTERN_MIN_QUALITY = 60;
+
+export function isValidPattern(r: PatternRead): boolean {
+  return r.confirmation === 'confirmed' && r.zone === 'key' && r.quality >= VALID_PATTERN_MIN_QUALITY;
+}
+
+/** 新しい順の読みから、最も新しい有効パターンを返す（無ければ null）。 */
+export function pickValidPattern(reads: PatternRead[]): PatternRead | null {
+  return reads.find(isValidPattern) ?? null;
+}
+
+/** Jev などに渡す説明（例 '確定・押し安値・1時間足の安値付近・質82'）。 */
+export function patternDetail(r: PatternRead): string {
+  return `${CONFIRMATION_LABEL[r.confirmation]}・${r.zoneReasons.join('・')}付近・質${r.quality}`;
+}
+
+/**
+ * 有効パターンで RR を補正する。トレンド方向と同じ向きなら「裏付け」を付記、逆向きなら見送り（qualifies=false）。
+ * RR好機通知はページの ✓ と一致したときだけ送るので、この補正は通知にもそのまま効く。
+ */
+export function applyPatternToRr<T extends RrSetup>(rr: T | null, valid: PatternRead | null): T | null {
+  if (!rr || !valid) return rr;
+  const dir = PATTERN_DIRECTION[valid.key] === 1 ? 'long' : 'short';
+  if (dir === rr.direction) return { ...rr, patternSupport: 'aligned', patternNote: `${valid.label}（確定）が裏付け` };
+  return { ...rr, qualifies: false, patternSupport: 'against', patternNote: `逆向きの${valid.label}（確定）が出ているため見送り` };
 }

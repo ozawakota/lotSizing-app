@@ -263,6 +263,8 @@ export interface RrSetup {
   spreadPips: number; // 計算に含めたスプレッド（0=考慮なし）
   stopReasons?: string[]; // 構造的損切りの根拠（computeStructuralStop を使ったときのみ）
   stopStrength?: number; // 損切りラインの強さ 0–100（同上）
+  patternSupport?: 'aligned' | 'against'; // 有効なローソク足パターンとの関係（candleRead.applyPatternToRr）
+  patternNote?: string; // 同上の説明
   rr: number; // リワード/リスク（小数1桁）
   qualifies: boolean; // rr>=minRr かつ 方向のブレイク確率>=minProb
 }
@@ -570,7 +572,7 @@ export interface PaContext {
   sessionStatus?: string; // 東京/ロンドン/NY の開閉状況
   volumeLevel?: number | null; // 過去の高出来高の節目価格
   stoch?: StochReading | null; // ストキャスティクス(%K/%D)
-  candlePattern?: { label: string; barsAgo: number } | null; // 直近のローソク足パターン(ピンバー/包み足)
+  candlePattern?: { label: string; barsAgo: number; detail?: string } | null; // 有効なローソク足パターン（確定・ライン上・質が高いもの）
 }
 
 const paState = (structure: SlStructure, recentCloses: number[], ctx: PaContext = {}): unknown => ({
@@ -583,7 +585,9 @@ const paState = (structure: SlStructure, recentCloses: number[], ctx: PaContext 
   ...(ctx.sessionStatus ? { sessionStatus: ctx.sessionStatus } : {}),
   ...(ctx.volumeLevel != null ? { volumeLevel: ctx.volumeLevel } : {}),
   ...(ctx.stoch ? { stochastic: { k: ctx.stoch.k, d: ctx.stoch.d } } : {}),
-  ...(ctx.candlePattern ? { candlePattern: { pattern: ctx.candlePattern.label, barsAgo: ctx.candlePattern.barsAgo } } : {}),
+  ...(ctx.candlePattern
+    ? { candlePattern: { pattern: ctx.candlePattern.label, barsAgo: ctx.candlePattern.barsAgo, detail: ctx.candlePattern.detail } }
+    : {}),
 });
 
 /** Jev systemone リクエスト body（model 以外）。1問の Choice でプライスアクションを分類。
@@ -597,7 +601,7 @@ export function buildPaJevRequest(structure: SlStructure, recentCloses: number[]
     ? '。ストキャスティクス(stochastic.k/%K, stochastic.d/%D)の買われすぎ(80以上)/売られすぎ(20以下)や%Kと%Dのクロスも考慮してください'
     : '';
   const candleNote = ctx.candlePattern
-    ? `。直近のローソク足パターン(candlePattern.pattern=${ctx.candlePattern.label}、${ctx.candlePattern.barsAgo}本前)は反転/継続の手がかりとして重視してください`
+    ? `。直近の有効なローソク足パターン(candlePattern.pattern=${ctx.candlePattern.label}、${ctx.candlePattern.barsAgo}本前${ctx.candlePattern.detail ? `、${ctx.candlePattern.detail}` : ''})は反転/継続の手がかりとして重視してください`
     : '';
   const note = sessionNote + volumeNote + stochNote + candleNote;
   return {
@@ -748,7 +752,9 @@ export function buildPaPrompt(structure: SlStructure, recentCloses: number[], ct
     ctx.sessionStatus ? `現在のセッション状況も考慮してください: ${ctx.sessionStatus}` : '',
     ctx.volumeLevel != null ? `過去に出来高が膨らんだ価格(${ctx.volumeLevel})は重要なレジサポとして考慮してください。` : '',
     ctx.stoch ? `ストキャスティクス %K=${ctx.stoch.k} / %D=${ctx.stoch.d}（80以上=買われすぎ, 20以下=売られすぎ）も考慮してください。` : '',
-    ctx.candlePattern ? `直近のローソク足パターン: ${ctx.candlePattern.label}（${ctx.candlePattern.barsAgo}本前）も反転/継続の手がかりとして考慮してください。` : '',
+    ctx.candlePattern
+      ? `直近の有効なローソク足パターン: ${ctx.candlePattern.label}（${ctx.candlePattern.barsAgo}本前${ctx.candlePattern.detail ? `・${ctx.candlePattern.detail}` : ''}）も反転/継続の手がかりとして考慮してください。`
+      : '',
     JSON.stringify(paState(structure, recentCloses, ctx)),
     '分類の定義:',
     ...Object.entries(PA_CRITERIA).map(([k, v]) => `- ${k}: ${v}`),
