@@ -159,7 +159,10 @@ export default function AlertBell() {
             {shownHistory.length === 0 ? (
               <p className="text-[11px] text-gray-400">まだありません</p>
             ) : (
-              <ul className="max-h-48 space-y-1 overflow-y-auto">
+              <ul
+                className="max-h-48 space-y-1 overflow-y-auto overscroll-contain"
+                style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
+              >
                 {shownHistory.map((a) => (
                   <li key={a.id} className="rounded bg-gray-50 px-2 py-1">
                     <div className="flex items-baseline justify-between gap-2">
