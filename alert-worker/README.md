@@ -34,6 +34,12 @@ RR は**ペアごとの一般的なスプレッド**（`TYPICAL_SPREAD_PIPS`、�
 リワードから引いた実質値で判定する（同じ ペア＋TF＋方向 は2時間再通知しない。ヘッダーの RR トグルが ON の購読のみ）。
 判定は [`../src/lib/stoploss.ts`](../src/lib/stoploss.ts) の `scanStructuralRrAll`。
 
+**TF分析ページと同じ判定**: 方向（トレンド）・基準（RR 1:2.5・スプレッド込み）はページと共通の関数・定数を使う。
+さらに構造スキャンで候補が出たペアだけ currency-strength の `/mtf` を Service Binding で引き、ページ上で
+「狙える（✓）」になっている時間足・方向のときだけ通知する（Jev のブレイク確率条件まで一致）。
+`/mtf` の作り直しは Jev・Workers AI を使うため、結果はペアごとに2時間再利用する。取得できないときは構造判定のみで通知し、
+本文に「（TF分析の確認なし）」と付記する。
+
 **個人投資家の建玉（Myfxbook）による逆張りフィルタ**: currency-strength Worker の `/flow` を Service Binding（`STRENGTH`）経由で呼び、
 setup と**同じ向きに 65% 以上**偏っていれば見送る。**逆向きに 60% 以上**なら本文に「逆張り支持」と付記する。
 建玉を取得できないときはフィルタなしで通知する。判定は [`../src/lib/flow.ts`](../src/lib/flow.ts) の `retailBias`。
