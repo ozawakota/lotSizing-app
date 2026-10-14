@@ -32,7 +32,17 @@ import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type
 import { latestPatternInWindow, PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
 // TF分析カードのローソク足パターン読み（質・場所・確定/否定）。フロントと共有。
 // 4時間足の出来高インジケーター(/volume)。フロントと共有。
-import { VOLUME_SOURCES, computeVolumeIndicators, type PairVolume, type VolumeSnapshot } from '../../src/lib/volume';
+import {
+  VOLUME_SOURCES,
+  computeVolumeIndicators,
+  computeVolumeProfile,
+  mapProfile,
+  profileLevels,
+  type PairVolume,
+  type VolumeProfile,
+  type VolumeSnapshot,
+} from '../../src/lib/volume';
+import { fetchGoldSpot } from '../../src/lib/goldSpot';
 import {
   PATTERN_WINDOW_BARS,
   applyPatternToRr,
@@ -974,6 +984,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
   const now = Date.now();
   const tfCandles: Candle[][] = []; // ロールリバーサル評価用に各TFの足を保持（index は timeframes と対応）
   const tfOhlc: OhlcCandle[][] = []; // パターン読み用の確定足（OHLC。index は timeframes と対応）
+  let volProfile: VolumeProfile | null = null; // 1時間足の価格帯別出来高（現物の目盛り）。損切り・パターンの場所判定に使う
   // 1パス目で集める各TFの材料（パターンの読みは全TFの構造がそろってから）。
   const prep: {
     tf: SlTimeframe;
@@ -1000,10 +1011,17 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
         const fut = await fetchYahooCandles(vSym, YAHOO_INTERVAL[tf]);
         const futLevel = volumeAnchoredLevel(fut.candles, now, agoMs, windowMs);
         if (futLevel != null) volumeLevel = futuresLevelToSpot(futLevel, fut.currentRate, cr, invert);
+        // 1時間足の先物から価格帯別出来高（出来高由来のレジサポ）を求め、現物の目盛りに換算して保持。
+        if (tf === '1h') {
+          const p = computeVolumeProfile(fut.candles.slice(0, -1));
+          if (p) volProfile = mapProfile(p, (x) => futuresLevelToSpot(x, fut.currentRate, cr, invert));
+        }
       } catch (e) {
         console.error(`/mtf 出来高(先物)取得 失敗 ${instrument} ${tf}:`, e);
       }
     }
+    // XAU（GC=F）のように足そのものに出来高がある場合は、その1時間足から価格帯別出来高を求める。
+    if (tf === '1h' && !volProfile) volProfile = computeVolumeProfile(candles.slice(0, -1));
     // ストキャスティクス(%K/%D)を足から自前計算（API不要）。Jev の判定材料にも含める。
     const stoch = computeStochastic(candles);
     // 直近ウィンドウ(2日・4hは2週)のローソク足からピンバー/包み足を検出。末尾(形成中)の足は除外。
@@ -1027,6 +1045,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
         ...higherStopLevels(higherTfs, 'long'),
         ...higherStopLevels(higherTfs, 'short'),
         ...(volumeLevel != null ? [{ price: volumeLevel, label: '出来高節目' }] : []),
+        ...(volProfile ? profileLevels(volProfile) : []),
       ],
     });
     const valid = pickValidPattern(candlePatterns);
@@ -1081,6 +1100,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
     const extraLevels = [
       ...(t.roleReversal ? [{ price: t.roleReversal.level, label: 'ロールリバーサルのライン' }] : []),
       ...(t.volumeLevel != null ? [{ price: t.volumeLevel, label: '出来高節目' }] : []),
+      ...(volProfile ? profileLevels(volProfile) : []), // 価格帯別出来高の POC・バリューエリア・山
     ];
     const stop = computeStructuralStop(tfCandles[i], direction, currentRate, {
       instrument,
@@ -1323,7 +1343,23 @@ const buildVolume = async (): Promise<VolumeSnapshot> => {
     }
     try {
       const { candles } = await fetchYahooCandles(symbol, YAHOO_INTERVAL['4h']);
-      pairs.push({ instrument, source: symbol, indicators: computeVolumeIndicators(candles.slice(0, -1), invert) }); // 形成中の足は除外
+      const indicators = computeVolumeIndicators(candles.slice(0, -1), invert); // 形成中の足は除外
+      // 価格帯別出来高は解像度のため1時間足（1か月分）で集計し、現物の目盛りに換算する。
+      let profile: VolumeProfile | null = null;
+      let spotRate: number | null = null;
+      try {
+        const h1 = await fetchYahooCandles(symbol, YAHOO_INTERVAL['1h']);
+        spotRate =
+          instrument === 'XAU_USD' ? await fetchGoldSpot() : (await fetchYahooCandles(YAHOO_SYMBOL[instrument], YAHOO_INTERVAL['4h'])).currentRate;
+        const raw = computeVolumeProfile(h1.candles.slice(0, -1));
+        if (raw && spotRate != null) {
+          const spot = spotRate;
+          profile = mapProfile(raw, (x) => futuresLevelToSpot(x, h1.currentRate, spot, invert));
+        }
+      } catch (e) {
+        console.error(`/volume ${instrument} 価格帯別出来高 失敗:`, e);
+      }
+      pairs.push({ instrument, source: symbol, indicators, profile, spotRate });
     } catch (e) {
       console.error(`/volume ${instrument} 取得失敗:`, e);
       pairs.push({ instrument, source: symbol, indicators: null });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeVolumeIndicators, rvolLevel } from '../volume';
+import { computeVolumeIndicators, computeVolumeProfile, mapProfile, profileLevels, rvolLevel } from '../volume';
 import type { Candle } from '../stoploss';
 
 // close を step ずつ動かし、出来高は vols[i]（足りなければ 100）。
@@ -65,5 +65,43 @@ describe('computeVolumeIndicators', () => {
   it('出来高データが足りなければ null（FXスポット=0 など）', () => {
     expect(computeVolumeIndicators(series(30, 0.01, () => 0))).toBeNull();
     expect(computeVolumeIndicators(series(15, 0.01, () => 100))).toBeNull();
+  });
+});
+
+describe('computeVolumeProfile（価格帯別出来高）', () => {
+  // 100〜110 の範囲。105 付近で出来高の大きい足が多く、108 付近にも小さな山。
+  const bars: Candle[] = [];
+  for (let i = 0; i < 40; i++) bars.push({ high: 110, low: 100, close: 105, volume: 10 }); // 全体に薄く
+  for (let i = 0; i < 20; i++) bars.push({ high: 105.3, low: 104.7, close: 105, volume: 300 }); // 105 に集中
+  for (let i = 0; i < 6; i++) bars.push({ high: 108.2, low: 107.9, close: 108, volume: 200 }); // 108 に小さな山
+
+  it('出来高が集中した価格が POC、バリューエリアはそれを含む', () => {
+    const p = computeVolumeProfile(bars)!;
+    expect(p.poc).toBeGreaterThan(104.6);
+    expect(p.poc).toBeLessThan(105.4);
+    expect(p.val).toBeLessThanOrEqual(p.poc);
+    expect(p.vah).toBeGreaterThanOrEqual(p.poc);
+    expect(p.vah - p.val).toBeLessThan(10); // 全範囲より狭い
+    expect(p.bars).toBe(66);
+  });
+
+  it('POC から離れた出来高の山を HVN として拾う', () => {
+    const p = computeVolumeProfile(bars)!;
+    expect(p.hvns.some((h) => Math.abs(h - 108) < 0.5)).toBe(true);
+  });
+
+  it('出来高のある足が少なければ null', () => {
+    expect(computeVolumeProfile(bars.slice(0, 5))).toBeNull();
+    expect(computeVolumeProfile(bars.map((b) => ({ ...b, volume: 0 })))).toBeNull();
+  });
+
+  it('逆数クォートで写すと上下が入れ替わっても vah > val を保ち、ラベル付きのライン一覧にできる', () => {
+    const p = computeVolumeProfile(bars)!;
+    const m = mapProfile(p, (x) => 1000 / x);
+    expect(m.vah).toBeGreaterThan(m.val);
+    expect(m.poc).toBeCloseTo(1000 / p.poc, 6);
+    const labels = profileLevels(m).map((l) => l.label);
+    expect(labels.slice(0, 3)).toEqual(['出来高POC', 'バリューエリア上限', 'バリューエリア下限']);
+    expect(labels).toContain('出来高の山');
   });
 });
