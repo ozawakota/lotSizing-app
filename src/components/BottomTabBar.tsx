@@ -1,13 +1,14 @@
 // 下部タブバー（モバイル定番のナビ）。各ページを常時表示し、現在地をオレンジで示す。
-import { BarChart3, Calculator, Layers, Newspaper, Wallet } from 'lucide-react';
+import { BarChart3, Calculator, Crosshair, Layers, Newspaper, Wallet } from 'lucide-react';
 
-export type AppView = 'calculator' | 'flow' | 'fund' | 'news' | 'mtf';
+export type AppView = 'calculator' | 'flow' | 'fund' | 'news' | 'mtf' | 'edge';
 
 const TABS: { key: AppView; label: string; Icon: typeof Calculator }[] = [
   { key: 'calculator', label: '計算', Icon: Calculator },
   { key: 'flow', label: '取引量', Icon: BarChart3 },
   { key: 'news', label: 'ニュース', Icon: Newspaper },
   { key: 'mtf', label: 'TF分析', Icon: Layers },
+  { key: 'edge', label: 'エッジ', Icon: Crosshair },
   { key: 'fund', label: '資金管理', Icon: Wallet },
 ];
 

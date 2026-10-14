@@ -1,0 +1,20 @@
+{
+  "name": "edge-server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "エッジ分析サーバー（Oracle Cloud 常駐）。Dukascopy の足でピンバー・包み足の優位性を集計して /edge で配信する",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dukascopy-node": "1.50.0",
+    "tsx": "^4.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "typescript": "~5.7.2"
+  }
+}

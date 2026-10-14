@@ -1,0 +1,17 @@
+# エッジ分析サーバー（/opt/lotsizing-app/edge-server）を常駐させる systemd ユニット。
+# 設置: sudo cp edge-server.service /etc/systemd/system/ && sudo systemctl enable --now edge-server
+[Unit]
+Description=Edge analysis server (pinbar/engulfing statistics)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/lotsizing-app/edge-server
+EnvironmentFile=/etc/edge-server.env
+ExecStart=/opt/lotsizing-app/edge-server/node_modules/.bin/tsx src/main.ts
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
