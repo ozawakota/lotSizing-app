@@ -103,8 +103,6 @@ export default function AlertBell() {
         headerText="相場変動通知"
         buttons={[{ text: '閉じる', handler: () => setOpen(false) }]}
       >
-        {/* 本文に独自の overflow は付けず、Mobiscroll 本体(.mbsc-popup-content)に縦スクロールを任せる
-            （入れ子のスクロール領域は Mobiscroll のタッチ処理と競合してスクロールできなくなるため）。 */}
         <div className="p-4 min-w-[260px] space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -161,7 +159,7 @@ export default function AlertBell() {
             {shownHistory.length === 0 ? (
               <p className="text-[11px] text-gray-400">まだありません</p>
             ) : (
-              <ul className="space-y-1">
+              <ul className="max-h-48 space-y-1 overflow-y-auto">
                 {shownHistory.map((a) => (
                   <li key={a.id} className="rounded bg-gray-50 px-2 py-1">
                     <div className="flex items-baseline justify-between gap-2">
