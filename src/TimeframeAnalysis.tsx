@@ -182,11 +182,25 @@ const DIR_LABEL: Record<SlDirection, string> = { long: 'ロング', short: 'シ�
 const DIR_STYLE: Record<SlDirection, string> = { long: 'text-green-700', short: 'text-red-700' };
 
 // 上位TFスイングを目標にした RR 評価の1行（方向はトレンド、スプレッド込み）。狙える(qualifies)ときはオレンジ＋✓で強調。
+// 損切りラインの根拠（構造的損切り）。強さで色分け: 60以上=緑 / 40以上=アンバー / それ未満=グレー。
+function StopBasis({ rr }: { rr: RrSetup }) {
+  if (!rr.stopReasons?.length) return null;
+  const s = rr.stopStrength ?? 0;
+  const cls = s >= 60 ? 'text-green-700' : s >= 40 ? 'text-amber-600' : 'text-gray-500';
+  return (
+    <p className="mt-0.5 text-[10px] text-gray-500">
+      損切根拠: {rr.stopReasons.join('・')}
+      <span className={`ml-1 font-semibold ${cls}`}>強さ{s}</span>
+    </p>
+  );
+}
+
 function RrRow({ rr, digits }: { rr: RrSetup | null; digits: number }) {
   if (!rr) return <p className="mt-1 text-[10px] text-gray-400">RR{'　'}上位TF目標なし —</p>;
   const ok = rr.qualifies;
   return (
-    <div className="mt-1 flex items-center justify-between text-[11px]">
+    <div className="mt-1">
+    <div className="flex items-center justify-between text-[11px]">
       <span className="flex items-center gap-1">
         <span className="text-gray-500">RR</span>
         <span className={`font-semibold ${DIR_STYLE[rr.direction]}`}>{DIR_LABEL[rr.direction]}</span>
@@ -198,6 +212,8 @@ function RrRow({ rr, digits }: { rr: RrSetup | null; digits: number }) {
       <span className="text-[10px] text-gray-400">
         損切 {rr.stop.toFixed(digits)} / 目標 {rr.target.toFixed(digits)}
       </span>
+    </div>
+    <StopBasis rr={rr} />
     </div>
   );
 }
@@ -570,6 +586,7 @@ export default function TimeframeAnalysis() {
                   {result.rrOpportunity.stop.toFixed(digits)} (-{result.rrOpportunity.riskPips}pips)
                 </span>
               </div>
+              <StopBasis rr={result.rrOpportunity} />
               <div className="flex justify-between">
                 <span className="text-gray-500">目標</span>
                 <span className="font-mono text-green-600">

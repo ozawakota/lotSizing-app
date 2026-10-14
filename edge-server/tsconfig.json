@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "test", "../src/lib/edge.ts", "../src/lib/stoploss.ts"]
+  "include": ["src", "test", "backtest", "../src/lib/edge.ts", "../src/lib/stoploss.ts", "../src/lib/stopBacktest.ts"]
 }

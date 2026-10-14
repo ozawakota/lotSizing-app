@@ -297,10 +297,10 @@ const runRrDetection = async (env: Env): Promise<void> => {
     try {
       const symbol = SL_YAHOO_SYMBOL[inst];
       if (!symbol) continue;
-      const tfStructures: { tf: SlTimeframe; structure: SlStructure }[] = [];
+      const tfStructures: { tf: SlTimeframe; structure: SlStructure; candles: Candle[] }[] = [];
       for (const tf of RR_TFS) {
         const { candles, currentRate } = await fetchCandles(symbol, SL_YAHOO_INTERVAL[tf]);
-        tfStructures.push({ tf, structure: computeStructure(candles, currentRate) });
+        tfStructures.push({ tf, structure: computeStructure(candles, currentRate), candles }); // 損切りは構造的ライン
       }
       // 条件を満たしたTFを全件通知（最良1件に集約しない＝粒度を上げる）。
       // ペアごとの一般的なスプレッドをリスクに足しリワードから引いた、実質 RR で判定する。

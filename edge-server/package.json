@@ -4,10 +4,13 @@
   "version": "0.0.0",
   "type": "module",
   "description": "エッジ分析サーバー（Oracle Cloud 常駐）。Dukascopy の足でピンバー・包み足の優位性を集計して /edge で配信する",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "tsx src/main.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "backtest:stops": "tsx backtest/stops.ts"
   },
   "dependencies": {
     "dukascopy-node": "1.50.0",

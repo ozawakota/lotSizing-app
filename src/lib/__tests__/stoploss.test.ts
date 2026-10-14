@@ -16,6 +16,8 @@ import {
   scanStructuralRr,
   scanStructuralRrAll,
   trendToDirection,
+  averageTrueRange,
+  computeStructuralStop,
   scoreRoleReversal,
   type Candle,
   type SessionState,
@@ -442,5 +444,94 @@ describe('trendToDirection（TF分析ページと RR好機通知で共通の方�
     expect(trendToDirection('up')).toBe('long');
     expect(trendToDirection('down')).toBe('short');
     expect(trendToDirection('range')).toBeNull();
+  });
+});
+
+describe('averageTrueRange', () => {
+  it('前足終値とのギャップも値幅に含める', () => {
+    const c = (high: number, low: number, close: number): Candle => ({ high, low, close });
+    // 2本目: 高安0.1だが前足終値100→ギャップで高値100.5 → TR=0.5
+    expect(averageTrueRange([c(100.1, 99.9, 100), c(100.5, 100.4, 100.45)])).toBeCloseTo(0.5, 5);
+  });
+});
+
+describe('computeStructuralStop', () => {
+  // USD_JPY。ジグザグに上昇: 押し安値が 150.00 → 150.40 → 150.80 と切り上がる。各足の値幅は約0.1。
+  const leg = (from: number, to: number, n: number): Candle[] =>
+    Array.from({ length: n }, (_, i) => {
+      const close = from + ((to - from) * (i + 1)) / n;
+      return { high: close + 0.05, low: close - 0.05, close };
+    });
+  const up: Candle[] = [
+    ...leg(150.6, 150.0, 6), ...leg(150.0, 150.9, 9), // 押し安値 ≈149.95
+    ...leg(150.9, 150.4, 5), ...leg(150.4, 151.3, 9), // 押し安値 ≈150.35
+    ...leg(151.3, 150.8, 5), ...leg(150.8, 151.2, 4), // 押し安値 ≈150.75
+  ];
+  const forming: Candle = { high: 151.25, low: 140, close: 151.2 }; // 形成中の足（異常な安値は無視されるべき）
+  const entry = 151.2;
+
+  it('ロングは直近の押し安値（現在値に一番近いピボット安値）の下に置く', () => {
+    const plan = computeStructuralStop([...up, forming], 'long', entry, { instrument: 'USD_JPY' })!;
+    expect(plan.basis).toBe('pivot');
+    expect(plan.level).toBeCloseTo(150.75, 1);
+    expect(plan.reasons[0]).toBe('直近の押し安値');
+    // バッファ = ATR×0.25
+    expect(plan.price).toBeCloseTo(plan.level - plan.atr * 0.25, 6);
+    expect(plan.distancePips).toBeGreaterThan(0);
+  });
+
+  it('形成中の最終足は使わない（excludeLast 既定）', () => {
+    const plan = computeStructuralStop([...up, forming], 'long', entry, { instrument: 'USD_JPY' })!;
+    expect(plan.level).toBeGreaterThan(149); // 140 の異常値を拾わない
+  });
+
+  it('上位足のスイングと一致するラインは強さが上がり、根拠に出る', () => {
+    const base = computeStructuralStop([...up, forming], 'long', entry, { instrument: 'USD_JPY' })!;
+    const conf = computeStructuralStop([...up, forming], 'long', entry, {
+      instrument: 'USD_JPY',
+      higherLevels: [{ price: base.level, label: '1時間足の安値' }],
+    })!;
+    expect(conf.strength).toBeGreaterThan(base.strength);
+    expect(conf.reasons).toContain('1時間足の安値と一致');
+  });
+
+  it('近い押し安値より、距離1.5倍以内でかなり強いラインがあればそちらを採る', () => {
+    const near = computeStructuralStop([...up, forming], 'long', entry, { instrument: 'USD_JPY' })!;
+    // 1つ外側の押し安値（≈150.35）に上位足2本分の一致を付ける。近い方との距離比が1.5倍を超えるなら採られない。
+    const strong = computeStructuralStop([...up, forming], 'long', entry, {
+      instrument: 'USD_JPY',
+      higherLevels: [{ price: 150.35, label: '4時間足の安値' }],
+      extraLevels: [{ price: 150.35, label: '出来高節目' }, { price: 150.35, label: 'ロールリバーサルのライン' }],
+    })!;
+    const ratio = (entry - 150.35) / (entry - near.level);
+    if (ratio <= 1.5) expect(strong.level).toBeCloseTo(150.35, 1);
+    else expect(strong.level).toBeCloseTo(near.level, 6);
+  });
+
+  it('ショートは戻り高値の上に、バッファ＋スプレッドを足して置く', () => {
+    const down = up.map((c) => ({ high: 302 - c.low, low: 302 - c.high, close: 302 - c.close }));
+    const e = 302 - entry;
+    const noSpread = computeStructuralStop([...down, forming], 'short', e, { instrument: 'USD_JPY' })!;
+    const withSpread = computeStructuralStop([...down, forming], 'short', e, { instrument: 'USD_JPY', spreadPips: 1 })!;
+    expect(noSpread.reasons[0]).toBe('直近の戻り高値');
+    expect(noSpread.price).toBeGreaterThan(noSpread.level);
+    expect(withSpread.price - noSpread.price).toBeCloseTo(0.01, 6); // 1pip = 0.01円
+  });
+
+  it('範囲内にピボットが無ければ直近24本の極値で代用（basis=window）、それも無ければ null', () => {
+    const mono = leg(150.0, 151.0, 40); // 単調上昇＝ピボット安値なし
+    const plan = computeStructuralStop(mono, 'long', 151.0, { instrument: 'USD_JPY', excludeLast: false })!;
+    expect(plan.basis).toBe('window');
+    expect(computeStructuralStop(mono.slice(0, 5), 'long', 151.0, { instrument: 'USD_JPY' })).toBeNull();
+  });
+
+  it('assessRiskReward に渡すと旧方式の代わりに使われ、根拠と強さが RrSetup に入る', () => {
+    const plan = computeStructuralStop([...up, forming], 'long', entry, { instrument: 'USD_JPY' })!;
+    const structure: SlStructure = { trend: 'up', swingHigh: 151.35, swingLow: 150.75, currentRate: entry };
+    const rr = assessRiskReward(structure, 'long', 100, [{ swingHigh: 153, swingLow: 149 }], 'USD_JPY', 2.5, 0, 0, plan)!;
+    expect(rr.stop).toBeCloseTo(plan.price, 6);
+    expect(rr.riskPips).toBeCloseTo(plan.distancePips, 5);
+    expect(rr.stopReasons?.[0]).toBe('直近の押し安値');
+    expect(rr.stopStrength).toBe(plan.strength);
   });
 });

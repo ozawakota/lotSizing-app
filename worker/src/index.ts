@@ -44,6 +44,8 @@ import {
 } from '../../src/lib/signal';
 // 損切り提案のロジック/型もフロントと共有。
 import {
+  computeStructuralStop,
+  higherStopLevels,
   RR_MIN,
   RR_MIN_DIRECTION_PROB,
   trendToDirection,
@@ -1034,6 +1036,20 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
     if (!direction) return;
     const dirProb = t.breakout ? (direction === 'long' ? t.breakout.up : t.breakout.down) : 100;
     const higherSwings = timeframes.slice(i + 1).map((h) => ({ swingHigh: h.swingHigh, swingLow: h.swingLow }));
+    // 損切りは構造的ライン（ピボット＋ATR＋コンフルエンス）。上位足スイング・ロールリバーサル・出来高節目との一致を加点。
+    const extraLevels = [
+      ...(t.roleReversal ? [{ price: t.roleReversal.level, label: 'ロールリバーサルのライン' }] : []),
+      ...(t.volumeLevel != null ? [{ price: t.volumeLevel, label: '出来高節目' }] : []),
+    ];
+    const stop = computeStructuralStop(tfCandles[i], direction, currentRate, {
+      instrument,
+      spreadPips: typicalSpreadPips(instrument),
+      higherLevels: higherStopLevels(
+        timeframes.slice(i + 1).map((h) => ({ tf: h.tf, structure: h })),
+        direction,
+      ),
+      extraLevels,
+    });
     t.rr = assessRiskReward(
       structure,
       direction,
@@ -1043,6 +1059,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       RR_MIN,
       RR_MIN_DIRECTION_PROB,
       typicalSpreadPips(instrument),
+      stop,
     );
     if (t.rr?.qualifies && (!rrOpportunity || t.rr.rr > rrOpportunity.rr)) {
       rrOpportunity = { ...t.rr, tf: t.tf };
@@ -1176,7 +1193,7 @@ const buildPairSignals = async (instrument: string): Promise<TfSignal[]> => {
   // 構造的RR（短い足→長い足の順で全TF評価）。レンジTFは対象外。
   const rrByTf = new Map(
     scanStructuralRrAll(
-      perTf.map((p) => ({ tf: p.tf, structure: p.structure })),
+      perTf.map((p) => ({ tf: p.tf, structure: p.structure, candles: p.candles })), // 損切りは構造的ライン
       instrument,
       RANKING_MIN_RR,
     ).map((r) => [r.tf, r]),
