@@ -4,6 +4,8 @@ import {
   computeDelta,
   dominantByVolume,
   flowDirection,
+  instrumentToFlowPair,
+  retailBias,
   toPairFlow,
   updatePeak,
   type FlowPair,
@@ -109,5 +111,31 @@ describe('toPairFlow', () => {
     // 建玉数は買いが多い(60%)が、売りの方が大口で volume は売り優勢。
     const flow = toPairFlow('EUR/JPY', 60, 40, 500, 900);
     expect(flow.dominant).toBe('sell');
+  });
+});
+
+describe('retailBias（個人投資家の逆張りフィルタ）', () => {
+  it('逆向きに偏っていれば supports（ロングで個人の売り72%）', () => {
+    expect(retailBias({ longPct: 28, shortPct: 72 }, 'long')).toEqual({ sameSidePct: 28, verdict: 'supports' });
+    expect(retailBias({ longPct: 66, shortPct: 34 }, 'short')).toEqual({ sameSidePct: 34, verdict: 'supports' });
+  });
+
+  it('同じ向きに65%以上偏っていれば against（群集と同方向）', () => {
+    expect(retailBias({ longPct: 65, shortPct: 35 }, 'long').verdict).toBe('against');
+    expect(retailBias({ longPct: 20, shortPct: 80 }, 'short').verdict).toBe('against');
+  });
+
+  it('偏りが小さければ neutral', () => {
+    expect(retailBias({ longPct: 50, shortPct: 50 }, 'long').verdict).toBe('neutral');
+    expect(retailBias({ longPct: 41, shortPct: 59 }, 'long').verdict).toBe('neutral'); // 逆向き59% は支持未満
+    expect(retailBias({ longPct: 64, shortPct: 36 }, 'long').verdict).toBe('neutral'); // 同じ向き64% は群集未満
+  });
+});
+
+describe('instrumentToFlowPair', () => {
+  it("'USD_JPY' → 'USD/JPY'、対象外は null", () => {
+    expect(instrumentToFlowPair('USD_JPY')).toBe('USD/JPY');
+    expect(instrumentToFlowPair('XAU_USD')).toBe('XAU/USD');
+    expect(instrumentToFlowPair('USD_CHF')).toBeNull();
   });
 });

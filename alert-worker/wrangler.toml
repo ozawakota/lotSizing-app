@@ -32,3 +32,10 @@ VAPID_PUBLIC_KEY = "BDMQvoZB44nljNEEXuR3OAB-cvo6jhjTZVO0C8XAn3MtRkM8M7tv4KAeHAz1
 # secret（`wrangler secret put <NAME>` で登録。ここには書かない）:
 #   VAPID_PRIVATE_KEY … VAPID 秘密鍵（base64url, 32バイト d 値）
 # 価格ソースはキーレスのため OANDA 等の API トークン/口座は不要。
+
+# RR好機通知の逆張りフィルタ用: currency-strength Worker の /flow（Myfxbook 個人投資家の建玉）を
+# Service Binding で呼ぶ（同一アカウントの workers.dev 間の通常 fetch は拒否されるため）。
+# 未設定・取得失敗なら建玉フィルタなしで通知する。
+[[services]]
+binding = "STRENGTH"
+service = "currency-strength"

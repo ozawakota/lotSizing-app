@@ -30,12 +30,15 @@ import {
   type SlStructure,
   type SlTimeframe,
 } from '../../src/lib/stoploss';
+// 個人投資家（Myfxbook）建玉の偏りによる逆張りフィルタ（RR好機通知）。判定はフロントと共有。
+import { instrumentToFlowPair, retailBias, type FlowSnapshot, type PairFlow, type RetailBias } from '../../src/lib/flow';
 
 interface Env {
   DB: D1Database;
   VAPID_PUBLIC_KEY: string; // var（base64url, 65バイト非圧縮点）
   VAPID_PRIVATE_KEY: string; // secret（base64url, 32バイト d 値）
   VAPID_SUBJECT: string; // var（例 mailto:you@example.com）
+  STRENGTH?: Fetcher; // Service Binding（currency-strength Worker。/flow の建玉を取る。未設定なら建玉フィルタなし）
 }
 
 const RECENT_WINDOW_MS = 15 * 60 * 1000; // /recent が返す直近アラートの範囲（push 配信遅延を吸収）
@@ -179,6 +182,9 @@ const runDetection = async (env: Env): Promise<void> => {
 // RR≥1:2.5 構造的好機の検知（Jev不使用・完全無料）。Yahoo足だけで構造的RRを評価し、
 // 好機があれば価格アラートと同じ基盤で Push する。15分ごと・クールダウン2時間。
 // 粒度: 各ペアで条件を満たした時間足を「TFごとに全件」通知する（最良1件への集約はしない）。
+// 個人投資家の建玉（Myfxbook, /flow）を逆張り指標として加味する:
+//   同じ向きに 65% 以上偏っている setup は見送り、逆向きに 60% 以上偏っていれば「逆張り支持」と本文に付記。
+//   建玉が取れないときは従来どおり通知する（フィルタは補助なので通知を止めない）。
 // ---------------------------------------------------------------------------
 const RR_INSTRUMENTS = ['XAU_USD', 'USD_JPY', 'EUR_USD', 'GBP_USD'];
 const RR_TFS: SlTimeframe[] = ['15m', '30m', '1h', '4h'];
@@ -221,6 +227,24 @@ const fetchCandles = async (symbol: string, interval: string): Promise<{ candles
   return { candles, currentRate };
 };
 
+// currency-strength Worker の /flow（毎時更新の KV キャッシュ）から個人投資家の建玉を取得。失敗は null。
+// 同一アカウントの workers.dev 間の通常 fetch は Cloudflare に拒否される（error 1042）ため Service Binding 経由で呼ぶ。
+const fetchRetailFlow = async (env: Env): Promise<Map<string, PairFlow> | null> => {
+  if (!env.STRENGTH) return null;
+  try {
+    const res = await env.STRENGTH.fetch('https://currency-strength/flow'); // ホスト名は任意（binding 先に直接届く）
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const snap = (await res.json()) as Partial<FlowSnapshot>;
+    if (!Array.isArray(snap.pairs)) throw new Error('pairs なし');
+    return new Map(snap.pairs.map((p) => [p.pair, p]));
+  } catch (e) {
+    console.error('RR検知: 建玉(/flow)取得失敗（フィルタなしで続行）:', e);
+    return null;
+  }
+};
+
+const RETAIL_LABEL: Record<RetailBias['verdict'], string> = { supports: '逆張り支持', neutral: '偏りなし', against: '群集と同方向' };
+
 const runRrDetection = async (env: Env): Promise<void> => {
   const now = Date.now();
   // 15分ゲート（毎分 scheduled されても走査は15分に1回）。
@@ -229,6 +253,8 @@ const runRrDetection = async (env: Env): Promise<void> => {
   await setMeta(env, 'rr_last_run', String(now));
 
   let anyTriggered = false;
+  // 建玉は setup が見つかったときだけ1回取得する（毎回の無駄な取得を避ける）。
+  let flow: Map<string, PairFlow> | null | undefined;
   for (const inst of RR_INSTRUMENTS) {
     try {
       const symbol = SL_YAHOO_SYMBOL[inst];
@@ -247,9 +273,20 @@ const runRrDetection = async (env: Env): Promise<void> => {
         const cdUntil = Number((await getMeta(env, cdKey)) ?? '0');
         if (now < cdUntil) continue;
 
+        // 個人投資家の建玉が同じ向きに偏っていれば見送る（クールダウンは付けず、次回走査で再評価）。
+        if (flow === undefined) flow = await fetchRetailFlow(env);
+        const fp = instrumentToFlowPair(inst);
+        const pf = fp && flow ? flow.get(fp) : undefined;
+        const bias = pf ? retailBias(pf, setup.direction) : null;
+        if (bias?.verdict === 'against') {
+          console.log(`RR検知: ${inst} ${setup.tf} ${setup.direction} は個人建玉が同方向${bias.sameSidePct}%のため見送り`);
+          continue;
+        }
+
         const dirJa = setup.direction === 'long' ? 'ロング' : 'ショート';
         const title = `${disp} RR好機 1:${setup.rr.toFixed(1)}`;
-        const body = `${RR_TF_LABEL[setup.tf]} ${dirJa}／リスク${setup.riskPips}pips・リワード${setup.rewardPips}pips が狙えます`;
+        const retail = pf && bias ? `／個人 買い${Math.round(pf.longPct)}%・売り${Math.round(pf.shortPct)}%（${RETAIL_LABEL[bias.verdict]}）` : '';
+        const body = `${RR_TF_LABEL[setup.tf]} ${dirJa}／リスク${setup.riskPips}pips・リワード${setup.rewardPips}pips が狙えます${retail}`;
         // pair 欄に "RR:" を付け、価格アラート(tag=pair)と別タグにして通知が衝突しないようにする。
         await env.DB.prepare('INSERT INTO alerts (pair, title, body, created_at) VALUES (?, ?, ?, ?)')
           .bind(`RR:${disp}`, title, body, now)
