@@ -4,6 +4,7 @@
 // 行はドラッグ&ドロップで並び替え可能（@dnd-kit）。順序は localStorage に保存し、
 // ページ遷移・リロード後も維持する。クライアントはKVキャッシュを読むだけ。
 import { FC, useCallback, useEffect, useMemo, useState } from 'react';
+import VolumeIndicators from './VolumeIndicators';
 import { AlertTriangle, ChevronRight, GripVertical, Info, Minus, TrendingDown, TrendingUp, type LucideIcon } from 'lucide-react';
 import {
   DndContext,
@@ -309,6 +310,8 @@ const OrderFlow: FC = () => {
 
   return (
     <div className="px-3 pb-6">
+      {/* 4時間足の出来高インジケーター（全ペア一覧・CME 先物） */}
+      <VolumeIndicators />
       <div className="mb-3 flex items-center justify-end gap-2">
         <button
           type="button"

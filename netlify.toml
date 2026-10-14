@@ -7,6 +7,8 @@
   VITE_STRENGTH_URL = "https://currency-strength.ozawa19890413.workers.dev"
   # 取引量・センチメント ページ（同じ Worker の /flow パス）
   VITE_FLOW_URL = "https://currency-strength.ozawa19890413.workers.dev/flow"
+  # 4時間足の出来高インジケーター（同じ Worker の /volume パス。未設定なら /flow から導出）
+  VITE_VOLUME_URL = "https://currency-strength.ozawa19890413.workers.dev/volume"
   # 為替ニュース要約＋売買シグナル（同じ Worker の /news パス）
   VITE_NEWS_URL = "https://currency-strength.ozawa19890413.workers.dev/news"
   # AIbot（アプリデータ連携チャット・同じ Worker の /chat パス）

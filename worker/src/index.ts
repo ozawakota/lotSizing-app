@@ -31,6 +31,8 @@ import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
 import { latestPatternInWindow, PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
 // TF分析カードのローソク足パターン読み（質・場所・確定/否定）。フロントと共有。
+// 4時間足の出来高インジケーター(/volume)。フロントと共有。
+import { VOLUME_SOURCES, computeVolumeIndicators, type PairVolume, type VolumeSnapshot } from '../../src/lib/volume';
 import {
   PATTERN_WINDOW_BARS,
   applyPatternToRr,
@@ -1307,6 +1309,51 @@ const handleRanking = async (env: Env): Promise<Response> => {
   }
 };
 
+// ---- 4時間足の出来高インジケーター(/volume): CME 先物の出来高から RVOL・増減トレンド・OBV の向き ----
+// 表示されたときだけ作り直す（30分 TTL の KV キャッシュ。Cron は使わない＝KV 書き込みは閲覧時のみ）。
+const KV_VOLUME = 'volume';
+const VOLUME_TTL_MS = 30 * 60 * 1000;
+
+const buildVolume = async (): Promise<VolumeSnapshot> => {
+  const pairs: PairVolume[] = [];
+  for (const { instrument, symbol, invert } of VOLUME_SOURCES) {
+    if (!symbol) {
+      pairs.push({ instrument, source: null, indicators: null }); // クロス円は単独の先物が無い
+      continue;
+    }
+    try {
+      const { candles } = await fetchYahooCandles(symbol, YAHOO_INTERVAL['4h']);
+      pairs.push({ instrument, source: symbol, indicators: computeVolumeIndicators(candles.slice(0, -1), invert) }); // 形成中の足は除外
+    } catch (e) {
+      console.error(`/volume ${instrument} 取得失敗:`, e);
+      pairs.push({ instrument, source: symbol, indicators: null });
+    }
+  }
+  return { timeframe: '4h', pairs, generatedAt: Date.now() };
+};
+
+const handleVolume = async (env: Env): Promise<Response> => {
+  const cached = await env.STRENGTH_KV.get(KV_VOLUME);
+  if (cached) {
+    try {
+      if (Date.now() - (JSON.parse(cached) as VolumeSnapshot).generatedAt < VOLUME_TTL_MS) {
+        return new Response(cached, { headers: CORS_HEADERS });
+      }
+    } catch {
+      // 作り直す
+    }
+  }
+  try {
+    const snap = await buildVolume();
+    if (snap.pairs.some((p) => p.indicators)) await env.STRENGTH_KV.put(KV_VOLUME, JSON.stringify(snap));
+    return new Response(JSON.stringify(snap), { headers: CORS_HEADERS });
+  } catch (e) {
+    console.error('/volume 失敗:', e);
+    if (cached) return new Response(cached, { headers: CORS_HEADERS });
+    return new Response(JSON.stringify({ error: 'データ取得に失敗しました。少し待って再試行してください' }), { headers: CORS_HEADERS });
+  }
+};
+
 export default {
   // Cron: event.cron でジョブを出し分け。失敗時は前回値を保持。
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -1341,7 +1388,7 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     // CORS プリフライト。
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
-    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、/mtf=TF分析、他=通貨強弱。
+    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、/mtf=TF分析、/ranking=ランキング、/volume=4h出来高、他=通貨強弱。
     const reqUrl = new URL(req.url);
     const pathname = reqUrl.pathname;
     if (pathname === '/flow') return handleFlow(env);
@@ -1349,6 +1396,7 @@ export default {
     if (pathname === '/stoploss') return handleStopLoss(env, reqUrl);
     if (pathname === '/mtf') return handleMtf(env, reqUrl);
     if (pathname === '/ranking') return handleRanking(env);
+    if (pathname === '/volume') return handleVolume(env);
 
     let intradayRaw = await env.STRENGTH_KV.get(KV_INTRADAY);
     let dailyRaw = await env.STRENGTH_KV.get(KV_DAILY);
