@@ -326,6 +326,7 @@ export interface RoleReversal {
   score: number; // 0–100
   state: RoleReversalState; // 未ブレイク / ブレイク直後 / リテスト中 / 転換確認
   side: 'resistance' | 'support'; // 評価したライン（上抜け=resistance / 下抜け=support）
+  level: number; // 評価したラインの価格（ブレイク済み=抜けたピボット / 未ブレイク=スイング高値・安値）
 }
 
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
@@ -487,7 +488,7 @@ export function scoreRoleReversal(
   const wsum = parts.reduce((a, p) => a + p.w, 0);
   const score = Math.round((100 * parts.reduce((a, p) => a + p.w * p.v, 0)) / wsum);
 
-  return { score, state, side };
+  return { score, state, side, level };
 }
 
 // ---------------------------------------------------------------------------

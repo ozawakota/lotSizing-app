@@ -78,6 +78,10 @@ async function toSpotBasis(body: MtfResult): Promise<MtfResult> {
       swingLow: t.swingLow - off,
       rr: t.rr ? shiftRr(t.rr) : null,
       volumeLevel: t.volumeLevel == null ? null : t.volumeLevel - off,
+      roleReversal:
+        t.roleReversal && typeof t.roleReversal.level === 'number'
+          ? { ...t.roleReversal, level: t.roleReversal.level - off }
+          : t.roleReversal,
     })),
     rrOpportunity: body.rrOpportunity ? shiftRr(body.rrOpportunity) : null,
   };
@@ -205,8 +209,22 @@ const RR_STATE_LABEL: Record<RoleReversal['state'], string> = {
   retest: 'リテスト中',
   confirmed: '転換確認',
 };
-function RoleReversalRow({ rr }: { rr: RoleReversal }) {
+// ロールリバーサルの評価ライン。価格と現在値からの距離（上=+ / 下=−）を表示する。
+// level は旧キャッシュ（価格を持たない応答）では欠けるので、その場合は行ごと省く。
+function RoleReversalRow({
+  rr,
+  instrument,
+  currentRate,
+  digits,
+}: {
+  rr: RoleReversal;
+  instrument: string;
+  currentRate: number;
+  digits: number;
+}) {
   const up = rr.side === 'resistance'; // レジ上抜け＝強気（緑）/ サポ下抜け＝弱気（赤）
+  const hasLevel = typeof rr.level === 'number' && Number.isFinite(rr.level);
+  const distPips = hasLevel ? (rr.level - currentRate) / pipSize(instrument) : 0;
   return (
     <div className="mt-2">
       <div className="flex items-center justify-between text-[11px]">
@@ -220,6 +238,18 @@ function RoleReversalRow({ rr }: { rr: RoleReversal }) {
       <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-gray-100">
         <div className={up ? 'bg-green-500' : 'bg-red-500'} style={{ width: `${rr.score}%`, height: '100%' }} />
       </div>
+      {hasLevel && (
+        <div className="mt-1 flex items-center justify-between text-[11px]">
+          <span className="text-gray-500">ライン</span>
+          <span className="tabular-nums">
+            <span className="font-semibold text-gray-800">{rr.level.toFixed(digits)}</span>
+            <span className="ml-1.5 text-gray-400">
+              {distPips >= 0 ? '+' : '−'}
+              {Math.abs(distPips).toFixed(1)}pips
+            </span>
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -355,7 +385,9 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
       {/* ブレイク確率バー ＋ RR ＋ ロールリバーサル信用度 */}
       <BreakoutRow breakout={tf.breakout} />
       <RrRow rr={tf.rr} digits={digits} />
-      {tf.roleReversal && <RoleReversalRow rr={tf.roleReversal} />}
+      {tf.roleReversal && (
+        <RoleReversalRow rr={tf.roleReversal} instrument={instrument} currentRate={currentRate} digits={digits} />
+      )}
 
       {/* 直近のローソク足パターン（ピンバー/包み足）。Jev のシグナル判定にも反映済み */}
       {tf.candlePattern && (
