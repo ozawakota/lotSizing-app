@@ -29,7 +29,9 @@ import {
 // /news の為替ニュース＋売買シグナルのロジック/型もフロントと共有。
 import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type NewsItem } from '../../src/lib/news';
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
-import { latestPatternInWindow, PATTERN_LABEL, type OhlcCandle } from '../../src/lib/edge';
+import { latestPatternInWindow, PATTERN_DIRECTION, PATTERN_LABEL, type OhlcCandle } from '../../src/lib/edge';
+// 通貨優位性ランキングのスコア計算（純粋関数）をフロントと共有。
+import { buildRanking, RANKING_MIN_RR, RANKING_PAIRS, RANKING_TIMEFRAMES, type RankingSnapshot, type TfSignal } from '../../src/lib/ranking';
 import {
   SIGNAL_PAIRS,
   buildJevRequest,
@@ -60,6 +62,7 @@ import {
   futuresLevelToSpot,
   computeStochastic,
   scoreRoleReversal,
+  scanStructuralRrAll,
   VOLUME_SYMBOL,
   type BreakoutProb,
   type RoleReversal,
@@ -1134,6 +1137,102 @@ const handleMtf = async (env: Env, url: URL): Promise<Response> => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// /ranking: 通貨優位性ランキング（AI非依存・cron で KV キャッシュ）
+// ---------------------------------------------------------------------------
+const KV_RANKING = 'ranking';
+const RANKING_TTL_MS = 30 * 60 * 1000; // 30分（cron 間隔と一致）
+
+// 1ペアの TF別シグナルを純粋関数から算出（AI 呼び出しなし）。方向はトレンド構造とローソク足で決める。
+const buildPairSignals = async (instrument: string): Promise<TfSignal[]> => {
+  const symbol = YAHOO_SYMBOL[instrument];
+  // 1パス目: 各TFの足・構造・ローソク足パターン方向を取得（RR/ロールリバーサルは上位TFが要るため後段）。
+  const perTf: { tf: SlTimeframe; candles: Candle[]; structure: SlStructure; paDir: -1 | 0 | 1 }[] = [];
+  for (const tf of RANKING_TIMEFRAMES) {
+    const { candles, currentRate } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf]);
+    const structure = computeStructure(candles, currentRate);
+    const ohlc: OhlcCandle[] = candles
+      .filter((c) => typeof c.open === 'number')
+      .map((c) => ({ open: c.open as number, high: c.high, low: c.low, close: c.close, t: c.t }));
+    const rp = latestPatternInWindow(ohlc.slice(0, -1), PA_WINDOW_BARS[tf]);
+    perTf.push({ tf, candles, structure, paDir: rp ? PATTERN_DIRECTION[rp.key] : 0 });
+  }
+  // 構造的RR（短い足→長い足の順で全TF評価）。レンジTFは対象外。
+  const rrByTf = new Map(
+    scanStructuralRrAll(
+      perTf.map((p) => ({ tf: p.tf, structure: p.structure })),
+      instrument,
+      RANKING_MIN_RR,
+    ).map((r) => [r.tf, r]),
+  );
+  // 2パス目: ロールリバーサル（上位TFスイングをコンフルエンス材料に）＋シグナル組み立て。
+  return perTf.map((p, i) => {
+    const higherLevels = perTf.slice(i + 1).flatMap((h) => [h.structure.swingHigh, h.structure.swingLow]);
+    const rrv = scoreRoleReversal(p.candles, p.structure, {
+      instrument,
+      breakout: null, // AI非依存（side は trend / 近接で決定）
+      stoch: computeStochastic(p.candles),
+      volumeLevel: null,
+      higherLevels,
+    });
+    const rr = rrByTf.get(p.tf);
+    return {
+      tf: p.tf,
+      trend: p.structure.trend,
+      paDir: p.paDir,
+      rrDir: rr ? (rr.direction === 'long' ? 1 : -1) : 0,
+      rr: rr ? rr.rr : null,
+      rrvScore: rrv ? rrv.score : null,
+      rrvSide: rrv ? rrv.side : null,
+    };
+  });
+};
+
+// 全ペアを集計してランキングを作る。ペア単位で失敗しても他ペアで続行する。
+const buildRankingSnapshot = async (): Promise<RankingSnapshot> => {
+  const signals: Record<string, TfSignal[]> = {};
+  const failed: string[] = [];
+  for (const instrument of RANKING_PAIRS) {
+    try {
+      signals[instrument] = await buildPairSignals(instrument);
+    } catch (e) {
+      console.error(`/ranking ${instrument} 失敗:`, e);
+      failed.push(instrument);
+    }
+  }
+  return buildRanking(signals, failed);
+};
+
+// cron 用: ランキングを算出して KV に保存する。
+const updateRanking = async (env: Env): Promise<RankingSnapshot> => {
+  const snap = await buildRankingSnapshot();
+  await env.STRENGTH_KV.put(KV_RANKING, JSON.stringify(snap));
+  return snap;
+};
+
+// クライアント向け: KV のランキングを返す。TTL 切れ/無ければ初回のみ算出。
+const handleRanking = async (env: Env): Promise<Response> => {
+  const cached = await env.STRENGTH_KV.get(KV_RANKING);
+  if (cached) {
+    try {
+      const p = JSON.parse(cached) as RankingSnapshot;
+      if (Date.now() - p.generatedAt < RANKING_TTL_MS) return new Response(cached, { headers: CORS_HEADERS });
+    } catch {
+      // 作り直す
+    }
+  }
+  try {
+    const snap = await updateRanking(env);
+    return new Response(JSON.stringify(snap), { headers: CORS_HEADERS });
+  } catch (e) {
+    console.error('/ranking 失敗:', e);
+    if (cached) return new Response(cached, { headers: CORS_HEADERS });
+    return new Response(JSON.stringify({ error: 'データ取得に失敗しました。少し待って再試行してください' }), {
+      headers: CORS_HEADERS,
+    });
+  }
+};
+
 export default {
   // Cron: event.cron でジョブを出し分け。失敗時は前回値を保持。
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -1148,6 +1247,9 @@ export default {
           await updateFlow(e);
           await refreshCotIfStale(e);
         };
+        break;
+      case '*/30 * * * *':
+        job = updateRanking; // 通貨優位性ランキング（AI非依存・30分ごと）
         break;
       default:
         job = updateIntraday; // '0 */2 * * *' 15分足（4時間前/当日）2時間ごと
@@ -1172,6 +1274,7 @@ export default {
     if (pathname === '/news') return handleNews(env);
     if (pathname === '/stoploss') return handleStopLoss(env, reqUrl);
     if (pathname === '/mtf') return handleMtf(env, reqUrl);
+    if (pathname === '/ranking') return handleRanking(env);
 
     let intradayRaw = await env.STRENGTH_KV.get(KV_INTRADAY);
     let dailyRaw = await env.STRENGTH_KV.get(KV_DAILY);
