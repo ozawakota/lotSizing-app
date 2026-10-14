@@ -103,7 +103,11 @@ export default function AlertBell() {
         headerText="相場変動通知"
         buttons={[{ text: '閉じる', handler: () => setOpen(false) }]}
       >
-        <div className="p-4 min-w-[260px] space-y-3">
+        {/* ポップアップ本文全体を1つのスクロール領域にする（Mobiscroll内でのネストスクロール不可を回避）。 */}
+        <div
+          className="p-4 min-w-[260px] space-y-3 max-h-[75vh] overflow-y-auto overscroll-contain"
+          style={{ WebkitOverflowScrolling: 'touch' }}
+        >
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-bold text-gray-700">相場変動通知</p>
@@ -159,7 +163,7 @@ export default function AlertBell() {
             {shownHistory.length === 0 ? (
               <p className="text-[11px] text-gray-400">まだありません</p>
             ) : (
-              <ul className="max-h-48 space-y-1 overflow-y-auto">
+              <ul className="space-y-1">
                 {shownHistory.map((a) => (
                   <li key={a.id} className="rounded bg-gray-50 px-2 py-1">
                     <div className="flex items-baseline justify-between gap-2">
