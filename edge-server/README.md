@@ -86,6 +86,7 @@ TF分析・RR好機通知・通貨ランキングの損切りは、`src/lib/stop
 cd edge-server && npm install
 npm run backtest:stops            # 4ペア × 15m/30m/1h で新旧比較
 npm run backtest:stops -- --sweep # 構造的損切りのバッファ×最小距離の組み合わせも比較
+npm run backtest:stops -- --csv data.csv --pair EUR_USD --tf 1h  # 手元の CSV（MT5 のエクスポート等）で検証
 ```
 
 各確定足でトレンド方向にエントリーし、目標＝リスクの RR_MIN 倍として「損切り / 目標 / 期限切れ」を数える

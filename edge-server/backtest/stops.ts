@@ -1,8 +1,11 @@
 // 損切りラインの新旧比較を Dukascopy の実データで実行する。
 //   cd edge-server && npm install && npx tsx backtest/stops.ts            # 既定（RR好機通知の4ペア×15m/30m/1h）
 //   npx tsx backtest/stops.ts --sweep                                     # 構造的損切りのバッファ×最小距離も比較
+//   npx tsx backtest/stops.ts --csv data.csv --pair EUR_USD --tf 1h [--sweep]
+//     # 手元の CSV（ヘッダー1行＋「日時,Open,High,Low,Close[,...]」, MT5 のエクスポート等）で検証
 // 結果は表で表示（期待値R・損切り率・目標到達率・刈られ率・平均損切り幅）。
 // ※過去データでの検証結果であり、将来の成績を保証しない。
+import { readFileSync } from 'node:fs';
 import { getHistoricalRates } from 'dukascopy-node';
 import { backtestStops, type BacktestStats } from '../../src/lib/stopBacktest';
 import { RR_MIN, typicalSpreadPips, type Candle, type SlTimeframe } from '../../src/lib/stoploss';
@@ -49,22 +52,48 @@ const row = (pair: string, tf: string, label: string, s: BacktestStats) => ({
   '平均幅pips': s.avgRiskPips,
 });
 
+// CSV（ヘッダー1行、2〜5列目が Open,High,Low,Close）を読む。区切りはカンマ/タブ。
+function loadCsv(path: string): Candle[] {
+  return readFileSync(path, 'utf8')
+    .trim()
+    .split(/\r?\n/)
+    .slice(1)
+    .map((l) => l.split(/[,\t]/))
+    .map((c) => ({ open: +c[1], high: +c[2], low: +c[3], close: +c[4] }))
+    .filter((c) => [c.open, c.high, c.low, c.close].every(Number.isFinite));
+}
+
+const arg = (name: string) => {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? process.argv[i + 1] : undefined;
+};
+
 async function main() {
   const sweep = process.argv.includes('--sweep');
+  const csv = arg('--csv');
   const rows: ReturnType<typeof row>[] = [];
-  for (const pair of PAIRS) {
-    for (const { tf, duka, days } of TFS) {
-      process.stderr.write(`取得中 ${pair} ${tf} (${days}日)…\n`);
-      const candles = await load(pair, duka, days);
-      const base = { instrument: pair, rewardR: RR_MIN, spreadPips: typicalSpreadPips(pair) };
-      const r = backtestStops(candles, base);
-      rows.push(row(pair, tf, '旧: 24本の極値', r.legacy), row(pair, tf, '新: 構造的', r.structural));
-      if (sweep) {
-        for (const b of SWEEP_BUFFERS) {
-          for (const d of SWEEP_MIN_DIST) {
-            const s = backtestStops(candles, { ...base, stopOptions: { bufferAtr: b, minDistAtr: d } }).structural;
-            rows.push(row(pair, tf, `新: バッファ${b}・最小距離${d}ATR`, s));
-          }
+  const jobs: { pair: string; tf: string; load: () => Promise<Candle[]> }[] = csv
+    ? [{ pair: arg('--pair') ?? 'EUR_USD', tf: arg('--tf') ?? '1h', load: async () => loadCsv(csv) }]
+    : PAIRS.flatMap((pair) =>
+        TFS.map(({ tf, duka, days }) => ({
+          pair,
+          tf,
+          load: () => {
+            process.stderr.write(`取得中 ${pair} ${tf} (${days}日)…\n`);
+            return load(pair, duka, days);
+          },
+        })),
+      );
+  for (const { pair, tf, load: loadCandles } of jobs) {
+    const candles = await loadCandles();
+    const base = { instrument: pair, rewardR: RR_MIN, spreadPips: typicalSpreadPips(pair) };
+    const r = backtestStops(candles, base);
+    rows.push(row(pair, tf, '旧: 24本の極値', r.legacy), row(pair, tf, '新: 構造的', r.structural));
+    if (sweep) {
+      for (const b of SWEEP_BUFFERS) {
+        for (const d of SWEEP_MIN_DIST) {
+          const s = backtestStops(candles, { ...base, stopOptions: { bufferAtr: b, minDistAtr: d } }).structural;
+          rows.push(row(pair, tf, `新: バッファ${b}・最小距離${d}ATR`, s));
         }
       }
     }
