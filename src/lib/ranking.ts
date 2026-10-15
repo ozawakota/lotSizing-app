@@ -36,7 +36,7 @@ export interface RrCard {
   spreadPips: number;
   confidence: number | null; // 0–100。取得不可は null
   confidenceSource: ConfidenceSource | null;
-  entrySignal: EntrySignal | null; // 押し目/戻り/打診/反転警戒（MA+ストキャス+PA）。評価不能は null
+  entrySignal: EntrySignal | null; // 押し目/戻り/様子見/反転警戒（MA+ストキャス+PA）。評価不能は null
 }
 
 export interface RrBoardSnapshot {

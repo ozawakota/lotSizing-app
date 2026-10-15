@@ -41,7 +41,7 @@ describe('classifyEntry', () => {
     expect(r.kind).toBe('caution');
   });
 
-  it('買い: 押していない（SMA21より上）＋中立ストキャス → 打診', () => {
+  it('買い: 押していない（SMA21より上）＋中立ストキャス → 様子見', () => {
     const r = classifyEntry({ closes: upCloses, price: 120, direction: 'long', stoch: { k: 50, d: 50 }, patternDir: 0 });
     expect(r.kind).toBe('tentative');
   });

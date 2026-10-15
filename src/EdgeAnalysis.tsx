@@ -11,7 +11,7 @@ import type { SlTimeframe } from '@/lib/stoploss';
 const RANKING_URL = import.meta.env.VITE_RANKING_URL as string | undefined;
 
 const TF_LABEL: Record<SlTimeframe, string> = { '15m': '15分', '30m': '30分', '1h': '1時間', '4h': '4時間' };
-// エントリータイミングのバッジ（押し目/戻り=緑・打診=黄・反転警戒=アンバー）。
+// エントリータイミングのバッジ（押し目/戻り=緑・様子見=黄・反転警戒=アンバー）。
 const ENTRY_STYLE: Record<EntryKind, { cls: string; icon: string }> = {
   pullback: { cls: 'bg-green-100 text-green-700', icon: '🟢' },
   tentative: { cls: 'bg-yellow-50 text-yellow-700', icon: '🟡' },
@@ -155,7 +155,7 @@ export default function EdgeAnalysis() {
           <p className="text-[10px] leading-relaxed text-gray-400">
             構造的RR（ピボット＋ATR＋上位TF目標、スプレッド込みの実質RR）が1:2.5以上の好機を、
             信用度（AI＝Jevのブレイク方向確率／構造＝ロールリバーサル）＋エントリータイミングの実効スコア順に表示。
-            タイミングは 🟢押し目/戻り・🟡打診・⚠反転警戒（移動平均SMA21/EMA75/EMA200＋ストキャス＋プライスアクション）。
+            タイミングは 🟢押し目/戻り・🟡様子見・⚠反転警戒（移動平均SMA21/EMA75/EMA200＋ストキャス＋プライスアクション）。
             対象は{RANKING_TIMEFRAMES.map((t) => TF_LABEL[t]).join('/')}。データは Yahoo Finance。
             {data.generatedAt
               ? ` ${new Date(data.generatedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })} 更新。`

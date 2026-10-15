@@ -6,10 +6,10 @@ import type { SlDirection } from './stoploss';
 export type EntryKind = 'pullback' | 'tentative' | 'caution';
 export interface EntrySignal {
   kind: EntryKind;
-  label: string; // 押し目 / 戻り / 打診 / 反転警戒
+  label: string; // 押し目 / 戻り / 様子見 / 反転警戒
 }
 
-// 並び順への反映: 押し目/戻り は加点、反転警戒は減点、打診は中立。
+// 並び順への反映: 押し目/戻り は加点、反転警戒は減点、様子見は中立。
 export const ENTRY_DELTA: Record<EntryKind, number> = { pullback: 12, tentative: 0, caution: -18 };
 
 // 単純移動平均（本数不足は null）。
@@ -74,5 +74,5 @@ export function classifyEntry(opts: {
   if (trendOk && pullbackZone && (stoch == null || turningWith) && !opposite) {
     return { kind: 'pullback', label: long ? '押し目' : '戻り' };
   }
-  return { kind: 'tentative', label: '打診' };
+  return { kind: 'tentative', label: '様子見' };
 }

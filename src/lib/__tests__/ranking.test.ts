@@ -52,11 +52,11 @@ describe('sortCards', () => {
   });
 
   it('エントリータイミングが実効スコアに反映される（押し目は加点・反転警戒は減点）', () => {
-    // 素の信用度は同じ60でも、押し目(+12)>打診(0)>反転警戒(-18) の順になる。
+    // 素の信用度は同じ60でも、押し目(+12)>様子見(0)>反転警戒(-18) の順になる。
     const out = sortCards([
       card({ confidence: 60, entrySignal: { kind: 'caution', label: '反転警戒' } }),
       card({ confidence: 60, entrySignal: { kind: 'pullback', label: '押し目' } }),
-      card({ confidence: 60, entrySignal: { kind: 'tentative', label: '打診' } }),
+      card({ confidence: 60, entrySignal: { kind: 'tentative', label: '様子見' } }),
     ]);
     expect(out.map((c) => c.entrySignal?.kind)).toEqual(['pullback', 'tentative', 'caution']);
   });
