@@ -29,7 +29,7 @@ import {
 // /news の為替ニュース＋売買シグナルのロジック/型もフロントと共有。
 import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type NewsItem } from '../../src/lib/news';
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
-import { latestPatternInWindow, PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
+import { type OhlcCandle } from '../../src/lib/edge';
 // TF分析カードのローソク足パターン読み（質・場所・確定/否定）。フロントと共有。
 // 4時間足の出来高インジケーター(/volume)。フロントと共有。
 import {
@@ -51,8 +51,8 @@ import {
   readCandlePatterns,
   type PatternRead,
 } from '../../src/lib/candleRead';
-// 通貨優位性ランキングのスコア計算（純粋関数）をフロントと共有。
-import { buildRanking, RANKING_MIN_RR, RANKING_PAIRS, RANKING_TIMEFRAMES, type RankingSnapshot, type TfSignal } from '../../src/lib/ranking';
+// RR好機ボード（エッジページ）の型・整形をフロントと共有。
+import { RANKING_PAIRS, RANKING_TIMEFRAMES, sortCards, type RrBoardSnapshot, type RrCard } from '../../src/lib/ranking';
 import {
   SIGNAL_PAIRS,
   buildJevRequest,
@@ -962,9 +962,6 @@ interface MtfPayload {
   generatedAt: number;
 }
 
-// ローソク足パターン(ピンバー/包み足)を探す直近ウィンドウの本数。15m/30m/1h=直近2日、4h=直近2週。
-const PA_WINDOW_BARS: Record<SlTimeframe, number> = { '15m': 192, '30m': 96, '1h': 48, '4h': 84 };
-
 // 各TFの出来高アンカー: 参照する過去時点と前後の窓（ミリ秒）。30m/1h=2日前±12h, 4h=2週前±2日。
 const DAY_MS = 86_400_000;
 const VOLUME_ANCHOR: Record<SlTimeframe, { agoMs: number; windowMs: number }> = {
@@ -1236,97 +1233,166 @@ const handleMtf = async (env: Env, url: URL): Promise<Response> => {
 // ---------------------------------------------------------------------------
 // /ranking: 通貨優位性ランキング（AI非依存・cron で KV キャッシュ）
 // ---------------------------------------------------------------------------
+// RR好機ボード（エッジページ）。各ペア×TF で構造RR(≥RR_MIN)が成立した好機を1カードにする。
+// 信用度は Jev のブレイク方向確率。Jev が使用上限/失敗なら一定時間 Jev を止め、roleReversal(純粋)で代替。
+// 1リクエスト50サブリクエスト上限を超えないよう、cron でペアをローテーション構築して KV に蓄積する。
 const KV_RANKING = 'ranking';
-const RANKING_TTL_MS = 30 * 60 * 1000; // 30分（cron 間隔と一致）
+const RANKING_GROUP_SIZE = 4; // 1 tick で構築するペア数（4ペア×4TF=16取得 + 好機のみ Jev ≤ 32 サブリクエスト）
+const RANKING_TICK_MS = 5 * 60 * 1000; // cron 間隔（ローテーションの単位）
+const RANKING_JEV_COOLDOWN_MS = 30 * 60 * 1000; // Jev 使用上限/失敗時に Jev を止める時間
 
-// 1ペアの TF別シグナルを純粋関数から算出（AI 呼び出しなし）。方向はトレンド構造とローソク足で決める。
-const buildPairSignals = async (instrument: string): Promise<TfSignal[]> => {
+interface RankingKv {
+  pairs: Record<string, RrCard[]>; // instrument -> 好機カード
+  perPairAt: Record<string, number>; // instrument -> 最終構築時刻
+  jevCooldownUntil: number; // この時刻まで Jev を使わない（0=制限なし）
+  failed: string[];
+}
+
+// Jev にブレイク確率だけを問う（classifyPa と違い Workers AI にはフォールバックしない）。
+// 非200/失敗/キー無しは limited=true を返し、呼び出し側で一定時間 Jev を止める（＝使用上限対応）。
+const jevBreakout = async (
+  env: Env,
+  structure: SlStructure,
+  recentCloses: number[],
+  ctx: PaContext,
+): Promise<{ breakout: BreakoutProb | null; limited: boolean }> => {
+  if (!env.TYPESAFE_API_KEY) return { breakout: null, limited: true };
+  try {
+    const body = { model: 'jev-latest', ...buildPaJevRequest(structure, recentCloses, ctx) };
+    const res = await fetch(JEV_ENDPOINT, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.TYPESAFE_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      console.error(`/ranking Jev HTTP ${res.status}（以降 Jev を一時停止）: ${(await res.text()).slice(0, 120)}`);
+      return { breakout: null, limited: true };
+    }
+    const data = (await res.json()) as {
+      answers?: Record<string, { choice?: string; probabilities?: Record<string, number>; confidence?: number }>;
+    };
+    return { breakout: parseBreakoutJev(data.answers), limited: false };
+  } catch (e) {
+    console.error('/ranking Jev 失敗（以降 Jev を一時停止）:', e);
+    return { breakout: null, limited: true };
+  }
+};
+
+// 1ペアの好機カードを作る。構造RR成立TFのみ。信用度は Jev→無理なら roleReversal(0–100)。
+// jevState.paused が true の間は Jev を呼ばない。Jev が上限/失敗したら paused=true にして以降止める。
+const buildPairCards = async (env: Env, instrument: string, jevState: { paused: boolean }): Promise<RrCard[]> => {
   const symbol = YAHOO_SYMBOL[instrument];
-  // 1パス目: 各TFの足・構造・ローソク足パターン方向を取得（RR/ロールリバーサルは上位TFが要るため後段）。
-  const perTf: { tf: SlTimeframe; candles: Candle[]; structure: SlStructure; paDir: -1 | 0 | 1 }[] = [];
+  const perTf: { tf: SlTimeframe; candles: Candle[]; structure: SlStructure; recentCloses: number[]; stoch: StochReading | null }[] = [];
   for (const tf of RANKING_TIMEFRAMES) {
     const { candles, currentRate } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf]);
-    const structure = computeStructure(candles, currentRate);
-    const ohlc: OhlcCandle[] = candles
-      .filter((c) => typeof c.open === 'number')
-      .map((c) => ({ open: c.open as number, high: c.high, low: c.low, close: c.close, t: c.t }));
-    const rp = latestPatternInWindow(ohlc.slice(0, -1), PA_WINDOW_BARS[tf]);
-    perTf.push({ tf, candles, structure, paDir: rp ? PATTERN_DIRECTION[rp.key] : 0 });
-  }
-  // 構造的RR（短い足→長い足の順で全TF評価）。レンジTFは対象外。
-  const rrByTf = new Map(
-    scanStructuralRrAll(
-      perTf.map((p) => ({ tf: p.tf, structure: p.structure, candles: p.candles })), // 損切りは構造的ライン
-      instrument,
-      RANKING_MIN_RR,
-    ).map((r) => [r.tf, r]),
-  );
-  // 2パス目: ロールリバーサル（上位TFスイングをコンフルエンス材料に）＋シグナル組み立て。
-  return perTf.map((p, i) => {
-    const higherLevels = perTf.slice(i + 1).flatMap((h) => [h.structure.swingHigh, h.structure.swingLow]);
-    const rrv = scoreRoleReversal(p.candles, p.structure, {
-      instrument,
-      breakout: null, // AI非依存（side は trend / 近接で決定）
-      stoch: computeStochastic(p.candles),
-      volumeLevel: null,
-      higherLevels,
+    perTf.push({
+      tf,
+      candles,
+      structure: computeStructure(candles, currentRate),
+      recentCloses: candles.slice(-12).map((c) => c.close),
+      stoch: computeStochastic(candles),
     });
-    const rr = rrByTf.get(p.tf);
-    return {
-      tf: p.tf,
-      trend: p.structure.trend,
-      paDir: p.paDir,
-      rrDir: rr ? (rr.direction === 'long' ? 1 : -1) : 0,
-      rr: rr ? rr.rr : null,
-      rrvScore: rrv ? rrv.score : null,
-      rrvSide: rrv ? rrv.side : null,
-    };
-  });
+  }
+  // 構造的RR（短い足→長い足・スプレッド込みの実質RR）。レンジTFは対象外。
+  const setups = scanStructuralRrAll(
+    perTf.map((p) => ({ tf: p.tf, structure: p.structure, candles: p.candles })),
+    instrument,
+    RR_MIN,
+    typicalSpreadPips(instrument),
+  );
+  const cards: RrCard[] = [];
+  for (const setup of setups) {
+    const i = perTf.findIndex((p) => p.tf === setup.tf);
+    const p = perTf[i];
+    let confidence: number | null = null;
+    let confidenceSource: 'jev' | 'structure' | null = null;
+    // 信用度: まず Jev のブレイク方向確率。Jev 停止中/失敗なら構造(roleReversal)で代替。
+    if (!jevState.paused) {
+      const { breakout, limited } = await jevBreakout(env, p.structure, p.recentCloses, { stoch: p.stoch });
+      if (limited) jevState.paused = true;
+      else if (breakout) {
+        confidence = Math.round(setup.direction === 'long' ? breakout.up : breakout.down);
+        confidenceSource = 'jev';
+      }
+    }
+    if (confidence == null) {
+      const higherLevels = perTf.slice(i + 1).flatMap((h) => [h.structure.swingHigh, h.structure.swingLow]);
+      const rrv = scoreRoleReversal(p.candles, p.structure, { instrument, breakout: null, stoch: p.stoch, volumeLevel: null, higherLevels });
+      if (rrv) {
+        confidence = rrv.score;
+        confidenceSource = 'structure';
+      }
+    }
+    cards.push({
+      instrument,
+      tf: setup.tf,
+      direction: setup.direction,
+      entry: setup.entry,
+      stop: setup.stop,
+      target: setup.target,
+      rr: setup.rr,
+      riskPips: setup.riskPips,
+      rewardPips: setup.rewardPips,
+      spreadPips: setup.spreadPips,
+      confidence,
+      confidenceSource,
+    });
+  }
+  return cards;
 };
 
-// 全ペアを集計してランキングを作る。ペア単位で失敗しても他ペアで続行する。
-const buildRankingSnapshot = async (): Promise<RankingSnapshot> => {
-  const signals: Record<string, TfSignal[]> = {};
-  const failed: string[] = [];
-  for (const instrument of RANKING_PAIRS) {
+// cron 用: ローテーションで RANKING_GROUP_SIZE ペアずつ構築し、KV にマージする（他ペアは保持）。
+const updateRankingGroup = async (env: Env): Promise<void> => {
+  const raw = await env.STRENGTH_KV.get(KV_RANKING);
+  const kv: RankingKv = raw ? (JSON.parse(raw) as RankingKv) : { pairs: {}, perPairAt: {}, jevCooldownUntil: 0, failed: [] };
+  const now = Date.now();
+  const groups = Math.ceil(RANKING_PAIRS.length / RANKING_GROUP_SIZE);
+  const groupIdx = Math.floor(now / RANKING_TICK_MS) % groups;
+  const group = RANKING_PAIRS.slice(groupIdx * RANKING_GROUP_SIZE, groupIdx * RANKING_GROUP_SIZE + RANKING_GROUP_SIZE);
+  const wasCooling = now < kv.jevCooldownUntil;
+  const jevState = { paused: wasCooling };
+  const failed = new Set(kv.failed ?? []);
+  for (const instrument of group) {
     try {
-      signals[instrument] = await buildPairSignals(instrument);
+      kv.pairs[instrument] = await buildPairCards(env, instrument, jevState);
+      kv.perPairAt[instrument] = now;
+      failed.delete(instrument);
     } catch (e) {
       console.error(`/ranking ${instrument} 失敗:`, e);
-      failed.push(instrument);
+      failed.add(instrument);
     }
   }
-  return buildRanking(signals, failed);
+  // この回に新たに Jev 上限/失敗を踏んだら（冷却中でなかったのに停止したら）冷却を開始する。
+  if (jevState.paused && !wasCooling) kv.jevCooldownUntil = now + RANKING_JEV_COOLDOWN_MS;
+  kv.failed = [...failed];
+  await env.STRENGTH_KV.put(KV_RANKING, JSON.stringify(kv));
 };
 
-// cron 用: ランキングを算出して KV に保存する。
-const updateRanking = async (env: Env): Promise<RankingSnapshot> => {
-  const snap = await buildRankingSnapshot();
-  await env.STRENGTH_KV.put(KV_RANKING, JSON.stringify(snap));
-  return snap;
-};
-
-// クライアント向け: KV のランキングを返す。TTL 切れ/無ければ初回のみ算出。
+// クライアント向け: KV の全ペアのカードを集約して返す。未構築なら現グループだけ lazy 構築。
 const handleRanking = async (env: Env): Promise<Response> => {
-  const cached = await env.STRENGTH_KV.get(KV_RANKING);
-  if (cached) {
+  let raw = await env.STRENGTH_KV.get(KV_RANKING);
+  if (!raw) {
     try {
-      const p = JSON.parse(cached) as RankingSnapshot;
-      if (Date.now() - p.generatedAt < RANKING_TTL_MS) return new Response(cached, { headers: CORS_HEADERS });
-    } catch {
-      // 作り直す
+      await updateRankingGroup(env);
+      raw = await env.STRENGTH_KV.get(KV_RANKING);
+    } catch (e) {
+      console.error('/ranking lazy 構築 失敗:', e);
     }
   }
-  try {
-    const snap = await updateRanking(env);
-    return new Response(JSON.stringify(snap), { headers: CORS_HEADERS });
-  } catch (e) {
-    console.error('/ranking 失敗:', e);
-    if (cached) return new Response(cached, { headers: CORS_HEADERS });
-    return new Response(JSON.stringify({ error: 'データ取得に失敗しました。少し待って再試行してください' }), {
-      headers: CORS_HEADERS,
-    });
+  const now = Date.now();
+  if (!raw) {
+    const empty: RrBoardSnapshot = { cards: [], jevPaused: false, failed: [], generatedAt: now };
+    return new Response(JSON.stringify(empty), { headers: CORS_HEADERS });
   }
+  const kv = JSON.parse(raw) as RankingKv;
+  const times = Object.values(kv.perPairAt ?? {});
+  const snap: RrBoardSnapshot = {
+    cards: sortCards(Object.values(kv.pairs ?? {}).flat()),
+    jevPaused: now < (kv.jevCooldownUntil ?? 0),
+    failed: kv.failed ?? [],
+    generatedAt: times.length ? Math.max(...times) : now,
+  };
+  return new Response(JSON.stringify(snap), { headers: CORS_HEADERS });
 };
 
 // ---- 4時間足の出来高インジケーター(/volume): CME 先物の出来高から RVOL・増減トレンド・OBV の向き ----
@@ -1405,8 +1471,8 @@ export default {
           await refreshCotIfStale(e);
         };
         break;
-      case '*/30 * * * *':
-        job = updateRanking; // 通貨優位性ランキング（AI非依存・30分ごと）
+      case '*/5 * * * *':
+        job = updateRankingGroup; // RR好機ボード（ペアをローテーション構築・5分ごと）
         break;
       default:
         job = updateIntraday; // '0 */2 * * *' 15分足（4時間前/当日）2時間ごと

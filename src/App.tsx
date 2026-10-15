@@ -14,7 +14,7 @@ import OrderFlow from './OrderFlow'; // 取引量・センチメント ページ
 import FundManager from './FundManager'; // 資金管理（トレードジャーナル）ページ
 import NewsSummary from './NewsSummary'; // 為替ニュース要約＋売買シグナル ページ
 import TimeframeAnalysis from './TimeframeAnalysis'; // タイムフレーム分析（レジサポ統合）ページ
-import EdgeAnalysis from './EdgeAnalysis'; // 通貨ランキング（RR・ロールリバーサル・PA を合成した通貨別優位性）ページ
+import EdgeAnalysis from './EdgeAnalysis'; // RR好機ボード（ペア×TFのRR好機を Jev信用度つきでカード表示）ページ
 import AlertToast from './AlertToast'; // 相場変動の in-app トースト通知
 // 各ページのタイトル（共通ヘッダーに表示）。
 const VIEW_TITLES: Record<AppView, string> = {
@@ -23,7 +23,7 @@ const VIEW_TITLES: Record<AppView, string> = {
   fund: '資金管理',
   news: '為替ニュース',
   mtf: 'タイムフレーム分析',
-  edge: '通貨ランキング',
+  edge: 'RR好機ボード',
 };
 // リロードしても現在のページを保持する（localStorage）。不正値はロット計算にフォールバック。
 const VIEW_STORAGE_KEY = 'app_view';
