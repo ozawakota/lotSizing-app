@@ -3,6 +3,7 @@
 // 信用度は Jev のブレイク方向確率。取得できない/使用上限のときは roleReversal の構造信用度で代替。
 // 並び順は信用度→RR の降順。※投資助言ではない参考情報。
 import type { SlTimeframe, SlDirection } from './stoploss';
+import { ENTRY_DELTA, type EntrySignal } from './entrySignal';
 
 export const RANKING_TIMEFRAMES: SlTimeframe[] = ['15m', '30m', '1h', '4h'];
 
@@ -35,6 +36,7 @@ export interface RrCard {
   spreadPips: number;
   confidence: number | null; // 0–100。取得不可は null
   confidenceSource: ConfidenceSource | null;
+  entrySignal: EntrySignal | null; // 押し目/戻り/打診/反転警戒（MA+ストキャス+PA）。評価不能は null
 }
 
 export interface RrBoardSnapshot {
@@ -44,12 +46,17 @@ export interface RrBoardSnapshot {
   generatedAt: number;
 }
 
-// 信用度の高い順（null は最後）、同率は RR の高い順。
+// 実効スコア = 信用度 + エントリータイミング補正（押し目/戻り加点・反転警戒減点）。
+export function effectiveScore(c: RrCard): number {
+  return (c.confidence ?? -1) + (c.entrySignal ? ENTRY_DELTA[c.entrySignal.kind] : 0);
+}
+
+// 実効スコアの高い順、同率は RR の高い順。
 export function sortCards(cards: RrCard[]): RrCard[] {
   return [...cards].sort((a, b) => {
-    const ca = a.confidence ?? -1;
-    const cb = b.confidence ?? -1;
-    if (cb !== ca) return cb - ca;
+    const ea = effectiveScore(a);
+    const eb = effectiveScore(b);
+    if (eb !== ea) return eb - ea;
     return b.rr - a.rr;
   });
 }

@@ -5,11 +5,18 @@
 // ※投資助言ではなく、値動きや利益を保証するものではない参考情報。
 import { useEffect, useState } from 'react';
 import { RANKING_TIMEFRAMES, type RrBoardSnapshot, type RrCard } from '@/lib/ranking';
+import type { EntryKind } from '@/lib/entrySignal';
 import type { SlTimeframe } from '@/lib/stoploss';
 
 const RANKING_URL = import.meta.env.VITE_RANKING_URL as string | undefined;
 
 const TF_LABEL: Record<SlTimeframe, string> = { '15m': '15分', '30m': '30分', '1h': '1時間', '4h': '4時間' };
+// エントリータイミングのバッジ（押し目/戻り=緑・打診=黄・反転警戒=アンバー）。
+const ENTRY_STYLE: Record<EntryKind, { cls: string; icon: string }> = {
+  pullback: { cls: 'bg-green-100 text-green-700', icon: '🟢' },
+  tentative: { cls: 'bg-yellow-50 text-yellow-700', icon: '🟡' },
+  caution: { cls: 'bg-amber-100 text-amber-800', icon: '⚠' },
+};
 const pairLabel = (ins: string) => ins.replace('_', '/');
 const digitsFor = (ins: string) => (ins.startsWith('XAU') ? 2 : ins.endsWith('JPY') ? 3 : 5);
 const SOURCE_LABEL = { jev: 'AI', structure: '構造' } as const;
@@ -34,6 +41,14 @@ function OpportunityCard({ card }: { card: RrCard }) {
         </span>
         <span className="text-xs font-bold text-gray-700">RR 1:{card.rr.toFixed(1)}</span>
       </div>
+      {card.entrySignal && (
+        <div className="mt-1">
+          <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${ENTRY_STYLE[card.entrySignal.kind].cls}`}>
+            {ENTRY_STYLE[card.entrySignal.kind].icon}
+            {card.entrySignal.label}
+          </span>
+        </div>
+      )}
       <div className="mt-1">
         {conf == null ? (
           <span className="text-[10px] text-gray-400">信用度 —</span>
@@ -139,7 +154,8 @@ export default function EdgeAnalysis() {
           )}
           <p className="text-[10px] leading-relaxed text-gray-400">
             構造的RR（ピボット＋ATR＋上位TF目標、スプレッド込みの実質RR）が1:2.5以上の好機を、
-            信用度（AI＝Jevのブレイク方向確率／構造＝ロールリバーサル）の高い順に表示。
+            信用度（AI＝Jevのブレイク方向確率／構造＝ロールリバーサル）＋エントリータイミングの実効スコア順に表示。
+            タイミングは 🟢押し目/戻り・🟡打診・⚠反転警戒（移動平均SMA21/EMA75/EMA200＋ストキャス＋プライスアクション）。
             対象は{RANKING_TIMEFRAMES.map((t) => TF_LABEL[t]).join('/')}。データは Yahoo Finance。
             {data.generatedAt
               ? ` ${new Date(data.generatedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })} 更新。`

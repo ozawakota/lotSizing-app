@@ -29,7 +29,9 @@ import {
 // /news の為替ニュース＋売買シグナルのロジック/型もフロントと共有。
 import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type NewsItem } from '../../src/lib/news';
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
-import { type OhlcCandle } from '../../src/lib/edge';
+import { PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
+// エントリーサイン（押し目/戻り/反転警戒）の純粋ロジック。
+import { classifyEntry } from '../../src/lib/entrySignal';
 // TF分析カードのローソク足パターン読み（質・場所・確定/否定）。フロントと共有。
 // 4時間足の出来高インジケーター(/volume)。フロントと共有。
 import {
@@ -773,10 +775,10 @@ interface YahooChart {
   };
 }
 
-const fetchYahooCandles = async (symbol: string, interval: string): Promise<{ candles: Candle[]; currentRate: number }> => {
+const fetchYahooCandles = async (symbol: string, interval: string, range = '1mo'): Promise<{ candles: Candle[]; currentRate: number }> => {
   const url =
     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
-    `?interval=${encodeURIComponent(interval)}&range=1mo`;
+    `?interval=${encodeURIComponent(interval)}&range=${encodeURIComponent(range)}`;
   const res = await fetch(url, { headers: { 'User-Agent': NEWS_UA } });
   if (!res.ok) throw new Error(`Yahoo HTTP ${res.status}`);
   const r = ((await res.json()) as YahooChart).chart?.result?.[0];
@@ -1282,12 +1284,26 @@ const jevBreakout = async (
 // jevState.paused が true の間は Jev を呼ばない。Jev が上限/失敗したら paused=true にして以降止める。
 const buildPairCards = async (env: Env, instrument: string, jevState: { paused: boolean }): Promise<RrCard[]> => {
   const symbol = YAHOO_SYMBOL[instrument];
-  const perTf: { tf: SlTimeframe; candles: Candle[]; structure: SlStructure; recentCloses: number[]; stoch: StochReading | null }[] = [];
+  const perTf: {
+    tf: SlTimeframe;
+    candles: Candle[];
+    ohlc: OhlcCandle[];
+    price: number;
+    structure: SlStructure;
+    recentCloses: number[];
+    stoch: StochReading | null;
+  }[] = [];
   for (const tf of RANKING_TIMEFRAMES) {
-    const { candles, currentRate } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf]);
+    // 4h は EMA200 に 200 本必要なため取得レンジを延ばす（取得回数は不変）。
+    const { candles, currentRate } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf], tf === '4h' ? '3mo' : '1mo');
+    const ohlc: OhlcCandle[] = candles
+      .filter((c) => typeof c.open === 'number')
+      .map((c) => ({ open: c.open as number, high: c.high, low: c.low, close: c.close, t: c.t }));
     perTf.push({
       tf,
       candles,
+      ohlc,
+      price: currentRate,
       structure: computeStructure(candles, currentRate),
       recentCloses: candles.slice(-12).map((c) => c.close),
       stoch: computeStochastic(candles),
@@ -1323,6 +1339,19 @@ const buildPairCards = async (env: Env, instrument: string, jevState: { paused: 
         confidenceSource = 'structure';
       }
     }
+    // エントリータイミング（押し目/戻り/反転警戒）。MA(SMA21/EMA75/EMA200)+ストキャス+有効パターンで判定。
+    const levels = perTf.slice(i + 1).flatMap((h) => [
+      { price: h.structure.swingHigh, label: `${h.tf}の高値` },
+      { price: h.structure.swingLow, label: `${h.tf}の安値` },
+    ]);
+    const valid = pickValidPattern(readCandlePatterns(p.ohlc, { instrument, windowBars: PATTERN_WINDOW_BARS[setup.tf], levels }));
+    const entrySignal = classifyEntry({
+      closes: p.candles.map((c) => c.close),
+      price: p.price,
+      direction: setup.direction,
+      stoch: p.stoch,
+      patternDir: valid ? PATTERN_DIRECTION[valid.key] : 0,
+    });
     cards.push({
       instrument,
       tf: setup.tf,
@@ -1336,6 +1365,7 @@ const buildPairCards = async (env: Env, instrument: string, jevState: { paused: 
       spreadPips: setup.spreadPips,
       confidence,
       confidenceSource,
+      entrySignal,
     });
   }
   return cards;

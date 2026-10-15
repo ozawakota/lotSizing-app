@@ -14,6 +14,7 @@ const card = (over: Partial<RrCard> = {}): RrCard => ({
   spreadPips: 0.3,
   confidence: 60,
   confidenceSource: 'jev',
+  entrySignal: null,
   ...over,
 });
 
@@ -48,5 +49,23 @@ describe('sortCards', () => {
     const input = [card({ confidence: 10 }), card({ confidence: 90 })];
     sortCards(input);
     expect(input.map((c) => c.confidence)).toEqual([10, 90]);
+  });
+
+  it('エントリータイミングが実効スコアに反映される（押し目は加点・反転警戒は減点）', () => {
+    // 素の信用度は同じ60でも、押し目(+12)>打診(0)>反転警戒(-18) の順になる。
+    const out = sortCards([
+      card({ confidence: 60, entrySignal: { kind: 'caution', label: '反転警戒' } }),
+      card({ confidence: 60, entrySignal: { kind: 'pullback', label: '押し目' } }),
+      card({ confidence: 60, entrySignal: { kind: 'tentative', label: '打診' } }),
+    ]);
+    expect(out.map((c) => c.entrySignal?.kind)).toEqual(['pullback', 'tentative', 'caution']);
+  });
+
+  it('反転警戒の減点で、信用度が低い押し目が上位に来ることがある', () => {
+    const out = sortCards([
+      card({ confidence: 70, entrySignal: { kind: 'caution', label: '反転警戒' } }), // 70-18=52
+      card({ confidence: 55, entrySignal: { kind: 'pullback', label: '押し目' } }), // 55+12=67
+    ]);
+    expect(out[0].confidence).toBe(55);
   });
 });
