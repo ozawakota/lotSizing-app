@@ -35,6 +35,8 @@ import {
 } from '../../src/lib/stoploss';
 // 個人投資家（Myfxbook）建玉の偏りによる逆張りフィルタ（RR好機通知）。判定はフロントと共有。
 import { instrumentToFlowPair, retailBias, type FlowSnapshot, type PairFlow, type RetailBias } from '../../src/lib/flow';
+// 出来高フィルタ（RR好機通知）。CME先物の出来高から参加度/ダイバージェンスを判定。計算はフロントと共有。
+import { computeVolumeIndicators, RVOL_LABEL, VOLUME_SOURCES } from '../../src/lib/volume';
 
 interface Env {
   DB: D1Database;
@@ -197,6 +199,11 @@ const RR_SCAN_INTERVAL_MS = 15 * 60 * 1000; // 走査間隔（毎分 scheduled �
 const RR_COOLDOWN_MS = 2 * 60 * 60 * 1000; // 同「ペア＋TF＋方向」の再通知休止
 const RR_DISPLAY: Record<string, string> = { XAU_USD: 'XAU/USD', USD_JPY: 'USD/JPY', EUR_USD: 'EUR/USD', GBP_USD: 'GBP/USD' };
 const RR_TF_LABEL: Record<SlTimeframe, string> = { '15m': '15分足', '30m': '30分足', '1h': '1時間足', '4h': '4時間足' };
+// 出来高の取得元（CME先物。XAU は GC=F、6J=F はスポットの逆数クォートなので invert）。
+// FXスポット(=X)には出来高が無いため、setup が出たペア/TF のときだけ先物足を引いて判定する。
+const RR_VOLUME_SYMBOL: Record<string, { symbol: string; invert: boolean }> = Object.fromEntries(
+  VOLUME_SOURCES.filter((s) => s.symbol).map((s) => [s.instrument, { symbol: s.symbol as string, invert: s.invert }]),
+);
 
 // Yahoo chart から OHLC ロウソク足＋現在値を取得（キーレス）。
 const fetchCandles = async (symbol: string, interval: string): Promise<{ candles: Candle[]; currentRate: number }> => {
@@ -331,10 +338,32 @@ const runRrDetection = async (env: Env): Promise<void> => {
           continue;
         }
 
+        // 出来高フィルタ: setup の TF の先物出来高が「少ない(rvol=low)」または価格とOBVのダイバージェンス
+        // なら、動きの裏付けが弱いとみなして見送る。取得不可・対象外（クロス円等）はフィルタなしで続行。
+        let volNote = '';
+        const vsym = RR_VOLUME_SYMBOL[inst];
+        if (vsym) {
+          try {
+            const { candles: fc } = await fetchCandles(vsym.symbol, SL_YAHOO_INTERVAL[setup.tf]);
+            const vi = computeVolumeIndicators(fc.slice(0, -1), vsym.invert); // 形成中の足は除外
+            if (vi) {
+              if (vi.rvolLevel === 'low' || vi.divergence) {
+                console.log(
+                  `RR検知: ${inst} ${setup.tf} ${setup.direction} は出来高が弱い(rvol=${vi.rvolLevel}/divergence=${vi.divergence})ため見送り`,
+                );
+                continue;
+              }
+              volNote = `／出来高${RVOL_LABEL[vi.rvolLevel]}(rvol${vi.rvol.toFixed(1)})`;
+            }
+          } catch (e) {
+            console.error(`RR検知: ${inst} ${setup.tf} 出来高取得失敗（出来高フィルタなしで続行）:`, e);
+          }
+        }
+
         const dirJa = setup.direction === 'long' ? 'ロング' : 'ショート';
         const title = `${disp} RR好機 1:${setup.rr.toFixed(1)}`;
         const retail = pf && bias ? `／個人 買い${Math.round(pf.longPct)}%・売り${Math.round(pf.shortPct)}%（${RETAIL_LABEL[bias.verdict]}）` : '';
-        const body = `${RR_TF_LABEL[setup.tf]} ${dirJa}／リスク${setup.riskPips}pips・リワード${setup.rewardPips}pips が狙えます（スプレッド${setup.spreadPips}pips込み）${retail}${unconfirmed}`;
+        const body = `${RR_TF_LABEL[setup.tf]} ${dirJa}／リスク${setup.riskPips}pips・リワード${setup.rewardPips}pips が狙えます（スプレッド${setup.spreadPips}pips込み）${retail}${volNote}${unconfirmed}`;
         // pair 欄に "RR:" を付け、価格アラート(tag=pair)と別タグにして通知が衝突しないようにする。
         await env.DB.prepare('INSERT INTO alerts (pair, title, body, created_at) VALUES (?, ?, ?, ?)')
           .bind(`RR:${disp}`, title, body, now)
