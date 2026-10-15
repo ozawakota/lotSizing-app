@@ -29,7 +29,28 @@ import {
 // /news の為替ニュース＋売買シグナルのロジック/型もフロントと共有。
 import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type NewsItem } from '../../src/lib/news';
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
-import { latestPatternInWindow, PATTERN_DIRECTION, PATTERN_LABEL, type OhlcCandle } from '../../src/lib/edge';
+import { latestPatternInWindow, PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
+// TF分析カードのローソク足パターン読み（質・場所・確定/否定）。フロントと共有。
+// 4時間足の出来高インジケーター(/volume)。フロントと共有。
+import {
+  VOLUME_SOURCES,
+  computeVolumeIndicators,
+  computeVolumeProfile,
+  mapProfile,
+  profileLevels,
+  type PairVolume,
+  type VolumeProfile,
+  type VolumeSnapshot,
+} from '../../src/lib/volume';
+import { fetchGoldSpot } from '../../src/lib/goldSpot';
+import {
+  PATTERN_WINDOW_BARS,
+  applyPatternToRr,
+  patternDetail,
+  pickValidPattern,
+  readCandlePatterns,
+  type PatternRead,
+} from '../../src/lib/candleRead';
 // 通貨優位性ランキングのスコア計算（純粋関数）をフロントと共有。
 import { buildRanking, RANKING_MIN_RR, RANKING_PAIRS, RANKING_TIMEFRAMES, type RankingSnapshot, type TfSignal } from '../../src/lib/ranking';
 import {
@@ -44,6 +65,12 @@ import {
 } from '../../src/lib/signal';
 // 損切り提案のロジック/型もフロントと共有。
 import {
+  computeStructuralStop,
+  higherStopLevels,
+  RR_MIN,
+  RR_MIN_DIRECTION_PROB,
+  trendToDirection,
+  typicalSpreadPips,
   SL_TIMEFRAMES,
   YAHOO_INTERVAL,
   YAHOO_SYMBOL,
@@ -920,7 +947,8 @@ interface MtfTf {
   volumeLevel: number | null; // 過去の高出来高の節目価格（30m/1h=2日前・4h=2週前付近。出来高無し=null）
   stoch: StochReading | null; // ストキャスティクス(%K/%D)。足から自前計算（算出不可は null）
   roleReversal: RoleReversal | null; // ロールリバーサル・ブレイク信用度（0–100・状態・側）。評価不能は null
-  candlePattern: { key: string; label: string; barsAgo: number } | null; // 直近ウィンドウのローソク足パターン(ピンバー/包み足)
+  candlePattern: { key: string; label: string; barsAgo: number } | null; // 直近ウィンドウのローソク足パターン(ピンバー/包み足)。Jev の判定材料
+  candlePatterns: PatternRead[]; // カード表示用: 足ごとの期間内のパターン（新しい順・最大3件、質・場所・確定/否定つき）
 }
 interface MtfPayload {
   instrument: string;
@@ -955,6 +983,16 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
   const sessionStatus = sessionStatusText(new Date()); // 東京/ロンドン/NY の開閉を各TF判定に反映
   const now = Date.now();
   const tfCandles: Candle[][] = []; // ロールリバーサル評価用に各TFの足を保持（index は timeframes と対応）
+  const tfOhlc: OhlcCandle[][] = []; // パターン読み用の確定足（OHLC。index は timeframes と対応）
+  let volProfile: VolumeProfile | null = null; // 1時間足の価格帯別出来高（現物の目盛り）。損切り・パターンの場所判定に使う
+  // 1パス目で集める各TFの材料（パターンの読みは全TFの構造がそろってから）。
+  const prep: {
+    tf: SlTimeframe;
+    structure: SlStructure;
+    recentCloses: number[];
+    volumeLevel: number | null;
+    stoch: StochReading | null;
+  }[] = [];
   for (const tf of MTF_TIMEFRAMES) {
     const { candles, currentRate: cr } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf]);
     currentRate = cr;
@@ -973,24 +1011,51 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
         const fut = await fetchYahooCandles(vSym, YAHOO_INTERVAL[tf]);
         const futLevel = volumeAnchoredLevel(fut.candles, now, agoMs, windowMs);
         if (futLevel != null) volumeLevel = futuresLevelToSpot(futLevel, fut.currentRate, cr, invert);
+        // 1時間足の先物から価格帯別出来高（出来高由来のレジサポ）を求め、現物の目盛りに換算して保持。
+        if (tf === '1h') {
+          const p = computeVolumeProfile(fut.candles.slice(0, -1));
+          if (p) volProfile = mapProfile(p, (x) => futuresLevelToSpot(x, fut.currentRate, cr, invert));
+        }
       } catch (e) {
         console.error(`/mtf 出来高(先物)取得 失敗 ${instrument} ${tf}:`, e);
       }
     }
+    // XAU（GC=F）のように足そのものに出来高がある場合は、その1時間足から価格帯別出来高を求める。
+    if (tf === '1h' && !volProfile) volProfile = computeVolumeProfile(candles.slice(0, -1));
     // ストキャスティクス(%K/%D)を足から自前計算（API不要）。Jev の判定材料にも含める。
     const stoch = computeStochastic(candles);
     // 直近ウィンドウ(2日・4hは2週)のローソク足からピンバー/包み足を検出。末尾(形成中)の足は除外。
     const ohlc: OhlcCandle[] = candles
       .filter((c) => typeof c.open === 'number')
       .map((c) => ({ open: c.open as number, high: c.high, low: c.low, close: c.close, t: c.t }));
-    const rp = latestPatternInWindow(ohlc.slice(0, -1), PA_WINDOW_BARS[tf]);
-    const candlePattern = rp ? { key: rp.key, label: PATTERN_LABEL[rp.key], barsAgo: rp.barsAgo } : null;
+    tfOhlc.push(ohlc.slice(0, -1)); // パターン読みに使う確定足（末尾の形成中の足は除外）
+    prep.push({ tf, structure, recentCloses, volumeLevel, stoch });
+  }
+
+  // 全TFの足がそろってから、パターンの読み（質・出た場所・確定/否定）を求め、
+  // 「有効なパターン」（確定・ライン上・質が高い）だけを Jev の判定材料に渡す。
+  // 出た場所の判定には上位足の高安と出来高節目を使う（ロールリバーサルは Jev の結果に依存するため含めない）。
+  for (let i = 0; i < prep.length; i++) {
+    const { tf, structure, recentCloses, volumeLevel, stoch } = prep[i];
+    const higherTfs = prep.slice(i + 1).map((h) => ({ tf: h.tf, structure: h.structure }));
+    const candlePatterns = readCandlePatterns(tfOhlc[i] ?? [], {
+      instrument,
+      windowBars: PATTERN_WINDOW_BARS[tf],
+      levels: [
+        ...higherStopLevels(higherTfs, 'long'),
+        ...higherStopLevels(higherTfs, 'short'),
+        ...(volumeLevel != null ? [{ price: volumeLevel, label: '出来高節目' }] : []),
+        ...(volProfile ? profileLevels(volProfile) : []),
+      ],
+    });
+    const valid = pickValidPattern(candlePatterns);
+    const candlePattern = valid ? { key: valid.key, label: valid.label, barsAgo: valid.barsAgo } : null;
 
     const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses, {
       sessionStatus,
       volumeLevel,
       stoch,
-      candlePattern: candlePattern ? { label: candlePattern.label, barsAgo: candlePattern.barsAgo } : null,
+      candlePattern: valid ? { label: valid.label, barsAgo: valid.barsAgo, detail: patternDetail(valid) } : null,
     });
     paEngine = eng;
     timeframes.push({
@@ -1007,6 +1072,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       stoch,
       roleReversal: null, // 下の2パス目で算出（上位TFのコンフルエンスが必要なため）
       candlePattern,
+      candlePatterns,
     });
   }
 
@@ -1023,11 +1089,41 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       volumeLevel: t.volumeLevel,
       higherLevels,
     });
-    // RR 評価（従来どおり・ブレイク方向がある TF のみ）。
-    const dir = dirFromBreakout(t.breakout);
-    if (!dir) return;
+    // RR 評価: 方向は RR好機通知と同じくトレンドで決める（レンジは対象外）。基準も通知と共通
+    // （RR_MIN・スプレッド込み）。Jev のブレイク確率が取れたときだけ「その方向の確率 ≥ RR_MIN_DIRECTION_PROB」を
+    // 追加条件にする（取れないときは確率条件なし＝通知と同じ判定）。
+    const direction = trendToDirection(t.trend);
+    if (!direction) return;
+    const dirProb = t.breakout ? (direction === 'long' ? t.breakout.up : t.breakout.down) : 100;
     const higherSwings = timeframes.slice(i + 1).map((h) => ({ swingHigh: h.swingHigh, swingLow: h.swingLow }));
-    t.rr = assessRiskReward(structure, dir.direction, dir.prob, higherSwings, instrument);
+    // 損切りは構造的ライン（ピボット＋ATR＋コンフルエンス）。上位足スイング・ロールリバーサル・出来高節目との一致を加点。
+    const extraLevels = [
+      ...(t.roleReversal ? [{ price: t.roleReversal.level, label: 'ロールリバーサルのライン' }] : []),
+      ...(t.volumeLevel != null ? [{ price: t.volumeLevel, label: '出来高節目' }] : []),
+      ...(volProfile ? profileLevels(volProfile) : []), // 価格帯別出来高の POC・バリューエリア・山
+    ];
+    const stop = computeStructuralStop(tfCandles[i], direction, currentRate, {
+      instrument,
+      spreadPips: typicalSpreadPips(instrument),
+      higherLevels: higherStopLevels(
+        timeframes.slice(i + 1).map((h) => ({ tf: h.tf, structure: h })),
+        direction,
+      ),
+      extraLevels,
+    });
+    t.rr = assessRiskReward(
+      structure,
+      direction,
+      dirProb,
+      higherSwings,
+      instrument,
+      RR_MIN,
+      RR_MIN_DIRECTION_PROB,
+      typicalSpreadPips(instrument),
+      stop,
+    );
+    // 有効なローソク足パターン（確定・ライン上・質が高い）で補正: 同じ向き=裏付け / 逆向き=見送り。
+    t.rr = applyPatternToRr(t.rr, pickValidPattern(t.candlePatterns));
     if (t.rr?.qualifies && (!rrOpportunity || t.rr.rr > rrOpportunity.rr)) {
       rrOpportunity = { ...t.rr, tf: t.tf };
     }
@@ -1160,7 +1256,7 @@ const buildPairSignals = async (instrument: string): Promise<TfSignal[]> => {
   // 構造的RR（短い足→長い足の順で全TF評価）。レンジTFは対象外。
   const rrByTf = new Map(
     scanStructuralRrAll(
-      perTf.map((p) => ({ tf: p.tf, structure: p.structure })),
+      perTf.map((p) => ({ tf: p.tf, structure: p.structure, candles: p.candles })), // 損切りは構造的ライン
       instrument,
       RANKING_MIN_RR,
     ).map((r) => [r.tf, r]),
@@ -1233,6 +1329,67 @@ const handleRanking = async (env: Env): Promise<Response> => {
   }
 };
 
+// ---- 4時間足の出来高インジケーター(/volume): CME 先物の出来高から RVOL・増減トレンド・OBV の向き ----
+// 表示されたときだけ作り直す（30分 TTL の KV キャッシュ。Cron は使わない＝KV 書き込みは閲覧時のみ）。
+const KV_VOLUME = 'volume';
+const VOLUME_TTL_MS = 30 * 60 * 1000;
+
+const buildVolume = async (): Promise<VolumeSnapshot> => {
+  const pairs: PairVolume[] = [];
+  for (const { instrument, symbol, invert } of VOLUME_SOURCES) {
+    if (!symbol) {
+      pairs.push({ instrument, source: null, indicators: null }); // クロス円は単独の先物が無い
+      continue;
+    }
+    try {
+      const { candles } = await fetchYahooCandles(symbol, YAHOO_INTERVAL['4h']);
+      const indicators = computeVolumeIndicators(candles.slice(0, -1), invert); // 形成中の足は除外
+      // 価格帯別出来高は解像度のため1時間足（1か月分）で集計し、現物の目盛りに換算する。
+      let profile: VolumeProfile | null = null;
+      let spotRate: number | null = null;
+      try {
+        const h1 = await fetchYahooCandles(symbol, YAHOO_INTERVAL['1h']);
+        spotRate =
+          instrument === 'XAU_USD' ? await fetchGoldSpot() : (await fetchYahooCandles(YAHOO_SYMBOL[instrument], YAHOO_INTERVAL['4h'])).currentRate;
+        const raw = computeVolumeProfile(h1.candles.slice(0, -1));
+        if (raw && spotRate != null) {
+          const spot = spotRate;
+          profile = mapProfile(raw, (x) => futuresLevelToSpot(x, h1.currentRate, spot, invert));
+        }
+      } catch (e) {
+        console.error(`/volume ${instrument} 価格帯別出来高 失敗:`, e);
+      }
+      pairs.push({ instrument, source: symbol, indicators, profile, spotRate });
+    } catch (e) {
+      console.error(`/volume ${instrument} 取得失敗:`, e);
+      pairs.push({ instrument, source: symbol, indicators: null });
+    }
+  }
+  return { timeframe: '4h', pairs, generatedAt: Date.now() };
+};
+
+const handleVolume = async (env: Env): Promise<Response> => {
+  const cached = await env.STRENGTH_KV.get(KV_VOLUME);
+  if (cached) {
+    try {
+      if (Date.now() - (JSON.parse(cached) as VolumeSnapshot).generatedAt < VOLUME_TTL_MS) {
+        return new Response(cached, { headers: CORS_HEADERS });
+      }
+    } catch {
+      // 作り直す
+    }
+  }
+  try {
+    const snap = await buildVolume();
+    if (snap.pairs.some((p) => p.indicators)) await env.STRENGTH_KV.put(KV_VOLUME, JSON.stringify(snap));
+    return new Response(JSON.stringify(snap), { headers: CORS_HEADERS });
+  } catch (e) {
+    console.error('/volume 失敗:', e);
+    if (cached) return new Response(cached, { headers: CORS_HEADERS });
+    return new Response(JSON.stringify({ error: 'データ取得に失敗しました。少し待って再試行してください' }), { headers: CORS_HEADERS });
+  }
+};
+
 export default {
   // Cron: event.cron でジョブを出し分け。失敗時は前回値を保持。
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -1267,7 +1424,7 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     // CORS プリフライト。
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
-    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、/mtf=TF分析、他=通貨強弱。
+    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、/mtf=TF分析、/ranking=ランキング、/volume=4h出来高、他=通貨強弱。
     const reqUrl = new URL(req.url);
     const pathname = reqUrl.pathname;
     if (pathname === '/flow') return handleFlow(env);
@@ -1275,6 +1432,7 @@ export default {
     if (pathname === '/stoploss') return handleStopLoss(env, reqUrl);
     if (pathname === '/mtf') return handleMtf(env, reqUrl);
     if (pathname === '/ranking') return handleRanking(env);
+    if (pathname === '/volume') return handleVolume(env);
 
     let intradayRaw = await env.STRENGTH_KV.get(KV_INTRADAY);
     let dailyRaw = await env.STRENGTH_KV.get(KV_DAILY);

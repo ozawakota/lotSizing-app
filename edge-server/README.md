@@ -76,6 +76,23 @@ curl "http://127.0.0.1:8787/edge?timeframe=1d"
 
 テストはリポジトリ直下の `pnpm test`（vitest）で `edge-server/test/` も実行される（データ元はモック）。
 
+## 損切りラインの検証（バックテスト）
+
+TF分析・RR好機通知・通貨ランキングの損切りは、`src/lib/stoploss.ts` の `computeStructuralStop`
+（確定足のピボット＋ATR バッファ＋上位足・ロールリバーサル・出来高節目・キリ番との一致）で決めている。
+旧方式（直近24本の極値−値幅5%）との比較を Dukascopy の実データで行う:
+
+```bash
+cd edge-server && npm install
+npm run backtest:stops            # 4ペア × 15m/30m/1h で新旧比較
+npm run backtest:stops -- --sweep # 構造的損切りのバッファ×最小距離の組み合わせも比較
+npm run backtest:stops -- --csv data.csv --pair EUR_USD --tf 1h  # 手元の CSV（MT5 のエクスポート等）で検証
+```
+
+各確定足でトレンド方向にエントリーし、目標＝リスクの RR_MIN 倍として「損切り / 目標 / 期限切れ」を数える
+（同じ足で両方に触れたら損切り扱い）。表の `E[R]` はスプレッド控除後の1取引あたり期待値、`刈られ%` は
+損切り後に結局目標まで届いた割合。判定ロジックは [`../src/lib/stopBacktest.ts`](../src/lib/stopBacktest.ts)。
+
 ## 注意
 
 - **Always Free の回収**: Oracle は Always Free の VM を、CPU・ネットワーク・メモリの使用率が低い状態が

@@ -24,9 +24,12 @@ import {
 import {
   computeStructure,
   scanStructuralRrAll,
+  typicalSpreadPips,
+  RR_MIN, // 1:2.5 以上（TF分析ページと共通の基準）
   YAHOO_SYMBOL as SL_YAHOO_SYMBOL,
   YAHOO_INTERVAL as SL_YAHOO_INTERVAL,
   type Candle,
+  type RrSetup,
   type SlStructure,
   type SlTimeframe,
 } from '../../src/lib/stoploss';
@@ -187,8 +190,9 @@ const runDetection = async (env: Env): Promise<void> => {
 //   建玉が取れないときは従来どおり通知する（フィルタは補助なので通知を止めない）。
 // ---------------------------------------------------------------------------
 const RR_INSTRUMENTS = ['XAU_USD', 'USD_JPY', 'EUR_USD', 'GBP_USD'];
+// 構造を取る足（短い→長い）。4h は利確目標（上位TFスイング）の供給元としてだけ使う:
+// それより上の足を見ていないため 4h 自体の setup は成立せず、通知対象は 15m/30m/1h。
 const RR_TFS: SlTimeframe[] = ['15m', '30m', '1h', '4h'];
-const RR_MIN = 2.5; // 1:2.5 以上
 const RR_SCAN_INTERVAL_MS = 15 * 60 * 1000; // 走査間隔（毎分 scheduled の中でゲート）
 const RR_COOLDOWN_MS = 2 * 60 * 60 * 1000; // 同「ペア＋TF＋方向」の再通知休止
 const RR_DISPLAY: Record<string, string> = { XAU_USD: 'XAU/USD', USD_JPY: 'USD/JPY', EUR_USD: 'EUR/USD', GBP_USD: 'GBP/USD' };
@@ -245,6 +249,40 @@ const fetchRetailFlow = async (env: Env): Promise<Map<string, PairFlow> | null> 
 
 const RETAIL_LABEL: Record<RetailBias['verdict'], string> = { supports: '逆張り支持', neutral: '偏りなし', against: '群集と同方向' };
 
+// ---- TF分析ページ(/mtf)の RR 判定による確認 ----
+// 通知の判定を TF分析ページの RR にそろえるため、構造スキャンで候補が出たペアだけ /mtf を引き、
+// ページ上で「狙える（✓）」になっている TF・方向のときだけ通知する（Jev のブレイク確率条件も含めて一致）。
+// /mtf の作り直しは Jev・Workers AI を使うので、結果はペアごとに RR_CONFIRM_TTL_MS 再利用して呼び出しを抑える。
+const RR_CONFIRM_TTL_MS = 2 * 60 * 60 * 1000;
+type PageRr = Record<string, RrSetup>; // `${tf}:${direction}` → ページで qualifies の setup
+
+const pageRrFor = async (env: Env, inst: string, now: number): Promise<PageRr | null> => {
+  const key = `rr_mtf:${inst}`;
+  const cached = await getMeta(env, key);
+  if (cached) {
+    try {
+      const c = JSON.parse(cached) as { at: number; rr: PageRr };
+      if (now - c.at < RR_CONFIRM_TTL_MS) return c.rr;
+    } catch {
+      // 壊れていれば取り直す
+    }
+  }
+  if (!env.STRENGTH) return null;
+  try {
+    const res = await env.STRENGTH.fetch(`https://currency-strength/mtf?instrument=${encodeURIComponent(inst)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = (await res.json()) as { error?: string; timeframes?: { tf: SlTimeframe; rr: RrSetup | null }[] };
+    if (body.error || !Array.isArray(body.timeframes)) throw new Error(body.error ?? 'timeframes なし');
+    const rr: PageRr = {};
+    for (const t of body.timeframes) if (t.rr?.qualifies) rr[`${t.tf}:${t.rr.direction}`] = t.rr;
+    await setMeta(env, key, JSON.stringify({ at: now, rr }));
+    return rr;
+  } catch (e) {
+    console.error(`RR検知: ${inst} の TF分析(/mtf)取得失敗（構造判定のみで続行）:`, e);
+    return null;
+  }
+};
+
 const runRrDetection = async (env: Env): Promise<void> => {
   const now = Date.now();
   // 15分ゲート（毎分 scheduled されても走査は15分に1回）。
@@ -259,19 +297,29 @@ const runRrDetection = async (env: Env): Promise<void> => {
     try {
       const symbol = SL_YAHOO_SYMBOL[inst];
       if (!symbol) continue;
-      const tfStructures: { tf: SlTimeframe; structure: SlStructure }[] = [];
+      const tfStructures: { tf: SlTimeframe; structure: SlStructure; candles: Candle[] }[] = [];
       for (const tf of RR_TFS) {
         const { candles, currentRate } = await fetchCandles(symbol, SL_YAHOO_INTERVAL[tf]);
-        tfStructures.push({ tf, structure: computeStructure(candles, currentRate) });
+        tfStructures.push({ tf, structure: computeStructure(candles, currentRate), candles }); // 損切りは構造的ライン
       }
       // 条件を満たしたTFを全件通知（最良1件に集約しない＝粒度を上げる）。
-      const setups = scanStructuralRrAll(tfStructures, inst, RR_MIN);
+      // ペアごとの一般的なスプレッドをリスクに足しリワードから引いた、実質 RR で判定する。
+      const setups = scanStructuralRrAll(tfStructures, inst, RR_MIN, typicalSpreadPips(inst));
       const disp = RR_DISPLAY[inst] ?? inst;
+      let pageRr: PageRr | null | undefined; // TF分析の判定（候補が出たときだけ取得）
       for (const setup of setups) {
         // クールダウン判定（同 ペア＋TF＋方向 は RR_COOLDOWN_MS 再通知しない）。TFごとに独立。
         const cdKey = `rr_cd:${inst}:${setup.tf}:${setup.direction}`;
         const cdUntil = Number((await getMeta(env, cdKey)) ?? '0');
         if (now < cdUntil) continue;
+
+        // TF分析ページの RR で「狙える（✓）」になっていなければ見送る。取得できないときは構造判定のみで通知。
+        if (pageRr === undefined) pageRr = await pageRrFor(env, inst, now);
+        if (pageRr && !pageRr[`${setup.tf}:${setup.direction}`]) {
+          console.log(`RR検知: ${inst} ${setup.tf} ${setup.direction} は TF分析の RR 条件を満たさないため見送り`);
+          continue;
+        }
+        const unconfirmed = pageRr ? '' : '（TF分析の確認なし）';
 
         // 個人投資家の建玉が同じ向きに偏っていれば見送る（クールダウンは付けず、次回走査で再評価）。
         if (flow === undefined) flow = await fetchRetailFlow(env);
@@ -286,7 +334,7 @@ const runRrDetection = async (env: Env): Promise<void> => {
         const dirJa = setup.direction === 'long' ? 'ロング' : 'ショート';
         const title = `${disp} RR好機 1:${setup.rr.toFixed(1)}`;
         const retail = pf && bias ? `／個人 買い${Math.round(pf.longPct)}%・売り${Math.round(pf.shortPct)}%（${RETAIL_LABEL[bias.verdict]}）` : '';
-        const body = `${RR_TF_LABEL[setup.tf]} ${dirJa}／リスク${setup.riskPips}pips・リワード${setup.rewardPips}pips が狙えます${retail}`;
+        const body = `${RR_TF_LABEL[setup.tf]} ${dirJa}／リスク${setup.riskPips}pips・リワード${setup.rewardPips}pips が狙えます（スプレッド${setup.spreadPips}pips込み）${retail}${unconfirmed}`;
         // pair 欄に "RR:" を付け、価格アラート(tag=pair)と別タグにして通知が衝突しないようにする。
         await env.DB.prepare('INSERT INTO alerts (pair, title, body, created_at) VALUES (?, ?, ?, ?)')
           .bind(`RR:${disp}`, title, body, now)

@@ -214,14 +214,57 @@ export function computeStopLoss(
 // ---------------------------------------------------------------------------
 // リスクリワード（RR）評価: 上位TFのスイングを利確目標にした 1:N 判定（/mtf 用）
 // ---------------------------------------------------------------------------
+// ペアごとの一般的なスプレッドの目安（pips。国内FX業者の通常時の水準を保守的に丸めた値）。
+// RR 通知で「エントリー時に払うコスト」として、リスクに足しリワードから引く。未登録ペアは 1.0。
+export const TYPICAL_SPREAD_PIPS: Record<string, number> = {
+  USD_JPY: 0.3,
+  EUR_JPY: 0.5,
+  GBP_JPY: 1.0,
+  AUD_JPY: 0.6,
+  EUR_USD: 0.3,
+  GBP_USD: 0.8,
+  AUD_USD: 0.5,
+  XAU_USD: 4.0, // 0.4ドル（XAU の pip=0.1ドル）
+};
+export const typicalSpreadPips = (instrument: string): number => TYPICAL_SPREAD_PIPS[instrument] ?? 1.0;
+
+// RR 好機の共通基準（TF分析ページと RR好機通知で同じ値を使う）。スプレッド込みの実質 RR で判定する。
+export const RR_MIN = 2.5;
+// TF分析ページで、Jev のブレイク確率が取れたときに追加で課す「トレンド方向の確率」の下限（%）。
+export const RR_MIN_DIRECTION_PROB = 50;
+
+const TF_JA: Record<SlTimeframe, string> = { '15m': '15分足', '30m': '30分足', '1h': '1時間足', '4h': '4時間足' };
+
+/** 上位足のスイングを損切りラインの一致判定用に並べる（ロング=安値 / ショート=高値）。 */
+export function higherStopLevels(
+  higher: { tf: SlTimeframe; structure: Pick<SlStructure, 'swingHigh' | 'swingLow'> }[],
+  direction: SlDirection,
+): StopLevelRef[] {
+  return higher.map((h) =>
+    direction === 'long'
+      ? { price: h.structure.swingLow, label: `${TF_JA[h.tf]}の安値` }
+      : { price: h.structure.swingHigh, label: `${TF_JA[h.tf]}の高値` },
+  );
+}
+
+/** RR の方向はトレンドで決める（上昇=ロング / 下降=ショート / レンジ=対象外）。ページと通知で共通。 */
+export function trendToDirection(trend: SlStructure['trend']): SlDirection | null {
+  return trend === 'up' ? 'long' : trend === 'down' ? 'short' : null;
+}
+
 /** あるTFの「狙える setup」。リスク=構造的損切りまで, リワード=上位TFスイングまで。 */
 export interface RrSetup {
   direction: SlDirection;
   entry: number;
   stop: number; // 損切り価格
   target: number; // 利確目標価格（上位TFスイング）
-  riskPips: number;
-  rewardPips: number;
+  riskPips: number; // spreadPips 込み
+  rewardPips: number; // spreadPips 控除後
+  spreadPips: number; // 計算に含めたスプレッド（0=考慮なし）
+  stopReasons?: string[]; // 構造的損切りの根拠（computeStructuralStop を使ったときのみ）
+  stopStrength?: number; // 損切りラインの強さ 0–100（同上）
+  patternSupport?: 'aligned' | 'against'; // 有効なローソク足パターンとの関係（candleRead.applyPatternToRr）
+  patternNote?: string; // 同上の説明
   rr: number; // リワード/リスク（小数1桁）
   qualifies: boolean; // rr>=minRr かつ 方向のブレイク確率>=minProb
 }
@@ -232,6 +275,8 @@ export interface RrSetup {
  * - リワード: 進行方向で現在値より先にある最も近い上位TFスイング（ロング=上の最も近い高値 /
  *   ショート=下の最も近い安値）までの距離。候補が無ければ null。
  * - 「狙える」= rr>=minRr かつ その方向のブレイク確率>=minProb。
+ * - spreadPips（>0 のとき）: エントリー時のスプレッドをリスクに足し、リワードから引く（保守的な実質 RR）。
+ * - stop（任意）: computeStructuralStop の結果を渡すと、旧方式の損切りの代わりにそれを使う。
  */
 export function assessRiskReward(
   structure: SlStructure,
@@ -241,12 +286,15 @@ export function assessRiskReward(
   instrument: string,
   minRr = 3,
   minProb = 50,
+  spreadPips = 0,
+  stop: StopPlan | null = null,
 ): RrSetup | null {
   const entry = structure.currentRate;
   const pip = pipSize(instrument);
-  const sl = computeStopLoss(structure, direction, null, instrument);
-  const riskPips = sl.distancePips;
-  if (riskPips <= 0) return null;
+  const sl = stop ?? computeStopLoss(structure, direction, null, instrument);
+  if (sl.distancePips <= 0) return null;
+  const round1 = (n: number) => Math.round(n * 10) / 10;
+  const riskPips = round1(sl.distancePips + spreadPips);
 
   let target: number | null = null;
   if (direction === 'long') {
@@ -258,8 +306,8 @@ export function assessRiskReward(
   }
   if (target == null) return null; // 上位TFに進行方向の目標が無い
 
-  const rewardPips = Math.round((Math.abs(target - entry) / pip) * 10) / 10;
-  const rr = Math.round((rewardPips / riskPips) * 10) / 10;
+  const rewardPips = round1(Math.max(Math.abs(target - entry) / pip - spreadPips, 0));
+  const rr = round1(rewardPips / riskPips);
   return {
     direction,
     entry,
@@ -267,6 +315,8 @@ export function assessRiskReward(
     target,
     riskPips,
     rewardPips,
+    spreadPips,
+    ...(stop ? { stopReasons: stop.reasons, stopStrength: stop.strength } : {}),
     rr,
     qualifies: rr >= minRr && directionProb >= minProb,
   };
@@ -282,19 +332,31 @@ export interface RrScanResult extends RrSetup {
  * 各TFで方向をトレンドから決め（up=ロング/down=ショート/range=除外）、上位TFスイングを
  * 目標に RR を評価し、rr>=minRr を満たす setup を「TFごとに全件」返す。確率フィルタは使わない。
  * tfStructures は短い足→長い足の順で渡す（上位TF＝後方）。渡した順（短い足→長い足）で返す。
+ * 最も長い足は上位TF（利確目標）が無いため setup にならず、目標の供給元としてだけ使われる。
+ * spreadPips を渡すとスプレッド込みの実質 RR で判定する（assessRiskReward 参照）。
+ * 各要素に candles があれば、損切りは構造的損切り（computeStructuralStop）で決める（無ければ旧方式）。
  */
 export function scanStructuralRrAll(
-  tfStructures: { tf: SlTimeframe; structure: SlStructure }[],
+  tfStructures: { tf: SlTimeframe; structure: SlStructure; candles?: Candle[] }[],
   instrument: string,
   minRr = 3,
+  spreadPips = 0,
 ): RrScanResult[] {
   const results: RrScanResult[] = [];
-  tfStructures.forEach(({ tf, structure }, i) => {
-    const direction: SlDirection | null = structure.trend === 'up' ? 'long' : structure.trend === 'down' ? 'short' : null;
+  tfStructures.forEach(({ tf, structure, candles }, i) => {
+    const direction = trendToDirection(structure.trend);
     if (!direction) return; // レンジは方向なし＝対象外
-    const higherSwings = tfStructures.slice(i + 1).map((h) => ({ swingHigh: h.structure.swingHigh, swingLow: h.structure.swingLow }));
+    const higher = tfStructures.slice(i + 1);
+    const higherSwings = higher.map((h) => ({ swingHigh: h.structure.swingHigh, swingLow: h.structure.swingLow }));
+    const stop = candles
+      ? computeStructuralStop(candles, direction, structure.currentRate, {
+          instrument,
+          spreadPips,
+          higherLevels: higherStopLevels(higher, direction),
+        })
+      : null;
     // directionProb=100 / minProb=0 で確率条件を無効化（構造的 RR のみで qualifies）。
-    const rr = assessRiskReward(structure, direction, 100, higherSwings, instrument, minRr, 0);
+    const rr = assessRiskReward(structure, direction, 100, higherSwings, instrument, minRr, 0, spreadPips, stop);
     if (rr?.qualifies) results.push({ ...rr, tf });
   });
   return results;
@@ -339,7 +401,7 @@ function avgRange(candles: Candle[]): number {
 }
 
 // 前後 k 本の中で極大(high)/極小(low)になる足のインデックス（ピボット）。
-function pivotIndices(candles: Candle[], kind: 'high' | 'low', k = 2): number[] {
+export function pivotIndices(candles: Candle[], kind: 'high' | 'low', k = 2): number[] {
   const out: number[] = [];
   for (let i = k; i < candles.length - k; i++) {
     const v = kind === 'high' ? candles[i].high : candles[i].low;
@@ -510,7 +572,7 @@ export interface PaContext {
   sessionStatus?: string; // 東京/ロンドン/NY の開閉状況
   volumeLevel?: number | null; // 過去の高出来高の節目価格
   stoch?: StochReading | null; // ストキャスティクス(%K/%D)
-  candlePattern?: { label: string; barsAgo: number } | null; // 直近のローソク足パターン(ピンバー/包み足)
+  candlePattern?: { label: string; barsAgo: number; detail?: string } | null; // 有効なローソク足パターン（確定・ライン上・質が高いもの）
 }
 
 const paState = (structure: SlStructure, recentCloses: number[], ctx: PaContext = {}): unknown => ({
@@ -523,7 +585,9 @@ const paState = (structure: SlStructure, recentCloses: number[], ctx: PaContext 
   ...(ctx.sessionStatus ? { sessionStatus: ctx.sessionStatus } : {}),
   ...(ctx.volumeLevel != null ? { volumeLevel: ctx.volumeLevel } : {}),
   ...(ctx.stoch ? { stochastic: { k: ctx.stoch.k, d: ctx.stoch.d } } : {}),
-  ...(ctx.candlePattern ? { candlePattern: { pattern: ctx.candlePattern.label, barsAgo: ctx.candlePattern.barsAgo } } : {}),
+  ...(ctx.candlePattern
+    ? { candlePattern: { pattern: ctx.candlePattern.label, barsAgo: ctx.candlePattern.barsAgo, detail: ctx.candlePattern.detail } }
+    : {}),
 });
 
 /** Jev systemone リクエスト body（model 以外）。1問の Choice でプライスアクションを分類。
@@ -537,7 +601,7 @@ export function buildPaJevRequest(structure: SlStructure, recentCloses: number[]
     ? '。ストキャスティクス(stochastic.k/%K, stochastic.d/%D)の買われすぎ(80以上)/売られすぎ(20以下)や%Kと%Dのクロスも考慮してください'
     : '';
   const candleNote = ctx.candlePattern
-    ? `。直近のローソク足パターン(candlePattern.pattern=${ctx.candlePattern.label}、${ctx.candlePattern.barsAgo}本前)は反転/継続の手がかりとして重視してください`
+    ? `。直近の有効なローソク足パターン(candlePattern.pattern=${ctx.candlePattern.label}、${ctx.candlePattern.barsAgo}本前${ctx.candlePattern.detail ? `、${ctx.candlePattern.detail}` : ''})は反転/継続の手がかりとして重視してください`
     : '';
   const note = sessionNote + volumeNote + stochNote + candleNote;
   return {
@@ -688,7 +752,9 @@ export function buildPaPrompt(structure: SlStructure, recentCloses: number[], ct
     ctx.sessionStatus ? `現在のセッション状況も考慮してください: ${ctx.sessionStatus}` : '',
     ctx.volumeLevel != null ? `過去に出来高が膨らんだ価格(${ctx.volumeLevel})は重要なレジサポとして考慮してください。` : '',
     ctx.stoch ? `ストキャスティクス %K=${ctx.stoch.k} / %D=${ctx.stoch.d}（80以上=買われすぎ, 20以下=売られすぎ）も考慮してください。` : '',
-    ctx.candlePattern ? `直近のローソク足パターン: ${ctx.candlePattern.label}（${ctx.candlePattern.barsAgo}本前）も反転/継続の手がかりとして考慮してください。` : '',
+    ctx.candlePattern
+      ? `直近の有効なローソク足パターン: ${ctx.candlePattern.label}（${ctx.candlePattern.barsAgo}本前${ctx.candlePattern.detail ? `・${ctx.candlePattern.detail}` : ''}）も反転/継続の手がかりとして考慮してください。`
+      : '',
     JSON.stringify(paState(structure, recentCloses, ctx)),
     '分類の定義:',
     ...Object.entries(PA_CRITERIA).map(([k, v]) => `- ${k}: ${v}`),
@@ -720,4 +786,162 @@ export function parsePaAi(raw: unknown): PaResult {
   const confRaw = Number(o?.confidence);
   const confidence = Number.isFinite(confRaw) ? clamp(confRaw, 0, 1) : 0.5;
   return { pa, paPct, confidence };
+}
+
+// ---------------------------------------------------------------------------
+// 構造的な損切りライン（ピボット＋ATR＋コンフルエンス）。TF分析・RR好機通知・ランキングで共通。
+// ---------------------------------------------------------------------------
+// 旧方式（computeStopLoss）は「直近24本の最安値/最高値 − 値幅の5%」で、ヒゲ1本や窓の端を拾いやすく、
+// バッファもボラティリティと無関係だった。ここでは確定足のピボット（実際の押し安値/戻り高値）を
+// 候補にし、ラインの強さ（タッチ回数・上位足/ロールリバーサル/出来高節目との一致・キリ番）で選び、
+// バッファは ATR 基準＋スプレッドにする。
+
+export interface StopLevelRef {
+  price: number;
+  label: string; // 根拠の表示名（例 '1時間足の安値'）
+}
+
+export interface StopOptions {
+  instrument: string;
+  higherLevels?: StopLevelRef[]; // 上位足のスイング（一致すれば加点）
+  extraLevels?: StopLevelRef[]; // ロールリバーサル・出来高節目など（一致すれば加点）
+  spreadPips?: number; // ショートの損切りは Ask で約定するため上側に加える
+  excludeLast?: boolean; // 最終足を形成中として除外する（既定 true。バックテストでは false）
+  lookback?: number; // ピボットを探す確定足の本数（既定 100）
+  pivotK?: number; // ピボットの前後本数（既定 2）
+  bufferAtr?: number; // ラインからのバッファ（ATR 倍, 既定 0.25）
+  minDistAtr?: number; // エントリーからこれより近いラインは採らない（ATR 倍, 既定 0.5）
+  maxDistAtr?: number; // これより遠いラインは採らない（ATR 倍, 既定 8）
+}
+
+export type StopBasis = 'pivot' | 'window';
+export interface StopPlan {
+  price: number; // 損切り価格（バッファ・スプレッド込み）
+  level: number; // 守るライン（ピボット or 窓の極値）
+  distancePips: number; // エントリーから損切りまで
+  basis: StopBasis; // pivot=確定ピボット / window=ピボットが無く直近24本の極値で代用
+  strength: number; // ラインの強さ 0–100
+  reasons: string[]; // 根拠（例 ['直近の押し安値', 'タッチ3回', '1時間足の安値と一致']）
+  atr: number;
+}
+
+export const STOP_DEFAULTS = { lookback: 100, pivotK: 2, bufferAtr: 0.25, minDistAtr: 0.5, maxDistAtr: 8 } as const;
+
+/** 平均トゥルーレンジ（直近 period 本）。前足終値とのギャップも含めた値幅の平均。 */
+export function averageTrueRange(candles: Candle[], period = 14): number {
+  if (candles.length < 2) return candles.length === 1 ? Math.max(candles[0].high - candles[0].low, 0) : 0;
+  const from = Math.max(1, candles.length - period);
+  let sum = 0;
+  let n = 0;
+  for (let i = from; i < candles.length; i++) {
+    const c = candles[i];
+    const pc = candles[i - 1].close;
+    sum += Math.max(c.high - c.low, Math.abs(c.high - pc), Math.abs(c.low - pc));
+    n++;
+  }
+  return n > 0 ? sum / n : 0;
+}
+
+// キリ番の刻み（円絡み=0.50円, XAU=10ドル, その他=0.0050）。
+function roundStep(instrument: string): number {
+  if (instrument.startsWith('XAU')) return 10;
+  if (instrument.endsWith('JPY')) return 0.5;
+  return 0.005;
+}
+
+/** ラインの強さ（0–100）と根拠。 */
+function scoreStopLevel(
+  level: number,
+  win: Candle[],
+  isLong: boolean,
+  atr: number,
+  opts: StopOptions,
+): { strength: number; reasons: string[] } {
+  const reasons: string[] = [];
+  let score = 30; // 確定ピボットであること自体の基礎点
+  const tol = atr * 0.25;
+  const touches = win.filter((c) => Math.abs((isLong ? c.low : c.high) - level) <= tol).length - 1; // 自身を除く
+  if (touches > 0) {
+    score += Math.min(touches, 3) * 10;
+    reasons.push(`タッチ${touches + 1}回`);
+  }
+  const near = (refs: StopLevelRef[] | undefined) => (refs ?? []).filter((r) => Math.abs(r.price - level) <= atr * 0.3);
+  const hi = near(opts.higherLevels);
+  if (hi.length) {
+    score += 20;
+    reasons.push(`${hi[0].label}と一致`);
+  }
+  for (const r of near(opts.extraLevels).slice(0, 2)) {
+    score += 10;
+    reasons.push(`${r.label}と一致`);
+  }
+  const step = roundStep(opts.instrument);
+  const roundLevel = Math.round(level / step) * step;
+  if (Math.abs(level - roundLevel) <= atr * 0.2) {
+    score += 10;
+    reasons.push('キリ番付近');
+  }
+  return { strength: Math.min(100, score), reasons };
+}
+
+/**
+ * 構造的な損切りを求める（純関数）。
+ * 1. 確定足（既定で最終足=形成中を除外）の直近 lookback 本からピボット安値/高値を抽出。
+ * 2. エントリーから minDistAtr〜maxDistAtr ATR の範囲にあるもののうち、最も近いものを基本に採る。
+ *    ただし、それより遠くても距離 1.5 倍以内に強さが +20 以上高いラインがあればそちらを採る。
+ * 3. 損切り = ライン − バッファ（ロング）/ ライン＋バッファ＋スプレッド（ショート）。バッファ = ATR×bufferAtr。
+ * 候補が無ければ直近24本の極値で代用（basis='window'）。それも使えなければ null。
+ */
+export function computeStructuralStop(
+  candles: Candle[],
+  direction: SlDirection,
+  entry: number,
+  opts: StopOptions,
+): StopPlan | null {
+  const o = { ...STOP_DEFAULTS, ...opts };
+  const closed = o.excludeLast === false ? candles : candles.slice(0, -1);
+  const win = closed.slice(-o.lookback);
+  if (win.length < o.pivotK * 2 + 3) return null;
+  const atr = averageTrueRange(win);
+  if (!(atr > 0)) return null;
+  const pip = pipSize(o.instrument);
+  const isLong = direction === 'long';
+  const minD = atr * o.minDistAtr;
+  const maxD = atr * o.maxDistAtr;
+
+  const cands = pivotIndices(win, isLong ? 'low' : 'high', o.pivotK)
+    .map((i) => (isLong ? win[i].low : win[i].high))
+    .filter((L) => {
+      const d = isLong ? entry - L : L - entry;
+      return d >= minD && d <= maxD;
+    })
+    .sort((a, b) => (isLong ? b - a : a - b)); // エントリーに近い順
+  const uniq = cands.filter((L, i) => i === 0 || Math.abs(L - cands[i - 1]) > atr * 0.1);
+
+  let level: number;
+  let basis: StopBasis;
+  let scored: { strength: number; reasons: string[] };
+  if (uniq.length > 0) {
+    const all = uniq.map((L) => ({ L, ...scoreStopLevel(L, win, isLong, atr, o) }));
+    let pick = all[0];
+    const nearestDist = Math.abs(entry - all[0].L);
+    for (const c of all.slice(1)) {
+      if (Math.abs(entry - c.L) <= nearestDist * 1.5 && c.strength >= pick.strength + 20) pick = c;
+    }
+    level = pick.L;
+    basis = 'pivot';
+    scored = { strength: pick.strength, reasons: [isLong ? '直近の押し安値' : '直近の戻り高値', ...pick.reasons] };
+  } else {
+    const recent = win.slice(-24);
+    level = isLong ? Math.min(...recent.map((c) => c.low)) : Math.max(...recent.map((c) => c.high));
+    if (isLong ? level >= entry : level <= entry) return null;
+    basis = 'window';
+    scored = { strength: 20, reasons: [isLong ? '直近24本の安値（ピボットなし）' : '直近24本の高値（ピボットなし）'] };
+  }
+
+  const buffer = atr * o.bufferAtr;
+  const spread = (o.spreadPips ?? 0) * pip;
+  const price = isLong ? level - buffer : level + buffer + spread;
+  const distancePips = Math.round((Math.abs(entry - price) / pip) * 10) / 10;
+  return { price, level, distancePips, basis, strength: scored.strength, reasons: scored.reasons, atr };
 }

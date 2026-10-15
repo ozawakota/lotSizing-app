@@ -4,7 +4,7 @@
 export async function fetchGoldSpot(): Promise<number | null> {
   try {
     const res = await fetch('https://api.gold-api.com/price/XAU');
-    const spot = parseFloat((await res.json())?.price);
+    const spot = parseFloat(String(((await res.json()) as { price?: unknown } | null)?.price)); // Worker 型でも通るよう明示
     return Number.isFinite(spot) && spot > 0 ? spot : null;
   } catch {
     return null;
