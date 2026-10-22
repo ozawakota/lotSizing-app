@@ -18,6 +18,9 @@ node_modules
 .env.*
 !.env.example
 
+# ローカル開発用の Node バージョン固定（Netlify の NODE_VERSION を上書きしないよう追跡しない）
+.nvmrc
+
 # Build output (Netlify がソースからビルドするため追跡しない)
 dist/
 
