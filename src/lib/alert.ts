@@ -124,3 +124,33 @@ export function formatAlertTitle(pair: AlertPair, high: number, low: number): st
   const amount = Math.round((high - low) / cfg.pipSize);
   return `${pair} 急変動 ${amount}${cfg.unit}`;
 }
+
+// ---------------------------------------------------------------------------
+// Web Push エンドポイントの検証
+// ---------------------------------------------------------------------------
+// 購読で受け取った endpoint はそのまま保存され、Cron が全購読へ POST する。
+// 任意 URL を許すと「サーバーに任意ホストへリクエストさせる（SSRF/リクエスト強制）」
+// 余地が生まれるため、保存前に「https かつ主要ブラウザの push サービスのホスト」に限定する。
+// 末尾一致（サブドメインを許容）で判定する。
+const PUSH_ENDPOINT_HOSTS = [
+  'fcm.googleapis.com', // Chrome / Edge / Android (FCM)
+  'android.googleapis.com', // 旧 GCM/FCM
+  'push.services.mozilla.com', // Firefox（updates.push.services.mozilla.com 等）
+  'push.apple.com', // Safari / WebKit（web.push.apple.com 等）
+  'notify.windows.com', // Windows 通知サービス(WNS)
+  'push.microsoft.com', // 新 WNS
+];
+
+// endpoint が https かつ既知の push サービスのホストかを判定する純関数。
+export function isValidPushEndpoint(endpoint: unknown): boolean {
+  if (typeof endpoint !== 'string' || endpoint.length === 0) return false;
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:') return false;
+  const host = url.hostname.toLowerCase();
+  return PUSH_ENDPOINT_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+}

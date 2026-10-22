@@ -8,7 +8,7 @@ import asyncio
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Path, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_secret
@@ -19,6 +19,10 @@ from zigzag import compute_zigzag
 
 # タイムフレームごとの既定しきい値（反転 %）。クエリ threshold で上書き可能。
 DEFAULT_THRESHOLD_PCT: dict[str, float] = {"30m": 0.2, "1h": 0.3, "4h": 0.5}
+
+# instrument は OANDA の URL パスに直接埋め込まれるため、OANDA 形式（例 GBP_USD / XAU_USD）に
+# 限定し、パス/クエリ注入を防ぐ。他のクエリ引数と同じく境界で検証する。
+INSTRUMENT_PATTERN = "^[A-Z]{3}_[A-Z]{3}$"
 
 app = FastAPI(title="Elliott ZigZag API", version="1.0.0")
 
@@ -38,7 +42,7 @@ def health() -> dict:
 
 @app.get("/elliott/{instrument}")
 async def elliott(
-    instrument: str,
+    instrument: str = Path(..., pattern=INSTRUMENT_PATTERN, description="OANDA形式のペア（例 GBP_USD）"),
     count: int = Query(300, ge=10, le=5000, description="各足の取得ローソク本数"),
     threshold: float | None = Query(None, gt=0, le=20, description="反転しきい値(%)。未指定なら足ごとの既定値"),
     price: str = Query("M", pattern="^[MBA]$", description="M=mid / B=bid / A=ask"),
@@ -76,7 +80,7 @@ async def elliott(
 
 @app.get("/stoploss/{instrument}")
 async def stoploss(
-    instrument: str,
+    instrument: str = Path(..., pattern=INSTRUMENT_PATTERN, description="OANDA形式のペア（例 GBP_USD）"),
     direction: str = Query(..., pattern="^(long|short)$", description="long=買い / short=売り"),
     timeframe: str = Query("1h", pattern="^(30m|1h|4h)$"),
     entry: float | None = Query(None, gt=0, description="エントリー価格。未指定なら直近足の中値"),

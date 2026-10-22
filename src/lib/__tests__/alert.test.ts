@@ -5,6 +5,7 @@ import {
   evaluate,
   formatAlertBody,
   formatAlertTitle,
+  isValidPushEndpoint,
   pruneWindow,
   rangePips,
   type Sample,
@@ -175,5 +176,41 @@ describe('formatAlertTitle', () => {
   });
   it('XAU/USD はドル単位', () => {
     expect(formatAlertTitle('XAU/USD', 2655, 2650)).toBe('XAU/USD 急変動 5ドル');
+  });
+});
+
+describe('isValidPushEndpoint', () => {
+  it('既知の push サービス(https)を許可する', () => {
+    const ok = [
+      'https://fcm.googleapis.com/fcm/send/abc123',
+      'https://android.googleapis.com/gcm/send/abc123',
+      'https://updates.push.services.mozilla.com/wpush/v2/abc',
+      'https://web.push.apple.com/QID/xyz',
+      'https://ABC.notify.windows.com/w/?token=xyz', // ホスト大文字も小文字化して判定
+      'https://foo.push.microsoft.com/w/?token=xyz',
+    ];
+    for (const e of ok) expect(isValidPushEndpoint(e)).toBe(true);
+  });
+
+  it('任意ホスト・内部アドレス・非httpsを拒否する（SSRF/リクエスト強制の防止）', () => {
+    const bad = [
+      'http://fcm.googleapis.com/fcm/send/abc', // https でない
+      'https://attacker.example/collect', // 既知 push サービスでない
+      'https://169.254.169.254/latest/meta-data/', // クラウドメタデータ
+      'https://localhost/x',
+      'https://fcm.googleapis.com.attacker.example/x', // サフィックス偽装
+      'https://evilgoogleapis.com/x',
+      'ftp://fcm.googleapis.com/x',
+      'not a url',
+      '',
+    ];
+    for (const e of bad) expect(isValidPushEndpoint(e)).toBe(false);
+  });
+
+  it('文字列以外は拒否する', () => {
+    expect(isValidPushEndpoint(undefined)).toBe(false);
+    expect(isValidPushEndpoint(null)).toBe(false);
+    expect(isValidPushEndpoint(123)).toBe(false);
+    expect(isValidPushEndpoint({})).toBe(false);
   });
 });

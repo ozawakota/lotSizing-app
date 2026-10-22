@@ -18,6 +18,7 @@ import {
   evaluate,
   formatAlertBody,
   formatAlertTitle,
+  isValidPushEndpoint,
   type AlertPair,
   type Sample,
 } from '../../src/lib/alert';
@@ -522,6 +523,10 @@ const handleSubscribe = async (req: Request, env: Env): Promise<Response> => {
   const body = (await req.json()) as SubscribeBody;
   if (!body.endpoint || !body.keys?.p256dh || !body.keys?.auth) {
     return new Response(JSON.stringify({ error: 'invalid subscription' }), { status: 400, headers: CORS_HEADERS });
+  }
+  // endpoint は保存後に Cron が POST するため、既知の push サービス(https)のみ許可する（SSRF/リクエスト強制の防止）。
+  if (!isValidPushEndpoint(body.endpoint)) {
+    return new Response(JSON.stringify({ error: 'invalid endpoint' }), { status: 400, headers: CORS_HEADERS });
   }
   const rr = body.rrEnabled === false ? 0 : 1;
   await env.DB.prepare(

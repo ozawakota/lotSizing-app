@@ -65,6 +65,27 @@ def test_stoploss_requires_direction():
     assert r.status_code == 422  # direction 必須
 
 
+def test_instrument_rejects_path_injection(monkeypatch):
+    # instrument は OANDA の URL パスに埋め込まれるため、OANDA形式以外（/ ? .. 等を含む）は
+    # OANDA を呼ぶ前に 422 で弾く。弾けていれば fetch_candles は呼ばれない。
+    called = False
+
+    async def fake_fetch(client, token, instrument, granularity, count, price="M"):
+        nonlocal called
+        called = True
+        return _line([100, 120, 100, 130])
+
+    monkeypatch.setattr(app_module, "get_secret", lambda name: "dummy-token")
+    monkeypatch.setattr(app_module, "fetch_candles", fake_fetch)
+
+    # 形式違反（小文字・区切り無し・桁数違い・余分文字）は OANDA 形式でないため 422 で弾く。
+    for bad in ["usd_jpy", "USDJPY", "USD-JPY", "US_JPY", "USD_JPY_X"]:
+        assert client.get(f"/elliott/{bad}").status_code == 422
+    assert client.get("/stoploss/usdjpy?direction=long").status_code == 422
+    # いずれも検証段階で弾かれ、OANDA 取得（fetch_candles）には到達しない。
+    assert called is False
+
+
 def test_elliott_threshold_override(monkeypatch):
     monkeypatch.setattr(app_module, "get_secret", lambda name: "dummy-token")
 
