@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyPairOrder,
+  flowContrast,
+  retailSkew,
+  sortFlowPairs,
   computeDelta,
   dominantByVolume,
   flowDirection,
@@ -9,6 +12,7 @@ import {
   toPairFlow,
   updatePeak,
   type FlowPair,
+  type PairFlow,
   type VolumePeak,
 } from '../flow';
 
@@ -137,5 +141,37 @@ describe('instrumentToFlowPair', () => {
     expect(instrumentToFlowPair('USD_JPY')).toBe('USD/JPY');
     expect(instrumentToFlowPair('XAU_USD')).toBe('XAU/USD');
     expect(instrumentToFlowPair('USD_CHF')).toBeNull();
+  });
+});
+
+describe('retailSkew / flowContrast / sortFlowPairs（ページ表示用）', () => {
+  const pf = (pair: FlowPair, longPct: number, cotNet?: number): PairFlow => ({
+    ...toPairFlow(pair, longPct, 100 - longPct, longPct * 10, (100 - longPct) * 10),
+    ...(cotNet === undefined ? {} : { cot: { net: cotNet, lean: cotNet > 0.05 ? 'buy' : cotNet < -0.05 ? 'sell' : 'neutral' } }),
+  });
+
+  it('多い側と割合、65%以上で偏り大', () => {
+    expect(retailSkew({ longPct: 32, shortPct: 68 })).toEqual({ side: 'sell', pct: 68, crowded: true });
+    expect(retailSkew({ longPct: 55, shortPct: 45 })).toEqual({ side: 'buy', pct: 55, crowded: false });
+    expect(retailSkew({ longPct: 50, shortPct: 50 }).side).toBe('neutral');
+  });
+
+  it('個人と大口の向きが逆なら opposite、同じなら same、どちらか中立・なしなら none', () => {
+    expect(flowContrast(pf('USD/JPY', 30, 0.5))).toBe('opposite');
+    expect(flowContrast(pf('USD/JPY', 70, 0.5))).toBe('same');
+    expect(flowContrast(pf('USD/JPY', 70, 0))).toBe('none');
+    expect(flowContrast(pf('USD/JPY', 70))).toBe('none');
+  });
+
+  it('skew は偏りが大きい順（データなしは末尾・同率は元の順）、opposite は逆行のみ', () => {
+    const order: FlowPair[] = ['USD/JPY', 'EUR/JPY', 'GBP/JPY', 'AUD/JPY'];
+    const by = new Map<FlowPair, PairFlow>([
+      ['USD/JPY', pf('USD/JPY', 55, 0.5)],
+      ['EUR/JPY', pf('EUR/JPY', 20, 0.5)],
+      ['AUD/JPY', pf('AUD/JPY', 45, -0.5)],
+    ]);
+    expect(sortFlowPairs(order, by, 'custom')).toEqual(order);
+    expect(sortFlowPairs(order, by, 'skew')).toEqual(['EUR/JPY', 'USD/JPY', 'AUD/JPY', 'GBP/JPY']);
+    expect(sortFlowPairs(order, by, 'opposite')).toEqual(['EUR/JPY']);
   });
 });

@@ -253,3 +253,54 @@ export function instrumentToFlowPair(instrument: string): FlowPair | null {
   const pair = instrument.replace('_', '/');
   return (FLOW_PAIRS as string[]).includes(pair) ? (pair as FlowPair) : null;
 }
+
+// ---------------------------------------------------------------------------
+// 取引量・センチメント ページの表示用（偏りの大きさ・個人と大口の一致/逆行・並び順）
+// ---------------------------------------------------------------------------
+
+/** 個人投資家の建玉の多い側と、その割合。crowded=偏りが大きい（RETAIL_CROWDED_PCT 以上）。 */
+export interface RetailSkew {
+  side: Lean; // 割合の多い側（同率は neutral）
+  pct: number; // 多い側の割合 %
+  crowded: boolean;
+}
+
+export function retailSkew(flow: Pick<PairFlow, 'longPct' | 'shortPct'>): RetailSkew {
+  const side: Lean = flow.longPct > flow.shortPct ? 'buy' : flow.shortPct > flow.longPct ? 'sell' : 'neutral';
+  const pct = Math.max(flow.longPct, flow.shortPct);
+  return { side, pct, crowded: pct >= RETAIL_CROWDED_PCT };
+}
+
+/** 個人と大口（投機筋）の向きの関係。どちらかが中立・データなしなら none。 */
+export type FlowContrast = 'opposite' | 'same' | 'none';
+
+export function flowContrast(flow: Pick<PairFlow, 'longPct' | 'shortPct' | 'cot'>): FlowContrast {
+  const retail = retailSkew(flow).side;
+  const spec = flow.cot?.lean ?? 'neutral';
+  if (retail === 'neutral' || spec === 'neutral') return 'none';
+  return retail === spec ? 'same' : 'opposite';
+}
+
+/** custom=ユーザーの並び / skew=個人の偏りが大きい順 / opposite=個人と大口が逆のペアのみ */
+export type FlowSortMode = 'custom' | 'skew' | 'opposite';
+export const FLOW_SORT_STORAGE_KEY = 'flowSortMode';
+
+/**
+ * 表示するペアの並びを返す。データの無いペアは skew では末尾、opposite では除外する。
+ * skew の同率はユーザーの並び順を保つ。
+ */
+export function sortFlowPairs(order: FlowPair[], byPair: Map<FlowPair, PairFlow>, mode: FlowSortMode): FlowPair[] {
+  if (mode === 'custom') return order;
+  if (mode === 'opposite') return order.filter((p) => {
+    const f = byPair.get(p);
+    return f !== undefined && flowContrast(f) === 'opposite';
+  });
+  const skew = (p: FlowPair) => {
+    const f = byPair.get(p);
+    return f ? retailSkew(f).pct : -1;
+  };
+  return order
+    .map((p, i) => ({ p, i, s: skew(p) }))
+    .sort((a, b) => b.s - a.s || a.i - b.i)
+    .map(({ p }) => p);
+}
