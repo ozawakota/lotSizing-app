@@ -37,6 +37,14 @@ jobs:
         run: |
           grep -E '^\s*VITE_[A-Z0-9_]+\s*=\s*"' netlify.toml \
             | sed -E 's/^\s*(VITE_[A-Z0-9_]+)\s*=\s*"(.*)"\s*$/\1=\2/' >> "$GITHUB_ENV"
+      # Mobiscroll のトライアル版は配信される tarball の中身が lockfile 記録時と一致しないことがあり、
+      # チェックサム不一致（ERR_PNPM_TARBALL_INTEGRITY）で止まる。CI の作業コピーの中だけで、
+      # このパッケージ1件のチェックサムを外す（他のパッケージは引き続き検査する。lockfile 自体は変更しない）。
+      - name: Relax integrity for Mobiscroll trial only
+        run: |
+          sed -i -E "/^  '@mobiscroll\/react-next-trial@5\.34\.0':\$/{n;s#resolution: \{integrity: [^}]*\}#resolution: {tarball: https://npm.mobiscroll.com/@mobiscroll/react-next-trial/-/react-next-trial-5.34.0.tgz}#}" pnpm-lock.yaml
+          # 版を上げて一致しなくなったら気付けるよう、置き換わらなければ失敗させる。
+          grep -q "resolution: {tarball: https://npm.mobiscroll.com/@mobiscroll/react-next-trial/-/react-next-trial-5.34.0.tgz}" pnpm-lock.yaml
       - name: Install
         run: pnpm install --frozen-lockfile
       - name: Build
