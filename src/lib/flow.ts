@@ -71,6 +71,19 @@ export interface VolumePeak {
 // COT で扱う通貨・金（CFTC 先物が存在する単位）。
 export type CotCurrency = 'USD' | 'JPY' | 'EUR' | 'GBP' | 'AUD' | 'NZD' | 'CAD' | 'CHF' | 'XAU';
 
+// CFTC Legacy コントラクトコード（通貨先物は対USD / 金はCOMEX / USDはICEドル指数）。Worker とバックテストで共有。
+export const COT_CONTRACT_CODES: Record<CotCurrency, string> = {
+  JPY: '097741', // JAPANESE YEN - CME
+  EUR: '099741', // EURO FX - CME
+  GBP: '096742', // BRITISH POUND - CME
+  AUD: '232741', // AUSTRALIAN DOLLAR - CME
+  NZD: '112741', // NZ DOLLAR - CME
+  CAD: '090741', // CANADIAN DOLLAR - CME
+  CHF: '092741', // SWISS FRANC - CME
+  XAU: '088691', // GOLD - COMEX
+  USD: '098662', // USD INDEX - ICE FUTURES U.S.
+};
+
 // 1ペア分の投機筋ポジション（CFTC 由来・合成）。
 export interface PairCot {
   net: number; // 投機筋ネット = net(base) − net(quote)。範囲 −2〜+2（正=買い越し / 負=売り越し）

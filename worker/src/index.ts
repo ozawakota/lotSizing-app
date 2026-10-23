@@ -16,6 +16,7 @@ import { sessionStatusText } from '../../src/lib/session';
 import {
   FLOW_PAIRS,
   computeDelta,
+  COT_CONTRACT_CODES,
   normalizeNet,
   toPairCot,
   toPairFlow,
@@ -402,18 +403,8 @@ const CFTC_URL = 'https://publicreporting.cftc.gov/resource/6dca-aqww.json';
 const COT_STALE_MS = 6 * 60 * 60 * 1000; // 6時間
 const COT_UA = 'Mozilla/5.0 (compatible; lotsizing-cot/1.0)';
 
-// CFTC Legacy コントラクトコード（通貨先物は対USD / 金はCOMEX / USDはICEドル指数）。
-const COT_CODE: Record<CotCurrency, string> = {
-  JPY: '097741', // JAPANESE YEN - CME
-  EUR: '099741', // EURO FX - CME
-  GBP: '096742', // BRITISH POUND - CME
-  AUD: '232741', // AUSTRALIAN DOLLAR - CME
-  NZD: '112741', // NZ DOLLAR - CME
-  CAD: '090741', // CANADIAN DOLLAR - CME
-  CHF: '092741', // SWISS FRANC - CME
-  XAU: '088691', // GOLD - COMEX
-  USD: '098662', // USD INDEX - ICE FUTURES U.S.
-};
+// CFTC Legacy コントラクトコードは src/lib/flow.ts の COT_CONTRACT_CODES（バックテストと共有）。
+const COT_CODE = COT_CONTRACT_CODES;
 
 interface CftcRow {
   cftc_contract_market_code: string;
