@@ -28,6 +28,8 @@ import {
 } from '../../src/lib/flow';
 // /news の為替ニュース＋売買シグナルのロジック/型もフロントと共有。
 import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type NewsItem } from '../../src/lib/news';
+// 五十日・月末・季節性などのアノマリー判定（フロントの為替ニュースタブと共有）。
+import { detectAnomalies, formatAnomalyDigest, type Anomaly } from '../../src/lib/anomaly';
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
 import { PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
 // エントリーサイン（押し目/戻り/反転警戒）の純粋ロジック。
@@ -599,9 +601,10 @@ const aiText = (r: unknown): string => {
 };
 
 // Workers AI で日本語要約。econNote（高重要度の経済指標）があれば文脈に加える。
-const summarizeNews = async (env: Env, items: NewsItem[], econNote = ''): Promise<string> => {
+const summarizeNews = async (env: Env, items: NewsItem[], econNote = '', anomalyNote = ''): Promise<string> => {
   const list = items.map((it, i) => `${i + 1}. ${it.title} — ${it.description}`).join('\n');
   const econSection = econNote ? `\n\n# 今週の主要経済指標（高重要度）\n${econNote}` : '';
+  const anomalySection = anomalyNote ? `\n\n# いま意識されやすいアノマリー（経験則）\n${anomalyNote}` : '';
   const r = await env.AI.run(SUMMARY_MODEL, {
     messages: [
       { role: 'system', content: 'あなたはFXアナリストです。英語の為替ニュースを日本語で簡潔に要約します。' },
@@ -609,9 +612,12 @@ const summarizeNews = async (env: Env, items: NewsItem[], econNote = ''): Promis
         role: 'user',
         content:
           '次の為替ニュースを日本語で要約してください。全体トレンドを2〜3行、続けて主要トピックを3〜5個の箇条書きで。' +
-          '直近に高重要度の経済指標の発表予定があれば、その点にも触れてください。断定的な予測は避け、事実ベースで。\n\n' +
+          '直近に高重要度の経済指標の発表予定があれば、その点にも触れてください。' +
+          'アノマリーの一覧があれば、最後に「アノマリー」として、ニュースと合わせてどう意識されそうかを1〜2行で添えてください。' +
+          '断定的な予測は避け、事実ベースで。\n\n' +
           list +
-          econSection,
+          econSection +
+          anomalySection,
       },
     ],
   });
@@ -624,11 +630,12 @@ const computeSignalsWorkersAI = async (
   items: NewsItem[],
   trends: PairTrend[],
   econNote = '',
+  anomalyNote = '',
 ): Promise<PairSignal[]> => {
   const r = await env.AI.run(SIGNAL_MODEL, {
     messages: [
       { role: 'system', content: 'あなたはFXの短期シグナル推定器です。指示されたJSONのみを厳密に返します。' },
-      { role: 'user', content: buildSignalPrompt(items, trends, undefined, econNote) },
+      { role: 'user', content: buildSignalPrompt(items, trends, undefined, econNote, anomalyNote) },
     ],
   });
   // response は文字列・オブジェクトどちらでも来得るため、そのまま parse に委ねる。
@@ -644,9 +651,10 @@ const computeSignalsJev = async (
   items: NewsItem[],
   trends: PairTrend[],
   econEvents: EconEvent[] = [],
+  anomalies: Anomaly[] = [],
 ): Promise<PairSignal[]> => {
   if (!env.TYPESAFE_API_KEY) throw new Error('SIGNAL_ENGINE=jev ですが TYPESAFE_API_KEY が未設定です');
-  const body = { model: 'jev-latest', ...buildJevRequest(items, trends, undefined, econEvents) };
+  const body = { model: 'jev-latest', ...buildJevRequest(items, trends, undefined, econEvents, anomalies) };
   const res = await fetch(JEV_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -666,15 +674,16 @@ const computeSignals = async (
   items: NewsItem[],
   trends: PairTrend[],
   calendar: EconEvent[] = [],
+  anomalies: Anomaly[] = [],
 ): Promise<PairSignal[]> => {
   if (env.SIGNAL_ENGINE === 'jev') {
     try {
-      return await computeSignalsJev(env, items, trends, calendar);
+      return await computeSignalsJev(env, items, trends, calendar, anomalies);
     } catch (e) {
       console.error('Jev 失敗 → Workers AI にフォールバック:', e);
     }
   }
-  return computeSignalsWorkersAI(env, items, trends, formatEconDigest(calendar));
+  return computeSignalsWorkersAI(env, items, trends, formatEconDigest(calendar), formatAnomalyDigest(anomalies));
 };
 
 // ニュース取得→要約＆シグナルを算出して KV に保存。
@@ -692,14 +701,16 @@ const buildNews = async (env: Env): Promise<NewsPayload> => {
     return [] as EconEvent[];
   });
   const econNote = formatEconDigest(calendar);
+  // 五十日・月末・季節性・指標前後などのアノマリー（経験則）。要約とシグナルの両方に加味する。
+  const anomalies = detectAnomalies(new Date(), calendar);
 
   // 要約とシグナルは独立コール（シグナルだけ後で Jev に差替え可能）。失敗は安全側に倒す。
   const [summary, signals] = await Promise.all([
-    summarizeNews(env, items, econNote).catch((e) => {
+    summarizeNews(env, items, econNote, formatAnomalyDigest(anomalies)).catch((e) => {
       console.error('/news 要約失敗:', e);
       return '';
     }),
-    computeSignals(env, items, trends, calendar).catch((e) => {
+    computeSignals(env, items, trends, calendar, anomalies).catch((e) => {
       console.error('/news シグナル失敗:', e);
       return parseSignalResponse(''); // 全ペア中立で返す
     }),
