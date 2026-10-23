@@ -1,5 +1,7 @@
 name: deploy
 
+# main への push で GitHub Pages（https://ozawakota.github.io/lotSizing-app/）へデプロイする。
+# 事前に リポジトリの Settings → Pages → Build and deployment の Source を「GitHub Actions」にしておくこと。
 on:
   push:
     branches: ["main"]
@@ -19,23 +21,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
-      - name: Setup Node
-        uses: actions/setup-node@v3
+        uses: actions/checkout@v4
+      # リポジトリは pnpm（pnpm-lock.yaml）。Mobiscroll の取得には .npmrc の設定を使う。
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
-          node-version: 18
-          # yarnのキャッシュを効かすために設定 (npmのかたはnpmで)
-          cache: yarn
-      - name: yarn install
-        run: yarn install
-      - name: yarn build
-        run: yarn build
-        # GIthubページは https://USERNAME.github.io/REPOSITORY_NAME/
-        # となるので、envを追加してviteのベースパスを変えるように設定します。
+          version: 10
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22 # Netlify（netlify.toml の NODE_VERSION）と同じ
+          cache: pnpm
+      # Worker の URL などの VITE_* は netlify.toml を唯一の定義元にし、ここで環境変数に読み込む。
+      - name: Load VITE_* from netlify.toml
+        run: |
+          grep -E '^\s*VITE_[A-Z0-9_]+\s*=\s*"' netlify.toml \
+            | sed -E 's/^\s*(VITE_[A-Z0-9_]+)\s*=\s*"(.*)"\s*$/\1=\2/' >> "$GITHUB_ENV"
+      # Mobiscroll のトライアル版は配信される tarball の中身が lockfile 記録時と一致せず、
+      # チェックサム不一致（ERR_PNPM_TARBALL_INTEGRITY）で止まる。CI の作業コピーの中だけで、
+      # このパッケージ1件のチェックサムを、いま配信されている tarball から計算した値に差し替える
+      # （他のパッケージは lockfile どおり検査する。リポジトリの lockfile は変更しない）。
+      - name: Refresh integrity for Mobiscroll trial only
+        run: |
+          set -o pipefail
+          url="https://npm.mobiscroll.com/@mobiscroll/react-next-trial/-/react-next-trial-5.34.0.tgz"
+          token="$(grep -m1 '^//npm.mobiscroll.com/:_authToken=' .npmrc | cut -d= -f2-)"
+          echo "::add-mask::${token}"
+          sum="sha512-$(curl -fsSL -H "Authorization: Bearer ${token}" "${url}" | openssl dgst -sha512 -binary | base64 -w0)"
+          sed -i -E "/^  '@mobiscroll\/react-next-trial@5\.34\.0':\$/{n;s#integrity: [^}]*#integrity: ${sum}#}" pnpm-lock.yaml
+          # 版を上げて一致しなくなったら気付けるよう、置き換わらなければ失敗させる。
+          grep -qF "integrity: ${sum}}" pnpm-lock.yaml
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm build
+        # GitHub Pages は https://USERNAME.github.io/REPOSITORY_NAME/ になるため、vite のベースパスを切り替える。
         env:
           GITHUB_PAGES: true
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v1
+        uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
 
@@ -45,7 +69,9 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     needs: build
+    # ブランチからの手動実行（動作確認）ではビルドまで行い、公開は main のときだけにする。
+    if: github.ref == 'refs/heads/main'
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v1
+        uses: actions/deploy-pages@v4
