@@ -93,6 +93,24 @@ npm run backtest:stops -- --csv data.csv --pair EUR_USD --tf 1h  # 手元の CSV
 （同じ足で両方に触れたら損切り扱い）。表の `E[R]` はスプレッド控除後の1取引あたり期待値、`刈られ%` は
 損切り後に結局目標まで届いた割合。判定ロジックは [`../src/lib/stopBacktest.ts`](../src/lib/stopBacktest.ts)。
 
+## 投機筋（COT）の検証（バックテスト）
+
+取引量・センチメントページの「大口」（CFTC COT の非商業ネットを通貨ごとに正規化し、ペア X/Y＝X−Y で合成した値）が、
+その後の値動きと関係があるかを、CFTC の公開データ（キー不要）と Dukascopy の日足で検証する:
+
+```bash
+cd edge-server && npm install
+npm run backtest:cot                                            # 全11ペア・2010年〜・1/4/12週先
+npm run backtest:cot -- --from 2015-01-01 --pairs USD/JPY,EUR/USD --horizons 4,12
+npm run backtest:cot -- --out samples.csv                       # 週ごとのサンプルも CSV に保存
+npm run backtest:cot -- --cot-csv cot.csv --price-csv USD/JPY=usdjpy.csv  # 手元の CSV で検証（通信なし）
+```
+
+火曜時点の報告が公表される金曜の終値でエントリーしたとみなし（先読みなし）、h 週後までの騰落率を
+「大口の向きに乗った場合」として、全体・弱/中/強・前週比（強まる/弱まる）・極端な偏り（直近3年の上位/下位10%）ごとに集計する。
+`トレンド分を除く` は期間中の上昇・下落の影響を除いた値、`t値` は保有期間の重なりを粗く補正した値（|t|<2 は偶然の範囲）。
+判定ロジックは [`../src/lib/cotBacktest.ts`](../src/lib/cotBacktest.ts)、閾値はページと同じ [`../src/lib/flow.ts`](../src/lib/flow.ts)。
+
 ## 注意
 
 - **Always Free の回収**: Oracle は Always Free の VM を、CPU・ネットワーク・メモリの使用率が低い状態が
