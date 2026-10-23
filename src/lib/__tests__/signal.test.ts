@@ -6,6 +6,9 @@ import {
   computeRecentTrend,
   parseJevAnswers,
   parseSignalResponse,
+  confidenceLevel,
+  signalVerdict,
+  sortSignalsByStrength,
 } from '../signal';
 import type { RateSeries } from '../strength';
 import type { NewsItem } from '../news';
@@ -133,5 +136,50 @@ describe('computeRecentTrend', () => {
 
   it('handles a null series', () => {
     expect(computeRecentTrend(null, 'USD/JPY').changePct).toBeNull();
+  });
+});
+
+describe('アノマリーの加味', () => {
+  const trends = SIGNAL_PAIRS.map((pair) => ({ pair, changePct: 0.1, direction: 'up' as const }));
+
+  it('アノマリーがあればプロンプトに節を足し、無ければ出さない', () => {
+    const withA = buildSignalPrompt(items, trends, undefined, '', '- 五十日（今日 9:55 の仲値まで）: … → USD/JPYが上がりやすい');
+    expect(withA).toContain('# いま意識されやすいアノマリー');
+    expect(withA).toContain('五十日');
+    expect(withA).toContain('"anomaly"');
+    expect(buildSignalPrompt(items, trends)).not.toContain('# いま意識されやすいアノマリー');
+  });
+
+  it('応答の anomaly を読み、無ければ空文字', () => {
+    const raw = '{"signals":[{"pair":"USD/JPY","buyPct":64,"confidence":0.6,"trend":"continuation","trendPct":70,"rationale":"米金利上昇","anomaly":"五十日の仲値買いも追い風"}]}';
+    const out = parseSignalResponse(raw);
+    expect(out[0].anomaly).toBe('五十日の仲値買いも追い風');
+    expect(out[1].anomaly).toBe('');
+  });
+
+  it('Jev の state にもアノマリーを入れる', () => {
+    const body = buildJevRequest(items, trends, undefined, [], [{ title: '五十日（ごとうび）', when: '今日', detail: 'ドル買い' }]);
+    expect((body.state as { anomalies?: unknown[] }).anomalies).toHaveLength(1);
+    expect((buildJevRequest(items, trends).state as { anomalies?: unknown[] }).anomalies).toBeUndefined();
+  });
+});
+
+describe('signalVerdict / confidenceLevel / sortSignalsByStrength', () => {
+  it('60%以上=上昇、40%以下=下落、その間=方向感なし', () => {
+    expect(signalVerdict({ buyPct: 60 })).toBe('up');
+    expect(signalVerdict({ buyPct: 59 })).toBe('flat');
+    expect(signalVerdict({ buyPct: 40 })).toBe('down');
+  });
+
+  it('確信度 0.7以上=高、0.4以上=中、それ未満=低', () => {
+    expect(confidenceLevel(0.7)).toBe('high');
+    expect(confidenceLevel(0.5)).toBe('mid');
+    expect(confidenceLevel(0.39)).toBe('low');
+  });
+
+  it('傾き×確信度の大きい順', () => {
+    const mk = (pair: (typeof SIGNAL_PAIRS)[number], buyPct: number, confidence: number) => ({ pair, buyPct, confidence, trend: 'neutral' as const, trendPct: 50, rationale: '' });
+    const out = sortSignalsByStrength([mk('USD/JPY', 55, 0.9), mk('EUR/USD', 20, 0.5), mk('GBP/JPY', 70, 0.8)]);
+    expect(out.map((s) => s.pair)).toEqual(['GBP/JPY', 'EUR/USD', 'USD/JPY']);
   });
 });

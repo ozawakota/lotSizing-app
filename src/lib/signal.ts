@@ -37,7 +37,8 @@ export interface PairSignal {
   confidence: number; // 0-1
   trend: TrendLabel; // 継続 / 反転 / 中立
   trendPct: number; // 0-100（選ばれた trend の確からしさ）
-  rationale: string; // 日本語の一言根拠
+  rationale: string; // 日本語の一言根拠（ニュース由来）
+  anomaly?: string; // いま当てはまるアノマリーを踏まえた一言（該当なし・旧キャッシュ・Jev は空/無し）
 }
 
 // 直近の値動き（反転/継続判定の state 用）。
@@ -95,6 +96,7 @@ export function buildSignalPrompt(
   trends: PairTrend[],
   pairs: SignalPair[] = SIGNAL_PAIRS,
   econNote = '', // 高重要度の経済指標ダイジェスト（空なら節を出さない）
+  anomalyNote = '', // いま意識されやすいアノマリー（src/lib/anomaly.ts の formatAnomalyDigest。空なら節を出さない）
 ): string {
   const news = items.map((it, i) => `${i + 1}. ${it.title} — ${it.description}`).join('\n');
   const trendLines = trends
@@ -115,12 +117,17 @@ export function buildSignalPrompt(
     ...(econNote
       ? ['', '# 経済指標（高重要度・今週）', econNote, '', '発表前後は様子見やボラティリティ拡大の可能性を考慮してください。']
       : []),
+    // 五十日・月末・季節性・指標前後などの経験則（アノマリー）。ニュースと矛盾すればニュースを優先させる。
+    ...(anomalyNote
+      ? ['', '# いま意識されやすいアノマリー（経験則）', anomalyNote, '', 'アノマリーは補助材料です。ニュースや直近トレンドと食い違う場合はそちらを優先してください。']
+      : []),
     '',
     '# 出力ルール',
     `対象ペア: ${pairs.join(', ')}`,
     '次のJSONのみを返してください（前置き・説明・コードフェンスなし）。',
-    '{"signals":[{"pair":"USD/JPY","buyPct":<0-100の整数>,"confidence":<0-1の小数>,"trend":"continuation|reversal|neutral","trendPct":<0-100の整数>,"rationale":"<日本語の一言>"}]}',
+    '{"signals":[{"pair":"USD/JPY","buyPct":<0-100の整数>,"confidence":<0-1の小数>,"trend":"continuation|reversal|neutral","trendPct":<0-100の整数>,"rationale":"<ニュースを根拠にした日本語の一言>","anomaly":"<そのペアに当てはまるアノマリーの解説を日本語で一言。無ければ空文字>"}]}',
     'buyPct は買い優勢度（売り=100-buyPct）。trend は直近トレンドが継続か反転か。確信が低ければ confidence を小さく。',
+    'rationale と anomaly はそれぞれ60字以内。anomaly は上のアノマリー一覧に該当があるペアだけ書き、ニュースとどう組み合わさるかに触れてください。',
   ].join('\n');
 }
 
@@ -148,7 +155,8 @@ function normalizeSignal(pair: SignalPair, s: Record<string, unknown> | undefine
   const tpRaw = Number(s?.trendPct);
   const trendPct = Number.isFinite(tpRaw) ? Math.round(clamp(tpRaw, 0, 100)) : 50;
   const rationale = typeof s?.rationale === 'string' ? s.rationale.slice(0, 120) : '';
-  return { pair, buyPct, confidence, trend, trendPct, rationale };
+  const anomaly = typeof s?.anomaly === 'string' ? s.anomaly.trim().slice(0, 120) : '';
+  return { pair, buyPct, confidence, trend, trendPct, rationale, anomaly };
 }
 
 /**
@@ -191,6 +199,7 @@ export function buildJevRequest(
   trends: PairTrend[],
   pairs: SignalPair[] = SIGNAL_PAIRS,
   econEvents: EconEvent[] = [], // 高重要度の経済指標（state に calendar として加味）
+  anomalies: { title: string; when: string; detail: string }[] = [], // いま意識されやすいアノマリー（state に加味）
 ): JevRequestBody {
   const dirByPair = new Map(trends.map((t) => [t.pair, t.direction]));
   const state = {
@@ -199,6 +208,7 @@ export function buildJevRequest(
     ...(econEvents.length
       ? { calendar: econEvents.map((e) => ({ date: e.date, country: e.country, title: e.title, forecast: e.forecast, previous: e.previous })) }
       : {}),
+    ...(anomalies.length ? { anomalies: anomalies.map((a) => ({ title: a.title, when: a.when, detail: a.detail })) } : {}),
   };
   const questions: Record<string, unknown> = {};
   for (const pair of pairs) {
@@ -256,4 +266,34 @@ export function parseJevAnswers(
 
     return { pair, buyPct, confidence, trend, trendPct, rationale: '' };
   });
+}
+
+// ---------------------------------------------------------------------------
+// 為替ニュースタブの表示用（予測の向き・確信度の段階・並び順）
+// ---------------------------------------------------------------------------
+export type SignalVerdict = 'up' | 'down' | 'flat';
+export const VERDICT_UP_PCT = 60; // 買い%がこれ以上 → 上昇予想
+export const VERDICT_DOWN_PCT = 40; // 買い%がこれ以下 → 下落予想
+
+/** 買い%から予測の向きを決める（40〜60% は方向感なし）。 */
+export function signalVerdict(s: Pick<PairSignal, 'buyPct'>): SignalVerdict {
+  if (s.buyPct >= VERDICT_UP_PCT) return 'up';
+  if (s.buyPct <= VERDICT_DOWN_PCT) return 'down';
+  return 'flat';
+}
+
+export type ConfidenceLevel = 'high' | 'mid' | 'low';
+export function confidenceLevel(confidence: number): ConfidenceLevel {
+  if (confidence >= 0.7) return 'high';
+  if (confidence >= 0.4) return 'mid';
+  return 'low';
+}
+
+/** 傾きの強さ（買い%の50からの距離 × 確信度）が大きい順。同率は元の順。 */
+export function sortSignalsByStrength(signals: PairSignal[]): PairSignal[] {
+  const score = (s: PairSignal) => Math.abs(s.buyPct - 50) * s.confidence;
+  return signals
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => score(b.s) - score(a.s) || a.i - b.i)
+    .map(({ s }) => s);
 }
