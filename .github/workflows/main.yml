@@ -19,18 +19,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      # .npmrc が ${MOBISCROLL_TOKEN} として参照する Mobiscroll のレジストリのトークン（Secrets に登録）。
-      MOBISCROLL_TOKEN: ${{ secrets.MOBISCROLL_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Check secrets
-        run: |
-          if [ -z "$MOBISCROLL_TOKEN" ]; then
-            echo "::error::Secrets に MOBISCROLL_TOKEN が登録されていません（Settings → Secrets and variables → Actions）"
-            exit 1
-          fi
       # リポジトリは pnpm（pnpm-lock.yaml）。Mobiscroll の取得には .npmrc の設定を使う。
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -54,7 +45,9 @@ jobs:
         run: |
           set -o pipefail
           url="https://npm.mobiscroll.com/@mobiscroll/react-next-trial/-/react-next-trial-5.34.0.tgz"
-          sum="sha512-$(curl -fsSL -H "Authorization: Bearer ${MOBISCROLL_TOKEN}" "${url}" | openssl dgst -sha512 -binary | base64 -w0)"
+          token="$(grep -m1 '^//npm.mobiscroll.com/:_authToken=' .npmrc | cut -d= -f2-)"
+          echo "::add-mask::${token}"
+          sum="sha512-$(curl -fsSL -H "Authorization: Bearer ${token}" "${url}" | openssl dgst -sha512 -binary | base64 -w0)"
           sed -i -E "/^  '@mobiscroll\/react-next-trial@5\.34\.0':\$/{n;s#integrity: [^}]*#integrity: ${sum}#}" pnpm-lock.yaml
           # 版を上げて一致しなくなったら気付けるよう、置き換わらなければ失敗させる。
           grep -qF "integrity: ${sum}}" pnpm-lock.yaml
