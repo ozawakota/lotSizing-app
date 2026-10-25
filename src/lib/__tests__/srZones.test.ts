@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSrZones, starsFor } from '../srZones';
+import { buildSrZones, oscillatorBias, starsFor } from '../srZones';
 import type { Candle } from '../stoploss';
 
 // 折り返し点を直線でつないだ足（高安は終値±w）。
@@ -83,12 +83,73 @@ describe('buildSrZones の絞り込み', () => {
     // 150.6 付近で3回止められた強い帯の手前（150.45）に、1回だけのスイングがある
     const c = zigzag([150.0, 150.6, 150.1, 150.6, 150.2, 150.45, 150.25, 150.6, 150.3]);
     const z = buildSrZones(c, 150.3, { instrument: 'USD_JPY', tolAtr: 0.3, maxAtr: 20 });
-    expect(z.res.every((r) => r.score >= 2)).toBe(true);
+    expect(z.res.every((r) => r.score >= 2.5)).toBe(true);
   });
 
-  it('その側に弱い帯しか無ければ、最も近い1つだけ残す', () => {
+  it('その側に弱い帯しか無ければ、最も強い1つだけ残す', () => {
     const c = zigzag([150.0, 150.4, 150.1, 150.3]); // 上側のスイングは 150.4 の1回だけ
     const z = buildSrZones(c, 150.3, { instrument: 'USD_JPY', tolAtr: 0.2, maxAtr: 20 });
     expect(z.res.length).toBe(1);
+  });
+});
+
+describe('取引量・フィボナッチ・オシレーター', () => {
+  const base = zigzag([150.0, 150.6, 150.0, 150.6, 150.02, 150.58, 150.3]);
+
+  it('既定では片側2つまで', () => {
+    const z = buildSrZones(base, 150.3, { instrument: 'USD_JPY', maxAtr: 20, minScore: 0 });
+    expect(z.res.length).toBeLessThanOrEqual(2);
+    expect(z.sup.length).toBeLessThanOrEqual(2);
+  });
+
+  it('出来高を伴って反転したスイングは加点され、根拠に出る', () => {
+    // 150.6 の山の足だけ出来高を大きくする
+    const withVol = base.map((c) => ({ ...c, volume: c.high > 150.6 ? 5000 : 1000 }));
+    const plain = buildSrZones(base, 150.3, { instrument: 'USD_JPY', maxAtr: 20 }).res[0];
+    const vol = buildSrZones(withVol, 150.3, { instrument: 'USD_JPY', maxAtr: 20 }).res[0];
+    expect(vol.score).toBeGreaterThan(plain.score);
+    expect(vol.sources.some((l) => l.startsWith('出来高を伴う反転'))).toBe(true);
+  });
+
+  it('出来高の無い足（FXスポット）では出来高の判定をしない', () => {
+    const z = buildSrZones(base, 150.3, { instrument: 'USD_JPY', maxAtr: 20 });
+    expect([...z.res, ...z.sup].every((zz) => zz.sources.every((l) => !l.startsWith('出来高を伴う')))).toBe(true);
+  });
+
+  it('フィボナッチの水準が帯に重なると根拠に入り、重みの上書きも効く', () => {
+    const z = buildSrZones(base, 150.3, {
+      instrument: 'USD_JPY',
+      maxAtr: 20,
+      extra: [
+        { price: 150.59, kind: 'fib', label: 'フィボ61.8%' },
+        { price: 150.6, kind: 'volume', label: '出来高POC', weight: 1.5 },
+      ],
+    });
+    expect(z.res[0].sources).toContain('フィボ61.8%');
+    expect(z.res[0].sources).toContain('出来高POC');
+  });
+
+  it('売られすぎなら最寄りの支持帯、買われすぎなら最寄りの抵抗帯を加点する', () => {
+    // 加点は現在値から 1.5 ATR（≒0.17）以内の帯だけ。支持帯（150.0付近）の近く 150.12 で確かめる。
+    const plain = buildSrZones(base, 150.12, { instrument: 'USD_JPY', maxAtr: 20 });
+    const oversold = buildSrZones(base, 150.12, { instrument: 'USD_JPY', maxAtr: 20, oscillator: { rsi: 25, stochK: 15 } });
+    expect(oversold.sup[0].score - plain.sup[0].score).toBeGreaterThanOrEqual(0.7); // +0.75（0.1 単位に丸めるため 0.7〜0.8）
+    expect(oversold.sup[0].score - plain.sup[0].score).toBeLessThanOrEqual(0.8);
+    expect(oversold.sup[0].sources).toContain('RSI・ストキャス売られすぎ');
+    expect(oversold.res[0].score).toBe(plain.res[0].score); // 反対側は加点しない
+    // 遠い帯（150.3 から支持帯まで 0.28）は加点しない
+    const far = buildSrZones(base, 150.3, { instrument: 'USD_JPY', maxAtr: 20, oscillator: { rsi: 25 } });
+    expect(far.sup[0].sources).not.toContain('RSI売られすぎ');
+    // 抵抗帯（150.6付近）の近く 150.5 で買われすぎ
+    const overbought = buildSrZones(base, 150.5, { instrument: 'USD_JPY', maxAtr: 20, oscillator: { rsi: 75 } });
+    expect(overbought.res[0].sources).toContain('RSI買われすぎ');
+  });
+
+  it('oscillatorBias: RSI 30/70・ストキャス 20/80、食い違いは RSI を優先、中立は null', () => {
+    expect(oscillatorBias({ rsi: 28 })).toEqual({ side: 'sup', label: 'RSI売られすぎ' });
+    expect(oscillatorBias({ stochK: 85 })).toEqual({ side: 'res', label: 'ストキャス買われすぎ' });
+    expect(oscillatorBias({ rsi: 72, stochK: 10 })).toEqual({ side: 'res', label: 'RSI買われすぎ' });
+    expect(oscillatorBias({ rsi: 50, stochK: 50 })).toBeNull();
+    expect(oscillatorBias()).toBeNull();
   });
 });

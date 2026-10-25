@@ -175,6 +175,30 @@ export function pipSize(instrument: string): number {
   return 0.0001;
 }
 
+/**
+ * RSI（ワイルダーの平滑化。既定 14）。足りなければ null。値動きが全く無ければ 50。
+ */
+export function computeRsi(candles: Candle[], period = 14): number | null {
+  if (candles.length < period + 1) return null;
+  let gain = 0;
+  let loss = 0;
+  for (let i = 1; i <= period; i++) {
+    const d = candles[i].close - candles[i - 1].close;
+    if (d >= 0) gain += d;
+    else loss -= d;
+  }
+  gain /= period;
+  loss /= period;
+  for (let i = period + 1; i < candles.length; i++) {
+    const d = candles[i].close - candles[i - 1].close;
+    gain = (gain * (period - 1) + Math.max(d, 0)) / period;
+    loss = (loss * (period - 1) + Math.max(-d, 0)) / period;
+  }
+  if (gain === 0 && loss === 0) return 50;
+  if (loss === 0) return 100;
+  return Math.round((100 - 100 / (1 + gain / loss)) * 10) / 10;
+}
+
 /** ロウソク足から直近 lookback 本の構造（スイング高安・トレンド）を求める。 */
 export function computeStructure(candles: Candle[], currentRate: number, lookback = 24): SlStructure {
   const recent = candles.slice(-lookback);
