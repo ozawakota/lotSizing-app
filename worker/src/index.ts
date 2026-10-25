@@ -31,7 +31,7 @@ import {
 import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type NewsItem } from '../../src/lib/news';
 // 五十日・月末・季節性などのアノマリー判定（フロントの為替ニュースタブと共有）。
 import { detectAnomalies, formatAnomalyDigest, type Anomaly } from '../../src/lib/anomaly';
-// TF分析: ダウ理論の判定（RR の方向にも使う）と抵抗帯。好機ボード(/ranking)のトレンドは従来の computeStructure のまま。
+// ダウ理論の判定（TF分析・好機ボード・RR好機通知の RR の方向に使う）と、TF分析の抵抗帯。
 import { analyzeDow, dowDirection, fibLevels, type DowAnalysis } from '../../src/lib/dow';
 import { buildSrZones, type LevelSource, type SrZone } from '../../src/lib/srZones';
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
@@ -1349,9 +1349,10 @@ const buildPairCards = async (env: Env, instrument: string, jevState: { paused: 
       stoch: computeStochastic(candles),
     });
   }
-  // 構造的RR（短い足→長い足・スプレッド込みの実質RR）。レンジTFは対象外。
+  // 構造的RR（短い足→長い足・スプレッド込みの実質RR）。方向は TF分析ページ・RR好機通知と同じくダウ理論
+  // （確定足のスイング。上昇=ロング・下降=ショート、レンジ・転換の兆しは対象外）。
   const setups = scanStructuralRrAll(
-    perTf.map((p) => ({ tf: p.tf, structure: p.structure, candles: p.candles })),
+    perTf.map((p) => ({ tf: p.tf, structure: p.structure, candles: p.candles, direction: dowDirection(analyzeDow(p.candles.slice(0, -1))) })),
     instrument,
     RR_MIN,
     typicalSpreadPips(instrument),

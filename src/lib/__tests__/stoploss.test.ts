@@ -409,7 +409,7 @@ describe('scanStructuralRrAll', () => {
       0.1,
     );
     expect(short.map((r) => r.direction)).toEqual(['short']);
-    // direction を渡さなければ従来どおりトレンドで決める（好機ボード）
+    // direction を渡さなければ従来どおりトレンドで決める
     expect(scanStructuralRrAll([base, h], 'USD_JPY', 0.1).map((r) => r.direction)).toEqual(['long']);
   });
 });

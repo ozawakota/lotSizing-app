@@ -4,8 +4,7 @@
 //   安値: HL（切り上げ）/ LL（切り下げ）/ EL（ほぼ同値）
 // に分類する。最新の高値・安値がそろって HH・HL なら上昇、LH・LL なら下降、それ以外はレンジ（転換途中を含む）。
 // 上昇中は「押し安値」（最後の HL）、下降中は「戻り高値」（最後の LH）が、終値で割れる/超えるとトレンド終了となる重要ライン。
-// TF分析ページの RR 判定と RR好機通知は、方向を dowDirection で決める（上昇=ロング・下降=ショート・それ以外は対象外）。
-// 好機ボード（/ranking）は従来のトレンド（computeStructure）のまま。
+// TF分析ページの RR 判定・好機ボード・RR好機通知は、方向を dowDirection で決める（上昇=ロング・下降=ショート・それ以外は対象外）。
 import { averageTrueRange, pivotIndices, type Candle, type SlDirection } from './stoploss';
 
 export type DowTrend = 'up' | 'down' | 'range';
