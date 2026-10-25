@@ -4,8 +4,9 @@
 //   安値: HL（切り上げ）/ LL（切り下げ）/ EL（ほぼ同値）
 // に分類する。最新の高値・安値がそろって HH・HL なら上昇、LH・LL なら下降、それ以外はレンジ（転換途中を含む）。
 // 上昇中は「押し安値」（最後の HL）、下降中は「戻り高値」（最後の LH）が、終値で割れる/超えるとトレンド終了となる重要ライン。
-// ※表示用。RR・通知・好機ボードのトレンド（computeStructure）は従来どおりで、ここでは置き換えない。
-import { averageTrueRange, pivotIndices, type Candle } from './stoploss';
+// TF分析ページの RR 判定と RR好機通知は、方向を dowDirection で決める（上昇=ロング・下降=ショート・それ以外は対象外）。
+// 好機ボード（/ranking）は従来のトレンド（computeStructure）のまま。
+import { averageTrueRange, pivotIndices, type Candle, type SlDirection } from './stoploss';
 
 export type DowTrend = 'up' | 'down' | 'range';
 /**
@@ -174,4 +175,15 @@ export function fibLevels(d: DowAnalysis): { price: number; ratio: number; label
   const range = b.price - a.price;
   if (range === 0) return [];
   return FIB_RATIOS.map((r) => ({ price: b.price - range * r, ratio: r, label: `フィボ${(r * 100).toFixed(1)}%` }));
+}
+
+/**
+ * RR の方向をダウ理論で決める。上昇=ロング・下降=ショート。
+ * レンジ、または押し安値割れ/戻り高値超え（broken＝転換の兆し）、判定不能（null）は方向なし＝RR の対象外。
+ */
+export function dowDirection(d: DowAnalysis | null | undefined): SlDirection | null {
+  if (!d || d.phase === 'broken') return null;
+  if (d.trend === 'up') return 'long';
+  if (d.trend === 'down') return 'short';
+  return null;
 }

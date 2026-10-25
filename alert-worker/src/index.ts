@@ -31,10 +31,13 @@ import {
   YAHOO_INTERVAL as SL_YAHOO_INTERVAL,
   type Candle,
   type RrSetup,
+  type SlDirection,
   type SlStructure,
   type SlTimeframe,
 } from '../../src/lib/stoploss';
 // 個人投資家（Myfxbook）建玉の偏りによる逆張りフィルタ（RR好機通知）。判定はフロントと共有。
+// RR好機の方向は TF分析ページと同じくダウ理論で決める。
+import { analyzeDow, dowDirection } from '../../src/lib/dow';
 import { instrumentToFlowPair, retailBias, type FlowSnapshot, type PairFlow, type RetailBias } from '../../src/lib/flow';
 // 出来高フィルタ（RR好機通知）。CME先物の出来高から参加度/ダイバージェンスを判定。計算はフロントと共有。
 import { computeVolumeIndicators, RVOL_LABEL, VOLUME_SOURCES } from '../../src/lib/volume';
@@ -305,10 +308,12 @@ const runRrDetection = async (env: Env): Promise<void> => {
     try {
       const symbol = SL_YAHOO_SYMBOL[inst];
       if (!symbol) continue;
-      const tfStructures: { tf: SlTimeframe; structure: SlStructure; candles: Candle[] }[] = [];
+      const tfStructures: { tf: SlTimeframe; structure: SlStructure; candles: Candle[]; direction: SlDirection | null }[] = [];
       for (const tf of RR_TFS) {
         const { candles, currentRate } = await fetchCandles(symbol, SL_YAHOO_INTERVAL[tf]);
-        tfStructures.push({ tf, structure: computeStructure(candles, currentRate), candles }); // 損切りは構造的ライン
+        // 方向は TF分析ページと同じくダウ理論（確定足のスイング）で決める。レンジ・転換の兆しは対象外。損切りは構造的ライン。
+        const direction = dowDirection(analyzeDow(candles.slice(0, -1)));
+        tfStructures.push({ tf, structure: computeStructure(candles, currentRate), candles, direction });
       }
       // 条件を満たしたTFを全件通知（最良1件に集約しない＝粒度を上げる）。
       // ペアごとの一般的なスプレッドをリスクに足しリワードから引いた、実質 RR で判定する。

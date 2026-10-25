@@ -396,6 +396,22 @@ describe('scanStructuralRrAll', () => {
     // 同じ setup でも、RR の閾値を素の RR ちょうどにするとスプレッド分で不成立になる。
     expect(scanStructuralRrAll(tfs, 'USD_JPY', noSpread.rr, 1)).toEqual([]);
   });
+
+  it('direction を渡すとトレンドより優先（ダウ理論の方向）。null は対象外', () => {
+    const h = { tf: '4h' as const, structure: { trend: 'up' as const, swingHigh: 153.0, swingLow: 147.0, currentRate: 150.0 } };
+    const base = { tf: '15m' as const, structure: { trend: 'up' as const, swingHigh: 150.1, swingLow: 149.95, currentRate: 150.0 } };
+    // トレンドは up でも、ダウ理論が null（レンジ・転換の兆し）なら対象外
+    expect(scanStructuralRrAll([{ ...base, direction: null }, h], 'USD_JPY', 0.1)).toEqual([]);
+    // トレンドは range でも、ダウ理論の方向（short）で評価する
+    const short = scanStructuralRrAll(
+      [{ tf: '15m', structure: { ...base.structure, trend: 'range', swingHigh: 150.05 }, direction: 'short' }, h],
+      'USD_JPY',
+      0.1,
+    );
+    expect(short.map((r) => r.direction)).toEqual(['short']);
+    // direction を渡さなければ従来どおりトレンドで決める（好機ボード）
+    expect(scanStructuralRrAll([base, h], 'USD_JPY', 0.1).map((r) => r.direction)).toEqual(['long']);
+  });
 });
 
 describe('buildSessionJevRequest', () => {
