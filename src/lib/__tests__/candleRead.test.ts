@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyPatternToRr, patternConfirmation, patternDetail, patternQuality, patternZone, pickValidPattern, readCandlePatterns, type PatternRead } from '../candleRead';
+import { applyPatternToRr, patternConfirmation, patternTriggerLevels, priceActionHeadline, patternDetail, patternQuality, patternZone, pickValidPattern, readCandlePatterns, type PatternRead } from '../candleRead';
 import type { RrSetup } from '../stoploss';
 import type { OhlcCandle } from '../edge';
 
@@ -110,5 +110,34 @@ describe('有効なパターン（確定・ライン上・質60以上）', () =>
     expect(against.patternNote).toContain('弱気の包み足');
     expect(applyPatternToRr(rr, null)).toBe(rr);
     expect(applyPatternToRr(null, read({}))).toBeNull();
+  });
+});
+
+describe('patternTriggerLevels / priceActionHeadline（チャート用）', () => {
+  const read = (over: Partial<PatternRead>): PatternRead => ({
+    key: 'bull_pinbar',
+    label: '下ヒゲピンバー',
+    barsAgo: 1,
+    quality: 80,
+    zone: 'key',
+    zoneReasons: ['押し安値'],
+    confirmation: 'confirmed',
+    ...over,
+  });
+
+  it('強気は高値で確定・安値で否定、弱気は逆', () => {
+    const bar = c(150, 150.2, 149.8, 150.1);
+    expect(patternTriggerLevels(bar, 'bull_pinbar')).toEqual({ confirm: 150.2, invalidate: 149.8 });
+    expect(patternTriggerLevels(bar, 'bear_engulfing')).toEqual({ confirm: 149.8, invalidate: 150.2 });
+  });
+
+  it('有効パターン → 確定待ち → 否定/弱い形 → なし の順で一言を選ぶ', () => {
+    const valid = read({});
+    const pending = read({ key: 'bear_pinbar', label: '上ヒゲピンバー', confirmation: 'pending', barsAgo: 0 });
+    expect(priceActionHeadline([pending, valid])).toEqual({ text: '下ヒゲピンバーが確定（押し安値）', tone: 'bull', valid: true });
+    expect(priceActionHeadline([pending, read({ quality: 40 })])).toEqual({ text: '上ヒゲピンバーの確定待ち', tone: 'bear', valid: false });
+    expect(priceActionHeadline([read({ confirmation: 'invalidated' })]).text).toBe('下ヒゲピンバーは否定済み');
+    expect(priceActionHeadline([read({ zone: 'mid', zoneReasons: [] })]).text).toBe('下ヒゲピンバー（ライン外・弱い形）');
+    expect(priceActionHeadline([])).toEqual({ text: '目立ったパターンなし', tone: 'neutral', valid: false });
   });
 });

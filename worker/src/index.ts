@@ -939,6 +939,7 @@ const handleStopLoss = async (env: Env, url: URL): Promise<Response> => {
 // ---------------------------------------------------------------------------
 const KV_MTF_PREFIX = 'mtf:';
 const MTF_TTL_MS = 8 * 60 * 1000; // 8分
+const CHART_BARS = 36; // ローソク足チャートに載せる確定足の本数（パターンの探索期間 24 本＋前の文脈）
 const MTF_TIMEFRAMES: SlTimeframe[] = ['15m', '30m', '1h', '4h'];
 
 interface MtfTf {
@@ -959,6 +960,8 @@ interface MtfTf {
   dow: DowAnalysis | null; // ダウ理論（スイングの切り上げ/切り下げ・押し安値/戻り高値）。表示用。スイング不足は null
   zones: { res: SrZone[]; sup: SrZone[] } | null; // 抵抗帯（近い順・★1〜3・根拠つき）。表示用
   rsi: number | null; // RSI(14)。抵抗帯のオシレーター加点と表示に使う。算出不可は null
+  bars: OhlcCandle[]; // ローソク足チャート用の直近の確定足（古い順・最大 CHART_BARS 本。末尾=最新確定足=barsAgo 0）
+  forming: OhlcCandle | null; // 形成中の足（チャートの右端に薄く描く）
 }
 interface MtfPayload {
   instrument: string;
@@ -991,6 +994,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
   const now = Date.now();
   const tfCandles: Candle[][] = []; // ロールリバーサル評価用に各TFの足を保持（index は timeframes と対応）
   const tfOhlc: OhlcCandle[][] = []; // パターン読み用の確定足（OHLC。index は timeframes と対応）
+  const tfForming: (OhlcCandle | null)[] = []; // 形成中の足（チャート表示用）
   let volProfile: VolumeProfile | null = null; // 1時間足の価格帯別出来高（現物の目盛り）。損切り・パターンの場所判定に使う
   // 1パス目で集める各TFの材料（パターンの読みは全TFの構造がそろってから）。
   const prep: {
@@ -1038,6 +1042,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       .filter((c) => typeof c.open === 'number')
       .map((c) => ({ open: c.open as number, high: c.high, low: c.low, close: c.close, t: c.t }));
     tfOhlc.push(ohlc.slice(0, -1)); // パターン読みに使う確定足（末尾の形成中の足は除外）
+    tfForming.push(ohlc.at(-1) ?? null);
     // ダウ理論は確定足だけで判定する（末尾の形成中の足は除外）。
     const dow = analyzeDow(candles.slice(0, -1));
     const rsi = computeRsi(candles);
@@ -1088,6 +1093,8 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       dow,
       zones: null, // 下の2パス目で算出（上位TFの高安・ロールリバーサルが必要なため）
       rsi,
+      bars: (tfOhlc[i] ?? []).slice(-CHART_BARS),
+      forming: tfForming[i] ?? null,
     });
   }
 
