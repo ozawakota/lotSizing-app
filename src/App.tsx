@@ -4,6 +4,8 @@ import { Select, Page, setOptions, localeJa, Input, Popup } from '@mobiscroll/re
 import { FC, useState, useEffect } from 'react';
 import HelpModal from './HelpModal'; // 前提：別ファイルに作成済み
 import DstInfoModal from './DstInfoModal'; // 夏時間/冬時間の説明モーダル
+import ProverbModal from './ProverbModal'; // 今日の相場格言モーダル
+import { Quote } from 'lucide-react';
 import CurrencyStrengthMeter from './CurrencyStrengthMeter';
 import AlertBell from './AlertBell'; // ヘッダーの相場変動通知ベル
 import AlertRrToggle from './AlertRrToggle'; // ヘッダーのRR好機通知トグル（ベルの左）
@@ -98,6 +100,7 @@ const App: FC = () => {
   });
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false); // モーダルの表示状態
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false); // ヘルプモーダルの表示状態
+  const [isProverbOpen, setIsProverbOpen] = useState<boolean>(false); // 今日の相場格言モーダルの表示状態
   const [isDstModalOpen, setIsDstModalOpen] = useState<boolean>(false); // 夏時間/冬時間モーダルの表示状態
   const [currencyPrice, setCurrencyPrice] = useState<string>('-'); // 選択された通貨の価格
   const [lastUpdated, setLastUpdated] = useState<string>(''); // 価格更新日時
@@ -744,7 +747,19 @@ const App: FC = () => {
       <div className='lg:w-150 lg:mx-auto min-h-screen bg-gray-50'>
 
       {/* 共通ヘッダー（タイトル + 通知ベル。計算ページのみヘルプ/夏時間を表示） */}
-      <AppHeader title={VIEW_TITLES[view]}>
+      <AppHeader
+        title={VIEW_TITLES[view]}
+        left={
+          <button
+            type="button"
+            aria-label="今日の相場格言"
+            className="text-amber-500 rounded-full h-8 w-8 flex items-center justify-center border border-amber-500"
+            onClick={() => setIsProverbOpen(true)}
+          >
+            <Quote className="h-4 w-4" aria-hidden="true" />
+          </button>
+        }
+      >
         <AlertRrToggle />
         <AlertBell />
         {view === 'calculator' && (
@@ -1040,6 +1055,7 @@ const App: FC = () => {
       </Popup>
       
       {/* 別ファイルから作成したヘルプモーダル */}
+      <ProverbModal isOpen={isProverbOpen} onClose={() => setIsProverbOpen(false)} />
       <HelpModal
         isOpen={isHelpModalOpen}
         onClose={closeHelpModal}
