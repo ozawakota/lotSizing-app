@@ -7,6 +7,7 @@
 import type { SlTimeframe, SlDirection } from './stoploss';
 import { ENTRY_DELTA, type EntrySignal } from './entrySignal';
 import type { ScoreItem } from './edgeScore';
+import type { PaTag } from './smc';
 
 export const RANKING_TIMEFRAMES: SlTimeframe[] = ['15m', '30m', '1h', '4h'];
 
@@ -47,6 +48,7 @@ export interface RrCard {
   dowLabel?: string; // 例「上昇・押し目を形成中」
   stopNote?: string | null; // 抵抗帯に合わせた損切りの調整（無ければ null）
   targetNote?: string | null; // 抵抗帯に合わせた目標の調整（無ければ null）
+  paTags?: PaTag[]; // プライスアクション（SMC: スイープ・オーダーブロック・FVG・OTE など）のタグ
 }
 
 export interface RrBoardSnapshot {

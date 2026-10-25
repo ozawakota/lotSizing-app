@@ -3,12 +3,15 @@
 //     - 損切りが支持帯（ショートは抵抗帯）の中や縁にあると、帯で反発する前に刈られやすいので帯の外へずらす
 //     - 目標までの途中に★2以上の抵抗帯（ショートは支持帯）があれば、目標をその帯の手前に縮める
 //  2) edgeScore: 総合スコア（0–100）と内訳。50 を基準に、ダウ理論・上位足の向き・RR・損切りの強さ・
-//     エントリー位置（帯との位置関係）・ローソク足パターン・タイミング・オシレーター・AI（Jev）を加減点する。
+//     エントリー位置（帯との位置関係）・ローソク足パターン・SMC（スイープ・オーダーブロック・FVG・OTE など）・
+//     タイミング・オシレーター・AI（Jev）を加減点する。加減点の合計は tanh で 0–100 に収める
+//     （材料がそろっても 100 に張り付かず、順位の差が残るように）。
 // ※投資助言ではない参考情報。
 import { pipSize, type RrSetup, type SlDirection, type SlTimeframe } from './stoploss';
 import type { SrZone } from './srZones';
 import { dowDirection, type DowAnalysis } from './dow';
 import type { EntryKind } from './entrySignal';
+import type { PaTag } from './smc';
 
 /** 準好機の下限 RR（RR_MIN 未満〜これ以上は「準好機」として別枠で表示）。 */
 export const NEAR_RR_MIN = 2.0;
@@ -86,6 +89,7 @@ export interface EdgeInputs {
   rsi: number | null;
   stochK: number | null;
   jevProb: number | null; // AI（Jev）のその方向へのブレイク確率（0–100）。取れなければ null
+  paTags?: PaTag[]; // SMC のタグ（smcTags）。points をそのまま加減点する
 }
 
 const TF_JA: Record<SlTimeframe, string> = { '15m': '15分足', '30m': '30分足', '1h': '1時間足', '4h': '4時間足' };
@@ -153,10 +157,14 @@ export function edgeScore(i: EdgeInputs): { score: number; items: ScoreItem[] } 
     if (over) add(long ? 'RSI/ストキャスが買われすぎ' : 'RSI/ストキャスが売られすぎ', -6);
   }
 
+  // SMC（流動性スイープ・オーダーブロック・FVG・プレミアム/ディスカウント・ディスプレイスメント）。
+  for (const t of i.paTags ?? []) add(`PA: ${t.label}`, t.points);
+
   // AI（Jev）のブレイク確率: 50% を中立に ±15。
   if (i.jevProb != null) add(`AI: ${long ? '上抜け' : '下抜け'}確率 ${Math.round(i.jevProb)}%`, Math.round((i.jevProb - 50) * 0.3));
 
-  const score = Math.max(0, Math.min(100, Math.round(50 + items.reduce((a, b) => a + b.points, 0))));
+  const sum = items.reduce((a, b) => a + b.points, 0);
+  const score = Math.round(50 + 50 * Math.tanh(sum / 50));
   items.sort((a, b) => Math.abs(b.points) - Math.abs(a.points));
   return { score, items };
 }
