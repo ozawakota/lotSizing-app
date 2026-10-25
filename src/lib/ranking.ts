@@ -1,9 +1,12 @@
 // RR好機ボード（エッジページ）の型と整形ロジック。フロント/worker 共有。
-// 各ペア×TF（15m/30m/1h/4h）で構造RR(≥RR_MIN)が成立した「好機」を1カードとして扱う。
-// 信用度は Jev のブレイク方向確率。取得できない/使用上限のときは roleReversal の構造信用度で代替。
-// 並び順は信用度→RR の降順。※投資助言ではない参考情報。
+// 各ペア×TF（15m/30m/1h/4h）で構造RRが成立した「好機」を1カードとして扱う。
+// 損切り・目標は抵抗帯に合わせて調整し、RR≥RR_MIN を「好機」、NEAR_RR_MIN≤RR<RR_MIN を「準好機」とする。
+// 並び順は総合スコア（edgeScore。ダウ理論・上位足・帯・パターン・タイミング・AI の合算）→RR の降順。
+// 旧キャッシュ（総合スコアが無いカード）は、信用度（Jev/roleReversal）＋タイミング補正で並べる。
+// ※投資助言ではない参考情報。
 import type { SlTimeframe, SlDirection } from './stoploss';
 import { ENTRY_DELTA, type EntrySignal } from './entrySignal';
+import type { ScoreItem } from './edgeScore';
 
 export const RANKING_TIMEFRAMES: SlTimeframe[] = ['15m', '30m', '1h', '4h'];
 
@@ -37,6 +40,13 @@ export interface RrCard {
   confidence: number | null; // 0–100。取得不可は null
   confidenceSource: ConfidenceSource | null;
   entrySignal: EntrySignal | null; // 押し目/戻り/様子見/反転警戒（MA+ストキャス+PA）。評価不能は null
+  // 以下は精度向上版で追加（旧キャッシュには無い）。
+  tier?: 'prime' | 'near'; // prime=好機（RR≥RR_MIN）/ near=準好機（NEAR_RR_MIN≤RR<RR_MIN）
+  score?: number; // 総合スコア 0–100（50=中立）
+  scoreItems?: ScoreItem[]; // 総合スコアの内訳（点数の大きい順）
+  dowLabel?: string; // 例「上昇・押し目を形成中」
+  stopNote?: string | null; // 抵抗帯に合わせた損切りの調整（無ければ null）
+  targetNote?: string | null; // 抵抗帯に合わせた目標の調整（無ければ null）
 }
 
 export interface RrBoardSnapshot {
@@ -46,8 +56,9 @@ export interface RrBoardSnapshot {
   generatedAt: number;
 }
 
-// 実効スコア = 信用度 + エントリータイミング補正（押し目/戻り加点・反転警戒減点）。
+// 並び順のスコア。総合スコアがあればそれ、無ければ（旧キャッシュ）信用度 + エントリータイミング補正。
 export function effectiveScore(c: RrCard): number {
+  if (c.score != null) return c.score;
   return (c.confidence ?? -1) + (c.entrySignal ? ENTRY_DELTA[c.entrySignal.kind] : 0);
 }
 
