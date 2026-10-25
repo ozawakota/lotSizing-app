@@ -1055,7 +1055,6 @@ const App: FC = () => {
       </Popup>
       
       {/* 別ファイルから作成したヘルプモーダル */}
-      <ProverbModal isOpen={isProverbOpen} onClose={() => setIsProverbOpen(false)} />
       <HelpModal
         isOpen={isHelpModalOpen}
         onClose={closeHelpModal}
@@ -1081,6 +1080,9 @@ const App: FC = () => {
       </div>
 
       <BottomTabBar view={view} onChange={setView} />
+
+      {/* 今日の相場格言（ヘッダー左のボタンはどのページにもあるので、モーダルもページの外に置く） */}
+      <ProverbModal isOpen={isProverbOpen} onClose={() => setIsProverbOpen(false)} />
       </div>
     </Page>
   );
