@@ -55,6 +55,7 @@ interface MtfTf {
   candlePatterns?: PatternRead[]; // 期間内のパターン（新しい順・最大3件、質・場所・確定/否定つき）。旧キャッシュには無い
   dow?: DowAnalysis | null; // ダウ理論（表示用）。旧キャッシュには無い
   zones?: { res: SrZone[]; sup: SrZone[] } | null; // 抵抗帯（表示用）。旧キャッシュには無い
+  rsi?: number | null; // RSI(14)。旧キャッシュには無い
 }
 interface MtfResult {
   instrument: string;
@@ -436,7 +437,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
   const extraCount =
     (tf.roleReversal ? 1 : 0) +
     (tf.candlePatterns ? tf.candlePatterns.length : tf.candlePattern ? 1 : 0) +
-    (tf.stoch ? 1 : 0) +
+    (tf.stoch || tf.rsi != null ? 1 : 0) +
     (tf.volumeLevel != null ? 1 : 0);
 
   return (
@@ -522,7 +523,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
                   </div>
                 )
               )}
-              {(tf.stoch || tf.volumeLevel != null) && (
+              {(tf.stoch || tf.rsi != null || tf.volumeLevel != null) && (
                 <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-gray-500">
                   {tf.stoch && (
                     <span>
@@ -531,6 +532,16 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
                         {tf.stoch.k.toFixed(0)}/{tf.stoch.d.toFixed(0)}
                       </span>{' '}
                       <span className={`font-semibold ${stochCls}`}>{stochLabel}</span>
+                    </span>
+                  )}
+                  {tf.rsi != null && (
+                    <span>
+                      RSI <span className="font-semibold tabular-nums text-gray-700">{tf.rsi.toFixed(0)}</span>{' '}
+                      <span
+                        className={`font-semibold ${tf.rsi >= 70 ? 'text-red-600' : tf.rsi <= 30 ? 'text-green-600' : 'text-gray-500'}`}
+                      >
+                        {tf.rsi >= 70 ? '買われすぎ' : tf.rsi <= 30 ? '売られすぎ' : '中立'}
+                      </span>
                     </span>
                   )}
                   {tf.volumeLevel != null && (

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { analyzeDow, dowSummary } from '../dow';
+import { analyzeDow, dowSummary, fibLevels } from '../dow';
+import { computeRsi } from '../stoploss';
 import type { Candle } from '../stoploss';
 
 // 折り返し点の価格を直線でつないだ足（各区間 step 本）。高安は終値±w。
@@ -74,5 +75,32 @@ describe('analyzeDow', () => {
     for (let i = 1; i < d.swings.length; i++) expect(d.swings[i].kind).not.toBe(d.swings[i - 1].kind);
     const s = d.swings.at(-1)!;
     expect(s.barsAgo).toBe(c.length - 1 - s.index);
+  });
+});
+
+describe('fibLevels', () => {
+  it('安値→高値の値幅に対し、高値から 38.2/50/61.8% 下の押しの水準', () => {
+    const d = analyzeDow(zigzag([100, 102, 101, 103, 102, 104, 103.5]), { pivotK: 2 })!;
+    const [a, b] = d.swings.slice(-2); // 安値 → 高値
+    const f = fibLevels(d);
+    expect(f.map((x) => x.label)).toEqual(['フィボ38.2%', 'フィボ50.0%', 'フィボ61.8%']);
+    expect(f[1].price).toBeCloseTo((a.price + b.price) / 2, 6);
+    expect(f.every((x) => x.price < b.price && x.price > a.price)).toBe(true);
+  });
+});
+
+describe('computeRsi', () => {
+  const series = (closes: number[]) => closes.map((c) => ({ high: c, low: c, close: c }));
+  it('上がり続ければ100、下がり続ければ0、横ばいは50、足りなければ null', () => {
+    expect(computeRsi(series(Array.from({ length: 20 }, (_, i) => 100 + i)))).toBe(100);
+    expect(computeRsi(series(Array.from({ length: 20 }, (_, i) => 100 - i)))).toBe(0);
+    expect(computeRsi(series(Array.from({ length: 20 }, () => 100)))).toBe(50);
+    expect(computeRsi(series([1, 2, 3]))).toBeNull();
+  });
+  it('上げ下げが半々なら 50 前後', () => {
+    const closes = Array.from({ length: 40 }, (_, i) => 100 + (i % 2 === 0 ? 0 : 1));
+    const r = computeRsi(series(closes))!;
+    expect(r).toBeGreaterThan(40);
+    expect(r).toBeLessThan(60);
   });
 });

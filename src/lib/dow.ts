@@ -159,3 +159,19 @@ export function dowSummary(d: DowAnalysis): string {
       return t;
   }
 }
+
+export const FIB_RATIOS = [0.382, 0.5, 0.618] as const;
+
+/**
+ * 直近のスイングの値幅（最後の2つのスイング a→b）に対する押し・戻しのフィボナッチ水準。
+ * a=安値→b=高値なら b から下へ（押し目の候補＝支持）、a=高値→b=安値なら b から上へ（戻りの候補＝抵抗）。
+ */
+export function fibLevels(d: DowAnalysis): { price: number; ratio: number; label: string }[] {
+  const n = d.swings.length;
+  if (n < 2) return [];
+  const a = d.swings[n - 2];
+  const b = d.swings[n - 1];
+  const range = b.price - a.price;
+  if (range === 0) return [];
+  return FIB_RATIOS.map((r) => ({ price: b.price - range * r, ratio: r, label: `フィボ${(r * 100).toFixed(1)}%` }));
+}
