@@ -153,6 +153,7 @@ export default function EdgeAnalysis() {
             <p className="text-[11px] text-amber-600">取得できなかったペア: {data.failed.map(pairLabel).join(', ')}</p>
           )}
           <p className="text-[10px] leading-relaxed text-gray-400">
+            方向はダウ理論（高値・安値の切り上げ＝ロング／切り下げ＝ショート。レンジ・転換の兆しは対象外）。
             構造的RR（ピボット＋ATR＋上位TF目標、スプレッド込みの実質RR）が1:2.5以上の好機を、
             信用度（AI＝Jevのブレイク方向確率／構造＝ロールリバーサル）＋エントリータイミングの実効スコア順に表示。
             タイミングは 🟢押し目/戻り・🟡様子見・⚠反転警戒（移動平均SMA21/EMA75/EMA200＋ストキャス＋プライスアクション）。
