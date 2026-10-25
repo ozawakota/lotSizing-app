@@ -1,6 +1,6 @@
 // タイムフレーム分析ページ（旧「レジサポ」を統合）。選んだペアを 15m/30m/1h/4h で分析し、
-// 各TFを1カードに融合表示する: トレンド＋結論(反転/ブレイク/PA)＋レジ/現在/サポ＋ブレイク確率＋
-// RR＋補助指標(ストキャス・出来高節目)。全TF統合の総合判断・セッション別予測・RR好機も表示。
+// 各TFを1カードに融合表示する: 結論(反転/ブレイク/PA)＋ダウ理論(スイング図・押し安値/戻り高値)＋
+// 抵抗帯のはしご(★・根拠)＋ブレイク確率＋RR＋そのほかの指標。全TF統合の総合判断・セッション別予測・RR好機も表示。
 // Worker(/mtf, VITE_MTF_URL) が Yahoo足＋Jev/Workers AI で算出。ペア選択で自動取得。
 // ※参考情報・投資助言ではない。
 import { useEffect, useState } from 'react';
@@ -20,6 +20,9 @@ import { MARKET_SESSIONS, isSessionOpen } from '@/lib/session';
 import { fetchGoldSpot } from '@/lib/goldSpot';
 import { CONFIRMATION_LABEL, type PatternRead } from '@/lib/candleRead';
 import TfCountdown from '@/components/TfCountdown';
+import { DowHeader, KeyLevelRow, SwingChart, ZoneLadder } from '@/components/TfStructure';
+import type { DowAnalysis } from '@/lib/dow';
+import type { SrZone } from '@/lib/srZones';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 
@@ -50,6 +53,8 @@ interface MtfTf {
   roleReversal: RoleReversal | null; // ロールリバーサル・ブレイク信用度（0–100・状態・側）。評価不能=null
   candlePattern: { key: string; label: string; barsAgo: number } | null; // 直近のローソク足パターン(ピンバー/包み足)
   candlePatterns?: PatternRead[]; // 期間内のパターン（新しい順・最大3件、質・場所・確定/否定つき）。旧キャッシュには無い
+  dow?: DowAnalysis | null; // ダウ理論（表示用）。旧キャッシュには無い
+  zones?: { res: SrZone[]; sup: SrZone[] } | null; // 抵抗帯（表示用）。旧キャッシュには無い
 }
 interface MtfResult {
   instrument: string;
@@ -71,6 +76,15 @@ async function toSpotBasis(body: MtfResult): Promise<MtfResult> {
   if (spot === null || !(body.currentRate > 0)) return body;
   const off = body.currentRate - spot;
   const shiftRr = <T extends RrSetup>(rr: T): T => ({ ...rr, entry: rr.entry - off, stop: rr.stop - off, target: rr.target - off });
+  const shiftDow = (d: DowAnalysis): DowAnalysis => ({
+    ...d,
+    swings: d.swings.map((sw) => ({ ...sw, price: sw.price - off })),
+    keyLevel: d.keyLevel ? { ...d.keyLevel, price: d.keyLevel.price - off } : null,
+    extremeLevel: d.extremeLevel ? { ...d.extremeLevel, price: d.extremeLevel.price - off } : null,
+    rangeHigh: d.rangeHigh == null ? null : d.rangeHigh - off,
+    rangeLow: d.rangeLow == null ? null : d.rangeLow - off,
+  });
+  const shiftZone = (z: SrZone): SrZone => ({ ...z, low: z.low - off, high: z.high - off, center: z.center - off });
   return {
     ...body,
     currentRate: spot,
@@ -84,6 +98,8 @@ async function toSpotBasis(body: MtfResult): Promise<MtfResult> {
         t.roleReversal && typeof t.roleReversal.level === 'number'
           ? { ...t.roleReversal, level: t.roleReversal.level - off }
           : t.roleReversal,
+      dow: t.dow ? shiftDow(t.dow) : t.dow,
+      zones: t.zones ? { res: t.zones.res.map(shiftZone), sup: t.zones.sup.map(shiftZone) } : t.zones,
     })),
     rrOpportunity: body.rrOpportunity ? shiftRr(body.rrOpportunity) : null,
   };
@@ -398,8 +414,12 @@ function SessionOutlookCard({ outlook }: { outlook: SessionOutlook | null }) {
   );
 }
 
-// 1TFの融合カード: 結論チップ → レジ/現在/サポ → ブレイク → RR → 補助指標（ストキャス・出来高節目）。
+// 1TFの融合カード:
+//   見出し（時間足・確定カウントダウン・結論チップ）→ ダウ理論（トレンド・局面・強さ・スイング図・押し安値/戻り高値）
+//   → 抵抗帯のはしご（★・幅・距離・根拠）→ ブレイク確率・RR → 「そのほかの指標」（ロールリバーサル・パターン・ストキャス・出来高）。
+// 旧キャッシュ（dow/zones が無い）では、従来のトレンドチップとスイング高安の2本線で表示する。
 function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument: string; currentRate: number; digits: number }) {
+  const [moreOpen, setMoreOpen] = useState(false);
   const pip = pipSize(instrument);
   const resDist = Math.abs(tf.swingHigh - currentRate) / pip;
   const supDist = Math.abs(currentRate - tf.swingLow) / pip;
@@ -412,16 +432,22 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
       : tf.stoch.k <= 20
         ? 'text-green-600'
         : 'text-gray-500';
+  const hasZones = !!tf.zones && (tf.zones.res.length > 0 || tf.zones.sup.length > 0);
+  const extraCount =
+    (tf.roleReversal ? 1 : 0) +
+    (tf.candlePatterns ? tf.candlePatterns.length : tf.candlePattern ? 1 : 0) +
+    (tf.stoch ? 1 : 0) +
+    (tf.volumeLevel != null ? 1 : 0);
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-3">
-      {/* ヘッダー: 時間足 ＋ トレンド ＋ 確定カウントダウン ／ 結論チップ ＋ 確信% */}
-      <div className="mb-2.5 flex items-center justify-between gap-2">
+    <div className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
+      {/* 見出し: 時間足 ＋ 確定カウントダウン ／ 結論チップ ＋ 確信% */}
+      <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <p className="text-sm font-bold text-gray-800">{TF_LABEL[tf.tf]}</p>
-          <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${TREND_STYLE[tf.trend]}`}>
-            {TREND_LABEL[tf.trend]}
-          </span>
+          {!tf.dow && (
+            <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${TREND_STYLE[tf.trend]}`}>{TREND_LABEL[tf.trend]}</span>
+          )}
           <TfCountdown tf={tf.tf} />
         </div>
         <div className="flex items-center gap-2">
@@ -430,60 +456,95 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
         </div>
       </div>
 
-      {/* レジ → 現在 → サポ（価格列を揃える3行グリッド） */}
-      <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-3 gap-y-2 border-y border-gray-100 py-2">
-        <LevelLine side="res" price={tf.swingHigh} distancePips={resDist} digits={digits} />
+      {/* ダウ理論: トレンド・局面・強さ → スイング図 → 押し安値/戻り高値 */}
+      {tf.dow && (
+        <div className="mb-2 rounded-lg bg-gray-50 px-2 py-1.5">
+          <DowHeader dow={tf.dow} />
+          <SwingChart dow={tf.dow} currentRate={currentRate} digits={digits} />
+          <KeyLevelRow dow={tf.dow} currentRate={currentRate} pip={pip} digits={digits} />
+        </div>
+      )}
 
-        <span className="text-sm font-medium text-gray-500">現在</span>
-        <span className="text-right text-xl font-bold tabular-nums text-gray-900">{currentRate.toFixed(digits)}</span>
-        <span />
+      {/* 抵抗帯のはしご（新）。無ければ従来のレジ → 現在 → サポ */}
+      {hasZones && tf.zones ? (
+        <ZoneLadder res={tf.zones.res} sup={tf.zones.sup} currentRate={currentRate} digits={digits} />
+      ) : (
+        <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-3 gap-y-2 border-y border-gray-100 py-2">
+          <LevelLine side="res" price={tf.swingHigh} distancePips={resDist} digits={digits} />
 
-        <LevelLine side="sup" price={tf.swingLow} distancePips={supDist} digits={digits} />
-      </div>
+          <span className="text-sm font-medium text-gray-500">現在</span>
+          <span className="text-right text-xl font-bold tabular-nums text-gray-900">{currentRate.toFixed(digits)}</span>
+          <span />
 
-      {/* ブレイク確率バー ＋ RR ＋ ロールリバーサル信用度 */}
+          <LevelLine side="sup" price={tf.swingLow} distancePips={supDist} digits={digits} />
+        </div>
+      )}
+
+      {/* ブレイク確率バー ＋ RR（判断に直結するので常に表示） */}
       <BreakoutRow breakout={tf.breakout} />
       <RrRow rr={tf.rr} digits={digits} />
-      {tf.roleReversal && (
-        <RoleReversalRow rr={tf.roleReversal} instrument={instrument} currentRate={currentRate} digits={digits} />
-      )}
 
-      {/* ローソク足パターン（新しい順・最大3件）。旧キャッシュ（candlePatterns 無し）は従来の1件表示 */}
-      {tf.candlePatterns ? (
-        <PatternList reads={tf.candlePatterns} tf={tf.tf} />
-      ) : (
-        tf.candlePattern && (
-          <div className="mt-2 flex items-center justify-between text-[11px]">
-            <span className="text-gray-500">ローソク足</span>
-            <span className="flex items-center gap-1.5 font-semibold">
-              <span className={tf.candlePattern.key.startsWith('bull') ? 'text-green-700' : 'text-red-700'}>
-                {tf.candlePattern.label}
-              </span>
-              <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500">
-                {tf.candlePattern.barsAgo === 0 ? '確定足' : `${tf.candlePattern.barsAgo}本前`}
-              </span>
-            </span>
-          </div>
-        )
-      )}
-
-      {/* 補助指標（ストキャス・出来高節目）を1行に集約。無ければ非表示 */}
-      {(tf.stoch || tf.volumeLevel != null) && (
-        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-gray-500">
-          {tf.stoch && (
+      {/* そのほかの指標（ロールリバーサル・ローソク足パターン・ストキャス・出来高節目）は折りたたみ */}
+      {extraCount > 0 && (
+        <div className="mt-2 border-t border-gray-100 pt-1.5">
+          <button
+            type="button"
+            onClick={() => setMoreOpen((o) => !o)}
+            aria-expanded={moreOpen}
+            className="flex w-full items-center justify-between text-[11px] text-gray-500"
+          >
             <span>
-              ストキャス <span className="font-semibold tabular-nums text-gray-700">{tf.stoch.k.toFixed(0)}/{tf.stoch.d.toFixed(0)}</span>{' '}
-              <span className={`font-semibold ${stochCls}`}>{stochLabel}</span>
+              そのほかの指標 <span className="text-gray-400">（{extraCount}）</span>
             </span>
-          )}
-          {tf.volumeLevel != null && (
-            <span>
-              出来高節目（{VOLUME_AGO_LABEL[tf.tf]}）{' '}
-              <span className="font-semibold tabular-nums text-gray-700">{tf.volumeLevel.toFixed(digits)}</span>
-              <span className={tf.volumeLevel >= currentRate ? 'text-red-600' : 'text-green-600'}>
-                {tf.volumeLevel >= currentRate ? '（レジ）' : '（サポ）'}
-              </span>
+            <span className={`transition-transform ${moreOpen ? 'rotate-180' : ''}`} aria-hidden="true">
+              ▾
             </span>
+          </button>
+          {moreOpen && (
+            <>
+              {tf.roleReversal && (
+                <RoleReversalRow rr={tf.roleReversal} instrument={instrument} currentRate={currentRate} digits={digits} />
+              )}
+              {tf.candlePatterns ? (
+                <PatternList reads={tf.candlePatterns} tf={tf.tf} />
+              ) : (
+                tf.candlePattern && (
+                  <div className="mt-2 flex items-center justify-between text-[11px]">
+                    <span className="text-gray-500">ローソク足</span>
+                    <span className="flex items-center gap-1.5 font-semibold">
+                      <span className={tf.candlePattern.key.startsWith('bull') ? 'text-green-700' : 'text-red-700'}>
+                        {tf.candlePattern.label}
+                      </span>
+                      <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500">
+                        {tf.candlePattern.barsAgo === 0 ? '確定足' : `${tf.candlePattern.barsAgo}本前`}
+                      </span>
+                    </span>
+                  </div>
+                )
+              )}
+              {(tf.stoch || tf.volumeLevel != null) && (
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-gray-500">
+                  {tf.stoch && (
+                    <span>
+                      ストキャス{' '}
+                      <span className="font-semibold tabular-nums text-gray-700">
+                        {tf.stoch.k.toFixed(0)}/{tf.stoch.d.toFixed(0)}
+                      </span>{' '}
+                      <span className={`font-semibold ${stochCls}`}>{stochLabel}</span>
+                    </span>
+                  )}
+                  {tf.volumeLevel != null && (
+                    <span>
+                      出来高節目（{VOLUME_AGO_LABEL[tf.tf]}）{' '}
+                      <span className="font-semibold tabular-nums text-gray-700">{tf.volumeLevel.toFixed(digits)}</span>
+                      <span className={tf.volumeLevel >= currentRate ? 'text-red-600' : 'text-green-600'}>
+                        {tf.volumeLevel >= currentRate ? '（レジ）' : '（サポ）'}
+                      </span>
+                    </span>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

@@ -843,7 +843,7 @@ export function averageTrueRange(candles: Candle[], period = 14): number {
 }
 
 // キリ番の刻み（円絡み=0.50円, XAU=10ドル, その他=0.0050）。
-function roundStep(instrument: string): number {
+export function roundStep(instrument: string): number {
   if (instrument.startsWith('XAU')) return 10;
   if (instrument.endsWith('JPY')) return 0.5;
   return 0.005;
