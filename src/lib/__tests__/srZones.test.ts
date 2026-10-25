@@ -153,3 +153,15 @@ describe('取引量・フィボナッチ・オシレーター', () => {
     expect(oscillatorBias()).toBeNull();
   });
 });
+
+describe('帯の件数（最も近い★2以上＋★3だけ）', () => {
+  it('2つ目以降は★3の帯だけ。★2どまりの遠い帯は出さない', () => {
+    // 上側: 近い帯（スイング×3＝★2〜3）と、遠い弱め（スイング×2＝★1〜2）
+    const c = zigzag([150.0, 150.6, 150.0, 150.6, 150.02, 150.58, 150.3, 151.2, 150.4, 151.2, 150.3]);
+    const z = buildSrZones(c, 150.3, { instrument: 'USD_JPY', maxAtr: 30 });
+    for (const side of [z.res, z.sup]) {
+      expect(side.length).toBeLessThanOrEqual(2);
+      side.slice(1).forEach((zz) => expect(zz.stars).toBe(3));
+    }
+  });
+});

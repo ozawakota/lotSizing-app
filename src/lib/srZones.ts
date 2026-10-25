@@ -7,7 +7,7 @@
 //   - ライン: ロールリバーサル・ダウ理論の押し安値/戻り高値
 //   - オシレーター: RSI・ストキャスが売られすぎなら最寄りの支持帯、買われすぎなら最寄りの抵抗帯を加点（反応しやすい）
 // 帯の幅は ATR を基準にまとめ（既定 0.5 ATR 以内を同じ帯）、現在値から maxAtr 以内で、
-// 根拠が十分な帯（★2 以上）だけを片側2つまで返す。
+// 根拠が十分な帯（★2 以上）のうち最も近い1つを返し、2つ目は★3 の帯だけ（片側最大2つ）。
 import { averageTrueRange, pipSize, pivotIndices, roundStep, type Candle } from './stoploss';
 
 export type LevelKind = 'swing' | 'round' | 'higher_tf' | 'volume' | 'role_reversal' | 'dow' | 'fib';
@@ -46,7 +46,7 @@ export interface SrZoneOptions {
   pivotK?: number; // ピボットの左右の本数（既定 2）
   tolAtr?: number; // 同じ帯にまとめる距離（ATR 倍。既定 0.5）
   maxAtr?: number; // 現在値からこの ATR 倍より遠い帯は返さない（既定 6）
-  maxPerSide?: number; // 片側あたりの最大件数（既定 2）
+  maxPerSide?: number; // 片側あたりの最大件数（既定 2。2つ目以降は★3 の帯だけ）
   minScore?: number; // 表示する帯の最低スコア（既定 MIN_SCORE）
 }
 
@@ -203,12 +203,12 @@ export function buildSrZones(closed: Candle[], currentRate: number, opts: SrZone
     z.stars = starsFor(z.score);
   }
 
-  // 5) 根拠が十分な帯（minScore 以上）だけを近い順に片側 maxPerSide まで。
+  // 5) 根拠が十分な帯（minScore 以上）のうち最も近い1つ。2つ目以降は★3（スコア4以上）の帯だけを、片側 maxPerSide まで。
   //    その側に1つも無いときだけ、最も強い帯を1つ残す（「近くに帯なし」にならないように）。
   const pick = (side: 'res' | 'sup') => {
     const sorted = zones.filter((z) => z.side === side).sort((a, b) => a.distancePips - b.distancePips);
     const strong = sorted.filter((z) => z.score >= o.minScore);
-    if (strong.length) return strong.slice(0, o.maxPerSide);
+    if (strong.length) return [strong[0], ...strong.slice(1).filter((z) => z.stars === 3)].slice(0, o.maxPerSide);
     const best = [...sorted].sort((a, b) => b.score - a.score)[0];
     return best ? [best] : [];
   };
