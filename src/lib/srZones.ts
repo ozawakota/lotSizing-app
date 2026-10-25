@@ -48,6 +48,7 @@ export interface SrZoneOptions {
   maxAtr?: number; // 現在値からこの ATR 倍より遠い帯は返さない（既定 6）
   maxPerSide?: number; // 片側あたりの最大件数（既定 2。2つ目以降は★3 の帯だけ）
   minScore?: number; // 表示する帯の最低スコア（既定 MIN_SCORE）
+  keepAll?: boolean; // true なら minScore 以上の帯を近い順に maxPerSide まで全部返す（★3 だけに絞らない。RR の損切り・目標の調整用）
 }
 
 // 根拠の種類ごとの重み（スイングは1回ごとに加算）。
@@ -208,6 +209,7 @@ export function buildSrZones(closed: Candle[], currentRate: number, opts: SrZone
   const pick = (side: 'res' | 'sup') => {
     const sorted = zones.filter((z) => z.side === side).sort((a, b) => a.distancePips - b.distancePips);
     const strong = sorted.filter((z) => z.score >= o.minScore);
+    if (o.keepAll) return strong.slice(0, o.maxPerSide);
     if (strong.length) return [strong[0], ...strong.slice(1).filter((z) => z.stars === 3)].slice(0, o.maxPerSide);
     const best = [...sorted].sort((a, b) => b.score - a.score)[0];
     return best ? [best] : [];

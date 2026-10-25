@@ -32,7 +32,9 @@ import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type
 // 五十日・月末・季節性などのアノマリー判定（フロントの為替ニュースタブと共有）。
 import { detectAnomalies, formatAnomalyDigest, type Anomaly } from '../../src/lib/anomaly';
 // ダウ理論の判定（TF分析・好機ボード・RR好機通知の RR の方向に使う）と、TF分析の抵抗帯。
-import { analyzeDow, dowDirection, fibLevels, type DowAnalysis } from '../../src/lib/dow';
+import { analyzeDow, dowDirection, dowSummary, fibLevels, type DowAnalysis } from '../../src/lib/dow';
+// エッジページ（RR好機ボード）の損切り・目標の帯合わせと総合スコア。
+import { NEAR_RR_MIN, edgeScore, fitSetupToZones } from '../../src/lib/edgeScore';
 import { buildSrZones, type LevelSource, type SrZone } from '../../src/lib/srZones';
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
 import { PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
@@ -1320,8 +1322,11 @@ const jevBreakout = async (
   }
 };
 
-// 1ペアの好機カードを作る。構造RR成立TFのみ。信用度は Jev→無理なら roleReversal(0–100)。
-// jevState.paused が true の間は Jev を呼ばない。Jev が上限/失敗したら paused=true にして以降止める。
+// 1ペアの好機カードを作る。構造RR（RR≥NEAR_RR_MIN）が成立したTFだけ。
+// 損切り・目標を抵抗帯に合わせて RR を計算し直し、RR≥RR_MIN=好機・NEAR_RR_MIN≤RR<RR_MIN=準好機に分ける。
+// 総合スコア（edgeScore）は ダウ理論・上位足の向き・RR・損切りの強さ・帯との位置・パターン・タイミング・
+// オシレーター・AI（Jev のブレイク方向確率）の合算。Jev は jevState.paused の間は呼ばず、上限/失敗したら止める。
+// 信用度（confidence）は旧表示との互換のため Jev→roleReversal の順で従来どおり残す。
 const buildPairCards = async (env: Env, instrument: string, jevState: { paused: boolean }): Promise<RrCard[]> => {
   const symbol = YAHOO_SYMBOL[instrument];
   const perTf: {
@@ -1332,6 +1337,8 @@ const buildPairCards = async (env: Env, instrument: string, jevState: { paused: 
     structure: SlStructure;
     recentCloses: number[];
     stoch: StochReading | null;
+    dow: DowAnalysis | null;
+    rsi: number | null;
   }[] = [];
   for (const tf of RANKING_TIMEFRAMES) {
     // 4h は EMA200 に 200 本必要なため取得レンジを延ばす（取得回数は不変）。
@@ -1347,33 +1354,61 @@ const buildPairCards = async (env: Env, instrument: string, jevState: { paused: 
       structure: computeStructure(candles, currentRate),
       recentCloses: candles.slice(-12).map((c) => c.close),
       stoch: computeStochastic(candles),
+      dow: analyzeDow(candles.slice(0, -1)), // 確定足のスイング
+      rsi: computeRsi(candles),
     });
   }
   // 構造的RR（短い足→長い足・スプレッド込みの実質RR）。方向は TF分析ページ・RR好機通知と同じくダウ理論
-  // （確定足のスイング。上昇=ロング・下降=ショート、レンジ・転換の兆しは対象外）。
+  // （上昇=ロング・下降=ショート、レンジ・転換の兆しは対象外）。準好機まで拾うため下限は NEAR_RR_MIN。
   const setups = scanStructuralRrAll(
-    perTf.map((p) => ({ tf: p.tf, structure: p.structure, candles: p.candles, direction: dowDirection(analyzeDow(p.candles.slice(0, -1))) })),
+    perTf.map((p) => ({ tf: p.tf, structure: p.structure, candles: p.candles, direction: dowDirection(p.dow) })),
     instrument,
-    RR_MIN,
+    NEAR_RR_MIN,
     typicalSpreadPips(instrument),
   );
   const cards: RrCard[] = [];
-  for (const setup of setups) {
-    const i = perTf.findIndex((p) => p.tf === setup.tf);
+  for (const raw of setups) {
+    const i = perTf.findIndex((x) => x.tf === raw.tf);
     const p = perTf[i];
+    const higher = perTf.slice(i + 1);
+
+    // 抵抗帯（★2以上を近い順に全部）。根拠は上位足の高安・押し安値/戻り高値・フィボナッチ・オシレーター。
+    const zoneExtra: LevelSource[] = [
+      ...higher.flatMap((h) => [
+        { price: h.structure.swingHigh, kind: 'higher_tf' as const, label: `${h.tf}の高値` },
+        { price: h.structure.swingLow, kind: 'higher_tf' as const, label: `${h.tf}の安値` },
+      ]),
+      ...(p.dow?.keyLevel
+        ? [{ price: p.dow.keyLevel.price, kind: 'dow' as const, label: p.dow.keyLevel.kind === 'pullback_low' ? '押し安値' : '戻り高値' }]
+        : []),
+      ...(p.dow ? fibLevels(p.dow).map((f) => ({ price: f.price, kind: 'fib' as const, label: f.label })) : []),
+    ];
+    const z = buildSrZones(p.candles.slice(0, -1), p.price, {
+      instrument,
+      extra: zoneExtra,
+      oscillator: { rsi: p.rsi, stochK: p.stoch?.k ?? null },
+      maxPerSide: 6,
+      keepAll: true,
+    });
+    const fit = fitSetupToZones(raw, z, z.atr, instrument);
+    const setup = fit.setup;
+    if (setup.rr < NEAR_RR_MIN) continue; // 途中に強い帯があって RR が足りなくなった
+
+    // AI（Jev）のブレイク方向確率。停止中/失敗なら構造（roleReversal）を旧表示用の信用度に使う。
     let confidence: number | null = null;
     let confidenceSource: 'jev' | 'structure' | null = null;
-    // 信用度: まず Jev のブレイク方向確率。Jev 停止中/失敗なら構造(roleReversal)で代替。
+    let jevProb: number | null = null;
     if (!jevState.paused) {
       const { breakout, limited } = await jevBreakout(env, p.structure, p.recentCloses, { stoch: p.stoch });
       if (limited) jevState.paused = true;
       else if (breakout) {
-        confidence = Math.round(setup.direction === 'long' ? breakout.up : breakout.down);
+        jevProb = setup.direction === 'long' ? breakout.up : breakout.down;
+        confidence = Math.round(jevProb);
         confidenceSource = 'jev';
       }
     }
     if (confidence == null) {
-      const higherLevels = perTf.slice(i + 1).flatMap((h) => [h.structure.swingHigh, h.structure.swingLow]);
+      const higherLevels = higher.flatMap((h) => [h.structure.swingHigh, h.structure.swingLow]);
       const rrv = scoreRoleReversal(p.candles, p.structure, { instrument, breakout: null, stoch: p.stoch, volumeLevel: null, higherLevels });
       if (rrv) {
         confidence = rrv.score;
@@ -1381,11 +1416,11 @@ const buildPairCards = async (env: Env, instrument: string, jevState: { paused: 
       }
     }
     // エントリータイミング（押し目/戻り/反転警戒）。MA(SMA21/EMA75/EMA200)+ストキャス+有効パターンで判定。
-    const levels = perTf.slice(i + 1).flatMap((h) => [
+    const levels = higher.flatMap((h) => [
       { price: h.structure.swingHigh, label: `${h.tf}の高値` },
       { price: h.structure.swingLow, label: `${h.tf}の安値` },
     ]);
-    const valid = pickValidPattern(readCandlePatterns(p.ohlc, { instrument, windowBars: PATTERN_WINDOW_BARS[setup.tf], levels }));
+    const valid = pickValidPattern(readCandlePatterns(p.ohlc.slice(0, -1), { instrument, windowBars: PATTERN_WINDOW_BARS[raw.tf], levels }));
     const entrySignal = classifyEntry({
       closes: p.candles.map((c) => c.close),
       price: p.price,
@@ -1393,9 +1428,24 @@ const buildPairCards = async (env: Env, instrument: string, jevState: { paused: 
       stoch: p.stoch,
       patternDir: valid ? PATTERN_DIRECTION[valid.key] : 0,
     });
+    const { score, items } = edgeScore({
+      direction: setup.direction,
+      rr: setup.rr,
+      stopStrength: setup.stopStrength ?? null,
+      dow: p.dow,
+      higherDows: higher.map((h) => ({ tf: h.tf, dow: h.dow })),
+      zones: z,
+      atr: z.atr,
+      instrument,
+      pattern: valid ? { label: valid.label, dir: PATTERN_DIRECTION[valid.key] } : null,
+      entryKind: entrySignal.kind,
+      rsi: p.rsi,
+      stochK: p.stoch?.k ?? null,
+      jevProb,
+    });
     cards.push({
       instrument,
-      tf: setup.tf,
+      tf: raw.tf,
       direction: setup.direction,
       entry: setup.entry,
       stop: setup.stop,
@@ -1407,6 +1457,12 @@ const buildPairCards = async (env: Env, instrument: string, jevState: { paused: 
       confidence,
       confidenceSource,
       entrySignal,
+      tier: setup.rr >= RR_MIN ? 'prime' : 'near',
+      score,
+      scoreItems: items,
+      dowLabel: p.dow ? dowSummary(p.dow) : undefined,
+      stopNote: fit.stopNote,
+      targetNote: fit.targetNote,
     });
   }
   return cards;
