@@ -1,6 +1,6 @@
 // タイムフレーム分析ページ（旧「レジサポ」を統合）。選んだペアを 15m/30m/1h/4h で分析し、
 // 各TFを1カードに融合表示する: 結論(反転/ブレイク/PA)＋ダウ理論(スイング図・押し安値/戻り高値)＋
-// 抵抗帯のはしご(★・根拠)＋ブレイク確率＋RR＋そのほかの指標。全TF統合の総合判断・セッション別予測・RR好機も表示。
+// 抵抗帯のはしご(★・根拠)＋ブレイク確率＋RR＋プライスアクション(ローソク足チャート・パターン)＋そのほかの指標。全TF統合の総合判断・セッション別予測・RR好機も表示。
 // Worker(/mtf, VITE_MTF_URL) が Yahoo足＋Jev/Workers AI で算出。ペア選択で自動取得。
 // ※参考情報・投資助言ではない。
 import { useEffect, useState } from 'react';
@@ -19,6 +19,8 @@ import { RR_MIN, pipSize } from '@/lib/stoploss';
 import { MARKET_SESSIONS, isSessionOpen } from '@/lib/session';
 import { fetchGoldSpot } from '@/lib/goldSpot';
 import { CONFIRMATION_LABEL, type PatternRead } from '@/lib/candleRead';
+import type { OhlcCandle } from '@/lib/edge';
+import { PriceActionChart } from '@/components/PriceActionChart';
 import TfCountdown from '@/components/TfCountdown';
 import { DowHeader, KeyLevelRow, SwingChart, ZoneLadder } from '@/components/TfStructure';
 import { dowDirection, type DowAnalysis } from '@/lib/dow';
@@ -56,6 +58,8 @@ interface MtfTf {
   dow?: DowAnalysis | null; // ダウ理論（表示用）。旧キャッシュには無い
   zones?: { res: SrZone[]; sup: SrZone[] } | null; // 抵抗帯（表示用）。旧キャッシュには無い
   rsi?: number | null; // RSI(14)。旧キャッシュには無い
+  bars?: OhlcCandle[]; // ローソク足チャート用の直近の確定足（古い順。末尾=barsAgo 0）。旧キャッシュには無い
+  forming?: OhlcCandle | null; // 形成中の足。旧キャッシュには無い
 }
 interface MtfResult {
   instrument: string;
@@ -86,6 +90,7 @@ async function toSpotBasis(body: MtfResult): Promise<MtfResult> {
     rangeLow: d.rangeLow == null ? null : d.rangeLow - off,
   });
   const shiftZone = (z: SrZone): SrZone => ({ ...z, low: z.low - off, high: z.high - off, center: z.center - off });
+  const shiftBar = (b: OhlcCandle): OhlcCandle => ({ ...b, open: b.open - off, high: b.high - off, low: b.low - off, close: b.close - off });
   return {
     ...body,
     currentRate: spot,
@@ -101,6 +106,8 @@ async function toSpotBasis(body: MtfResult): Promise<MtfResult> {
           : t.roleReversal,
       dow: t.dow ? shiftDow(t.dow) : t.dow,
       zones: t.zones ? { res: t.zones.res.map(shiftZone), sup: t.zones.sup.map(shiftZone) } : t.zones,
+      bars: t.bars?.map(shiftBar),
+      forming: t.forming ? shiftBar(t.forming) : t.forming,
     })),
     rrOpportunity: body.rrOpportunity ? shiftRr(body.rrOpportunity) : null,
   };
@@ -426,7 +433,8 @@ function SessionOutlookCard({ outlook }: { outlook: SessionOutlook | null }) {
 
 // 1TFの融合カード:
 //   見出し（時間足・確定カウントダウン・結論チップ）→ ダウ理論（トレンド・局面・強さ・スイング図・押し安値/戻り高値）
-//   → 抵抗帯のはしご（★・幅・距離・根拠）→ ブレイク確率・RR → 「そのほかの指標」（ロールリバーサル・パターン・ストキャス・出来高）。
+//   → 抵抗帯のはしご（★・幅・距離・根拠）→ ブレイク確率・RR → プライスアクション（ローソク足チャート・パターンの一覧）
+//   → 「そのほかの指標」（ロールリバーサル・ストキャス・出来高。旧キャッシュではパターンもここ）。
 // 旧キャッシュ（dow/zones が無い）では、従来のトレンドチップとスイング高安の2本線で表示する。
 function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument: string; currentRate: number; digits: number }) {
   const [moreOpen, setMoreOpen] = useState(false);
@@ -443,9 +451,11 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
         ? 'text-green-600'
         : 'text-gray-500';
   const hasZones = !!tf.zones && (tf.zones.res.length > 0 || tf.zones.sup.length > 0);
+  // ローソク足チャートが描けるときは、パターンはチャートの下に出すので「そのほかの指標」からは外す。
+  const hasChart = !!tf.bars && tf.bars.length >= 2 && !!tf.candlePatterns;
   const extraCount =
     (tf.roleReversal ? 1 : 0) +
-    (tf.candlePatterns ? tf.candlePatterns.length : tf.candlePattern ? 1 : 0) +
+    (hasChart ? 0 : tf.candlePatterns ? tf.candlePatterns.length : tf.candlePattern ? 1 : 0) +
     (tf.stoch || tf.rsi != null ? 1 : 0) +
     (tf.volumeLevel != null ? 1 : 0);
 
@@ -494,6 +504,19 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
       <BreakoutRow breakout={tf.breakout} />
       <RrRow rr={tf.rr} digits={digits} dow={tf.dow} />
 
+      {/* プライスアクション: ローソク足チャート（パターンの位置・確定/否定ライン・抵抗帯）＋パターンの一覧 */}
+      {hasChart && tf.bars && tf.candlePatterns && (
+        <PriceActionChart
+          bars={tf.bars}
+          forming={tf.forming ?? null}
+          reads={tf.candlePatterns}
+          zones={tf.zones}
+          currentRate={currentRate}
+          digits={digits}
+          periodLabel={`直近${PATTERN_PERIOD_LABEL[tf.tf]}`}
+        />
+      )}
+
       {/* そのほかの指標（ロールリバーサル・ローソク足パターン・ストキャス・出来高節目）は折りたたみ */}
       {extraCount > 0 && (
         <div className="mt-2 border-t border-gray-100 pt-1.5">
@@ -515,7 +538,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
               {tf.roleReversal && (
                 <RoleReversalRow rr={tf.roleReversal} instrument={instrument} currentRate={currentRate} digits={digits} />
               )}
-              {tf.candlePatterns ? (
+              {hasChart ? null : tf.candlePatterns ? (
                 <PatternList reads={tf.candlePatterns} tf={tf.tf} />
               ) : (
                 tf.candlePattern && (

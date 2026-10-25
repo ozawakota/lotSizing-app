@@ -172,3 +172,32 @@ export function applyPatternToRr<T extends RrSetup>(rr: T | null, valid: Pattern
   if (dir === rr.direction) return { ...rr, patternSupport: 'aligned', patternNote: `${valid.label}（確定）が裏付け` };
   return { ...rr, qualifies: false, patternSupport: 'against', patternNote: `逆向きの${valid.label}（確定）が出ているため見送り` };
 }
+
+// ---------------------------------------------------------------------------
+// TF分析カードのローソク足チャート用。
+// ---------------------------------------------------------------------------
+
+/** パターンの確定ライン／否定ライン。強気=高値を終値で上抜けで確定・安値割れで否定（弱気は逆）。 */
+export function patternTriggerLevels(bar: OhlcCandle, key: PatternKey): { confirm: number; invalidate: number } {
+  return PATTERN_DIRECTION[key] === 1 ? { confirm: bar.high, invalidate: bar.low } : { confirm: bar.low, invalidate: bar.high };
+}
+
+export type PriceActionTone = 'bull' | 'bear' | 'neutral';
+
+/**
+ * プライスアクションの状態を一言で（カード見出し用）。
+ * 有効パターン（確定・ライン上・質60以上）があればそれ、無ければ最新の未確定パターン（確定待ち）、
+ * それも無ければ「目立ったパターンなし」。
+ */
+export function priceActionHeadline(reads: PatternRead[]): { text: string; tone: PriceActionTone; valid: boolean } {
+  const tone = (r: PatternRead): PriceActionTone => (PATTERN_DIRECTION[r.key] === 1 ? 'bull' : 'bear');
+  const valid = pickValidPattern(reads);
+  if (valid) return { text: `${valid.label}が確定（${valid.zoneReasons.join('・')}）`, tone: tone(valid), valid: true };
+  const pending = reads.find((r) => r.confirmation === 'pending');
+  if (pending) return { text: `${pending.label}の確定待ち`, tone: tone(pending), valid: false };
+  if (reads.length > 0) {
+    const r = reads[0];
+    return { text: r.confirmation === 'invalidated' ? `${r.label}は否定済み` : `${r.label}（ライン外・弱い形）`, tone: 'neutral', valid: false };
+  }
+  return { text: '目立ったパターンなし', tone: 'neutral', valid: false };
+}
