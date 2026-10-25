@@ -31,6 +31,9 @@ import {
 import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type NewsItem } from '../../src/lib/news';
 // 五十日・月末・季節性などのアノマリー判定（フロントの為替ニュースタブと共有）。
 import { detectAnomalies, formatAnomalyDigest, type Anomaly } from '../../src/lib/anomaly';
+// TF分析の表示用: ダウ理論の判定と抵抗帯（RR・通知のトレンド判定は従来の computeStructure のまま）。
+import { analyzeDow, type DowAnalysis } from '../../src/lib/dow';
+import { buildSrZones, type LevelSource, type SrZone } from '../../src/lib/srZones';
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
 import { PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
 // エントリーサイン（押し目/戻り/反転警戒）の純粋ロジック。
@@ -953,6 +956,8 @@ interface MtfTf {
   roleReversal: RoleReversal | null; // ロールリバーサル・ブレイク信用度（0–100・状態・側）。評価不能は null
   candlePattern: { key: string; label: string; barsAgo: number } | null; // 直近ウィンドウのローソク足パターン(ピンバー/包み足)。Jev の判定材料
   candlePatterns: PatternRead[]; // カード表示用: 足ごとの期間内のパターン（新しい順・最大3件、質・場所・確定/否定つき）
+  dow: DowAnalysis | null; // ダウ理論（スイングの切り上げ/切り下げ・押し安値/戻り高値）。表示用。スイング不足は null
+  zones: { res: SrZone[]; sup: SrZone[] } | null; // 抵抗帯（近い順・★1〜3・根拠つき）。表示用
 }
 interface MtfPayload {
   instrument: string;
@@ -993,6 +998,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
     recentCloses: number[];
     volumeLevel: number | null;
     stoch: StochReading | null;
+    dow: DowAnalysis | null;
   }[] = [];
   for (const tf of MTF_TIMEFRAMES) {
     const { candles, currentRate: cr } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf]);
@@ -1030,14 +1036,16 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       .filter((c) => typeof c.open === 'number')
       .map((c) => ({ open: c.open as number, high: c.high, low: c.low, close: c.close, t: c.t }));
     tfOhlc.push(ohlc.slice(0, -1)); // パターン読みに使う確定足（末尾の形成中の足は除外）
-    prep.push({ tf, structure, recentCloses, volumeLevel, stoch });
+    // ダウ理論は確定足だけで判定する（末尾の形成中の足は除外）。
+    const dow = analyzeDow(candles.slice(0, -1));
+    prep.push({ tf, structure, recentCloses, volumeLevel, stoch, dow });
   }
 
   // 全TFの足がそろってから、パターンの読み（質・出た場所・確定/否定）を求め、
   // 「有効なパターン」（確定・ライン上・質が高い）だけを Jev の判定材料に渡す。
   // 出た場所の判定には上位足の高安と出来高節目を使う（ロールリバーサルは Jev の結果に依存するため含めない）。
   for (let i = 0; i < prep.length; i++) {
-    const { tf, structure, recentCloses, volumeLevel, stoch } = prep[i];
+    const { tf, structure, recentCloses, volumeLevel, stoch, dow } = prep[i];
     const higherTfs = prep.slice(i + 1).map((h) => ({ tf: h.tf, structure: h.structure }));
     const candlePatterns = readCandlePatterns(tfOhlc[i] ?? [], {
       instrument,
@@ -1074,6 +1082,8 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       roleReversal: null, // 下の2パス目で算出（上位TFのコンフルエンスが必要なため）
       candlePattern,
       candlePatterns,
+      dow,
+      zones: null, // 下の2パス目で算出（上位TFの高安・ロールリバーサルが必要なため）
     });
   }
 
@@ -1090,6 +1100,21 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       volumeLevel: t.volumeLevel,
       higherLevels,
     });
+    // 抵抗帯（表示用）: この足のスイングに、上位足の高安・出来高・ロールリバーサル・ダウ理論のラインを重ねて帯にする。
+    const zoneExtra: LevelSource[] = [
+      ...timeframes.slice(i + 1).flatMap((h) => [
+        { price: h.swingHigh, kind: 'higher_tf' as const, label: `${h.tf}の高値` },
+        { price: h.swingLow, kind: 'higher_tf' as const, label: `${h.tf}の安値` },
+      ]),
+      ...(t.volumeLevel != null ? [{ price: t.volumeLevel, kind: 'volume' as const, label: '出来高節目' }] : []),
+      ...(volProfile ? profileLevels(volProfile).map((l) => ({ ...l, kind: 'volume' as const })) : []),
+      ...(t.roleReversal ? [{ price: t.roleReversal.level, kind: 'role_reversal' as const, label: 'ロールリバーサル' }] : []),
+      ...(t.dow?.keyLevel
+        ? [{ price: t.dow.keyLevel.price, kind: 'dow' as const, label: t.dow.keyLevel.kind === 'pullback_low' ? '押し安値' : '戻り高値' }]
+        : []),
+    ];
+    const z = buildSrZones(tfCandles[i].slice(0, -1), currentRate, { instrument, extra: zoneExtra });
+    t.zones = { res: z.res, sup: z.sup };
     // RR 評価: 方向は RR好機通知と同じくトレンドで決める（レンジは対象外）。基準も通知と共通
     // （RR_MIN・スプレッド込み）。Jev のブレイク確率が取れたときだけ「その方向の確率 ≥ RR_MIN_DIRECTION_PROB」を
     // 追加条件にする（取れないときは確率条件なし＝通知と同じ判定）。
