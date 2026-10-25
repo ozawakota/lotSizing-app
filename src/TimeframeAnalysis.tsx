@@ -21,7 +21,7 @@ import { fetchGoldSpot } from '@/lib/goldSpot';
 import { CONFIRMATION_LABEL, type PatternRead } from '@/lib/candleRead';
 import TfCountdown from '@/components/TfCountdown';
 import { DowHeader, KeyLevelRow, SwingChart, ZoneLadder } from '@/components/TfStructure';
-import type { DowAnalysis } from '@/lib/dow';
+import { dowDirection, type DowAnalysis } from '@/lib/dow';
 import type { SrZone } from '@/lib/srZones';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
@@ -214,8 +214,17 @@ function StopBasis({ rr }: { rr: RrSetup }) {
   );
 }
 
-function RrRow({ rr, digits }: { rr: RrSetup | null; digits: number }) {
-  if (!rr) return <p className="mt-1 text-[10px] text-gray-400">RR{'　'}上位TF目標なし —</p>;
+// RR の方向はダウ理論（上昇=ロング・下降=ショート）。レンジ・転換の兆しのときは RR を出さない。
+function RrRow({ rr, digits, dow }: { rr: RrSetup | null; digits: number; dow?: DowAnalysis | null }) {
+  if (!rr) {
+    const noTrend = !!dow && dowDirection(dow) === null;
+    return (
+      <p className="mt-1 text-[10px] text-gray-400">
+        RR{'　'}
+        {noTrend ? `ダウ理論で${dow?.phase === 'broken' ? '転換の兆し' : 'レンジ'}のため対象外 —` : '上位TF目標なし —'}
+      </p>
+    );
+  }
   const ok = rr.qualifies;
   return (
     <div className="mt-1">
@@ -483,7 +492,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
 
       {/* ブレイク確率バー ＋ RR（判断に直結するので常に表示） */}
       <BreakoutRow breakout={tf.breakout} />
-      <RrRow rr={tf.rr} digits={digits} />
+      <RrRow rr={tf.rr} digits={digits} dow={tf.dow} />
 
       {/* そのほかの指標（ロールリバーサル・ローソク足パターン・ストキャス・出来高節目）は折りたたみ */}
       {extraCount > 0 && (

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { analyzeDow, dowSummary, fibLevels } from '../dow';
+import { analyzeDow, dowDirection, dowSummary, fibLevels } from '../dow';
 import { computeRsi } from '../stoploss';
 import type { Candle } from '../stoploss';
 
@@ -102,5 +102,15 @@ describe('computeRsi', () => {
     const r = computeRsi(series(closes))!;
     expect(r).toBeGreaterThan(40);
     expect(r).toBeLessThan(60);
+  });
+});
+
+describe('dowDirection', () => {
+  it('上昇=ロング、下降=ショート、レンジ・転換の兆し・判定不能は null', () => {
+    expect(dowDirection(analyzeDow(zigzag([100, 102, 101, 103, 102, 104, 103.5]), { pivotK: 2 }))).toBe('long');
+    expect(dowDirection(analyzeDow(zigzag([104, 102, 103, 101, 102, 100, 99]), { pivotK: 2 }))).toBe('short');
+    expect(dowDirection(analyzeDow(zigzag([101, 103, 100, 104, 99, 102]), { pivotK: 2 }))).toBeNull(); // レンジ
+    expect(dowDirection(analyzeDow(zigzag([100, 102, 101, 103, 102, 104, 101.5]), { pivotK: 2 }))).toBeNull(); // 押し安値割れ
+    expect(dowDirection(null)).toBeNull();
   });
 });

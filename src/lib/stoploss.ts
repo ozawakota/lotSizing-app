@@ -353,7 +353,8 @@ export interface RrScanResult extends RrSetup {
 
 /**
  * Jev を使わない構造的 RR スキャン（バックグラウンド通知用・完全無料）。
- * 各TFで方向をトレンドから決め（up=ロング/down=ショート/range=除外）、上位TFスイングを
+ * 各TFで方向を決め（既定はトレンドから up=ロング/down=ショート/range=除外。要素に direction を渡せばそれを使う
+ * ＝RR好機通知はダウ理論の方向を渡す。null は対象外）、上位TFスイングを
  * 目標に RR を評価し、rr>=minRr を満たす setup を「TFごとに全件」返す。確率フィルタは使わない。
  * tfStructures は短い足→長い足の順で渡す（上位TF＝後方）。渡した順（短い足→長い足）で返す。
  * 最も長い足は上位TF（利確目標）が無いため setup にならず、目標の供給元としてだけ使われる。
@@ -361,14 +362,14 @@ export interface RrScanResult extends RrSetup {
  * 各要素に candles があれば、損切りは構造的損切り（computeStructuralStop）で決める（無ければ旧方式）。
  */
 export function scanStructuralRrAll(
-  tfStructures: { tf: SlTimeframe; structure: SlStructure; candles?: Candle[] }[],
+  tfStructures: { tf: SlTimeframe; structure: SlStructure; candles?: Candle[]; direction?: SlDirection | null }[],
   instrument: string,
   minRr = 3,
   spreadPips = 0,
 ): RrScanResult[] {
   const results: RrScanResult[] = [];
-  tfStructures.forEach(({ tf, structure, candles }, i) => {
-    const direction = trendToDirection(structure.trend);
+  tfStructures.forEach(({ tf, structure, candles, direction: given }, i) => {
+    const direction = given !== undefined ? given : trendToDirection(structure.trend);
     if (!direction) return; // レンジは方向なし＝対象外
     const higher = tfStructures.slice(i + 1);
     const higherSwings = higher.map((h) => ({ swingHigh: h.structure.swingHigh, swingLow: h.structure.swingLow }));

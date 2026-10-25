@@ -31,8 +31,8 @@ import {
 import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type NewsItem } from '../../src/lib/news';
 // 五十日・月末・季節性などのアノマリー判定（フロントの為替ニュースタブと共有）。
 import { detectAnomalies, formatAnomalyDigest, type Anomaly } from '../../src/lib/anomaly';
-// TF分析の表示用: ダウ理論の判定と抵抗帯（RR・通知のトレンド判定は従来の computeStructure のまま）。
-import { analyzeDow, fibLevels, type DowAnalysis } from '../../src/lib/dow';
+// TF分析: ダウ理論の判定（RR の方向にも使う）と抵抗帯。好機ボード(/ranking)のトレンドは従来の computeStructure のまま。
+import { analyzeDow, dowDirection, fibLevels, type DowAnalysis } from '../../src/lib/dow';
 import { buildSrZones, type LevelSource, type SrZone } from '../../src/lib/srZones';
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
 import { PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
@@ -77,7 +77,6 @@ import {
   higherStopLevels,
   RR_MIN,
   RR_MIN_DIRECTION_PROB,
-  trendToDirection,
   typicalSpreadPips,
   SL_TIMEFRAMES,
   YAHOO_INTERVAL,
@@ -1129,10 +1128,10 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       oscillator: { rsi: t.rsi, stochK: t.stoch?.k ?? null },
     });
     t.zones = { res: z.res, sup: z.sup };
-    // RR 評価: 方向は RR好機通知と同じくトレンドで決める（レンジは対象外）。基準も通知と共通
+    // RR 評価: 方向は RR好機通知と同じくダウ理論で決める（上昇=ロング・下降=ショート。レンジ・転換の兆しは対象外）。基準も通知と共通
     // （RR_MIN・スプレッド込み）。Jev のブレイク確率が取れたときだけ「その方向の確率 ≥ RR_MIN_DIRECTION_PROB」を
     // 追加条件にする（取れないときは確率条件なし＝通知と同じ判定）。
-    const direction = trendToDirection(t.trend);
+    const direction = dowDirection(t.dow);
     if (!direction) return;
     const dirProb = t.breakout ? (direction === 'long' ? t.breakout.up : t.breakout.down) : 100;
     const higherSwings = timeframes.slice(i + 1).map((h) => ({ swingHigh: h.swingHigh, swingLow: h.swingLow }));
