@@ -53,7 +53,9 @@ function OpportunityCard({ card }: { card: RrCard }) {
   const long = card.direction === 'long';
   const near = card.tier === 'near';
   const items = card.scoreItems ?? [];
-  const top = items.slice(0, 3);
+  // 根拠の上位3つ（プライスアクションは下の専用の行に出すので除く）。
+  const top = items.filter((it) => !it.label.startsWith('PA: ')).slice(0, 3);
+  const pa = card.paTags ?? [];
   return (
     <div
       className={`rounded-lg border bg-white p-2.5 ${
@@ -121,6 +123,38 @@ function OpportunityCard({ card }: { card: RrCard }) {
         </p>
       )}
 
+      {/* プライスアクション（SMC）: スイープ・オーダーブロック・FVG・OTE など */}
+      {card.paTags && (
+        <div className="mt-1.5 rounded bg-gray-50 px-1.5 py-1">
+          <p className="text-[10px] font-semibold text-gray-500">プライスアクション</p>
+          {pa.length === 0 ? (
+            <p className="text-[10px] text-gray-400">目立った痕跡なし</p>
+          ) : (
+            <ul className="mt-0.5 space-y-0.5">
+              {pa.map((t, k) => (
+                <li key={k} className="flex items-center gap-1 text-[11px]">
+                  <span
+                    aria-hidden
+                    className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+                      t.tone === 'with' ? 'bg-green-500' : t.tone === 'against' ? 'bg-red-500' : 'bg-gray-300'
+                    }`}
+                  />
+                  <span className={t.tone === 'against' ? 'text-red-700' : t.tone === 'with' ? 'text-gray-800' : 'text-gray-500'}>
+                    {t.label}
+                  </span>
+                  {t.points !== 0 && (
+                    <span className={`ml-auto shrink-0 tabular-nums text-[10px] ${t.points > 0 ? 'text-green-700' : 'text-red-700'}`}>
+                      {t.points > 0 ? '+' : '−'}
+                      {Math.abs(t.points)}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       {/* 根拠: 影響の大きい3つ＋内訳 */}
       {top.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1">
@@ -129,7 +163,7 @@ function OpportunityCard({ card }: { card: RrCard }) {
           ))}
         </div>
       )}
-      {items.length > 3 && (
+      {items.length > top.length && (
         <>
           <button
             type="button"
@@ -155,7 +189,7 @@ function OpportunityCard({ card }: { card: RrCard }) {
                 </li>
               ))}
               <li className="flex justify-between border-t border-gray-100 pt-0.5 font-bold text-gray-700">
-                <span>総合スコア（0〜100）</span>
+                <span>総合スコア（合計を0〜100に換算）</span>
                 <span className="tabular-nums">{card.score}</span>
               </li>
             </ul>
@@ -181,6 +215,16 @@ function FilterChip({ on, onClick, children }: { on: boolean; onClick: () => voi
 }
 
 type DirFilter = 'all' | 'long' | 'short';
+
+// プライスアクション（SMC）の用語の説明。
+const PA_GLOSSARY: [string, string][] = [
+  ['流動性スイープ', '直近の安値（高値）をヒゲで一瞬割って、終値で戻した足。その下に溜まった損切り注文を狩ってから反転する動きで、買い（売り）の好材料。'],
+  ['オーダーブロック', '強い足が直近の高値（安値）を抜ける直前にあった、逆向きの最後の足。大口が仕込んだ価格帯とされ、戻ってきたときに支え（抑え）になりやすい。終値で割られたら無効。'],
+  ['FVG（フェアバリューギャップ）', '3本の足で、1本目の高値と3本目の安値の間に空いた価格の空白。急な動きで取引が薄い所で、価格が戻って埋めに来やすく、埋めた後に反発しやすい。'],
+  ['プレミアム / ディスカウント', '直近のスイングの値幅の上半分（割高）と下半分（割安）。買いはディスカウント、売りはプレミアムで入るのが有利。'],
+  ['OTE', 'Optimal Trade Entry。値幅の 61.8〜79% まで押した（戻した）位置。押し目買い・戻り売りの最も有利なゾーンとされる。'],
+  ['ディスプレイスメント', 'ATR の1.5倍以上の実体を持つ強い足。大口の参入を示し、その向きに勢いがある。'],
+];
 const SETUP_TFS = RANKING_TIMEFRAMES.slice(0, -1); // 4時間足は目標の供給元なので好機にならない
 
 export default function EdgeAnalysis() {
@@ -334,12 +378,25 @@ export default function EdgeAnalysis() {
           {data.failed.length > 0 && (
             <p className="text-[11px] text-amber-600">取得できなかったペア: {data.failed.map(pairLabel).join(', ')}</p>
           )}
+          <details className="rounded bg-white px-2 py-1.5 text-[11px] text-gray-600 shadow-sm">
+            <summary className="cursor-pointer font-semibold text-gray-700">プライスアクションの用語</summary>
+            <dl className="mt-1 space-y-1">
+              {PA_GLOSSARY.map(([term, desc]) => (
+                <div key={term}>
+                  <dt className="font-semibold text-gray-800">{term}</dt>
+                  <dd className="text-gray-500">{desc}</dd>
+                </div>
+              ))}
+            </dl>
+          </details>
           <p className="text-[10px] leading-relaxed text-gray-400">
             方向はダウ理論（高値・安値の切り上げ＝買い／切り下げ＝売り。レンジ・転換の兆しは対象外）。
             損切りはピボット＋ATR に、目標は上位足のスイングに置き、抵抗帯に合わせて調整します（損切りは帯の外、目標は途中の★2以上の帯の手前）。
             スプレッド込みの実質RRが1:2.5以上を「好機」、1:2.0〜2.5を「準好機」とし、総合スコアの高い順に並べます。
             総合スコアは50を基準に、ダウ理論・上位足の向き・RR・損切りラインの強さ・帯との位置・ローソク足パターン・
-            タイミング（🟢押し目/戻り・🟡様子見・⚠反転警戒）・RSI/ストキャス・AI（Jevのブレイク確率）を加減点したものです。
+            プライスアクション（流動性スイープ・オーダーブロック・FVG・プレミアム/ディスカウント・OTE・ディスプレイスメント）・
+            タイミング（🟢押し目/戻り・🟡様子見・⚠反転警戒）・RSI/ストキャス・AI（Jevのブレイク確率）を加減点し、
+            合計を0〜100に換算したものです（材料がそろうほど100に近づきます）。
             対象は{SETUP_TFS.map((t) => TF_LABEL[t]).join('/')}足（4時間足は目標に使用）。データは Yahoo Finance。
             {data.generatedAt
               ? ` ${new Date(data.generatedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })} 更新。`

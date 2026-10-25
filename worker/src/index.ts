@@ -35,6 +35,7 @@ import { detectAnomalies, formatAnomalyDigest, type Anomaly } from '../../src/li
 import { analyzeDow, dowDirection, dowSummary, fibLevels, type DowAnalysis } from '../../src/lib/dow';
 // エッジページ（RR好機ボード）の損切り・目標の帯合わせと総合スコア。
 import { NEAR_RR_MIN, edgeScore, fitSetupToZones } from '../../src/lib/edgeScore';
+import { analyzeSmc, smcTags } from '../../src/lib/smc';
 import { buildSrZones, type LevelSource, type SrZone } from '../../src/lib/srZones';
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
 import { PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
@@ -1332,7 +1333,7 @@ const jevBreakout = async (
 // 1ペアの好機カードを作る。構造RR（RR≥NEAR_RR_MIN）が成立したTFだけ。
 // 損切り・目標を抵抗帯に合わせて RR を計算し直し、RR≥RR_MIN=好機・NEAR_RR_MIN≤RR<RR_MIN=準好機に分ける。
 // 総合スコア（edgeScore）は ダウ理論・上位足の向き・RR・損切りの強さ・帯との位置・パターン・タイミング・
-// オシレーター・AI（Jev のブレイク方向確率）の合算。Jev は jevState.paused の間は呼ばず、上限/失敗したら止める。
+// SMC（スイープ・オーダーブロック・FVG・OTE など）・オシレーター・AI（Jev のブレイク方向確率）の合算。Jev は jevState.paused の間は呼ばず、上限/失敗したら止める。
 // 信用度（confidence）は旧表示との互換のため Jev→roleReversal の順で従来どおり残す。
 const buildPairCards = async (env: Env, instrument: string, jevState: { paused: boolean }): Promise<RrCard[]> => {
   const symbol = YAHOO_SYMBOL[instrument];
@@ -1435,6 +1436,9 @@ const buildPairCards = async (env: Env, instrument: string, jevState: { paused: 
       stoch: p.stoch,
       patternDir: valid ? PATTERN_DIRECTION[valid.key] : 0,
     });
+    // SMC（流動性スイープ・オーダーブロック・FVG・プレミアム/ディスカウント・ディスプレイスメント）。確定足だけで読む。
+    const smc = analyzeSmc(p.ohlc.slice(0, -1), p.price, setup.direction, p.dow);
+    const paTags = smcTags(smc, setup.direction, instrument.startsWith('XAU') ? 2 : instrument.endsWith('JPY') ? 3 : 5);
     const { score, items } = edgeScore({
       direction: setup.direction,
       rr: setup.rr,
@@ -1449,6 +1453,7 @@ const buildPairCards = async (env: Env, instrument: string, jevState: { paused: 
       rsi: p.rsi,
       stochK: p.stoch?.k ?? null,
       jevProb,
+      paTags,
     });
     cards.push({
       instrument,
@@ -1470,6 +1475,7 @@ const buildPairCards = async (env: Env, instrument: string, jevState: { paused: 
       dowLabel: p.dow ? dowSummary(p.dow) : undefined,
       stopNote: fit.stopNote,
       targetNote: fit.targetNote,
+      paTags,
     });
   }
   return cards;

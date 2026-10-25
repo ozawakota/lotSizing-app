@@ -126,8 +126,9 @@ describe('edgeScore', () => {
         jevProb: 70,
       }),
     );
-    // 6+4 (ダウ) +15 (上位足) +8 (RR) +6 (損切り) +6 (支持帯) +8 (パターン) +6 (押し目) +6 (AI) = +65 → 100 で頭打ち
-    expect(r.score).toBe(100);
+    // 6+4 (ダウ) +15 (上位足) +8 (RR) +6 (損切り) +6 (支持帯) +8 (パターン) +6 (押し目) +6 (AI) = +65
+    // → 50 + 50·tanh(65/50) ≈ 93（100 に張り付かない）
+    expect(r.score).toBe(93);
     expect(r.items[0]).toEqual({ label: '上位足も上昇（1時間足・4時間足）', points: 15 });
     expect(r.items.map((x) => x.label)).toContain('支持帯★3の上で入れる');
   });
@@ -151,7 +152,7 @@ describe('edgeScore', () => {
       { label: '上位足が逆向き（1時間足）', points: -8 },
       { label: 'すぐ上に抵抗帯★2', points: -6 },
     ]);
-    expect(r.score).toBe(14);
+    expect(r.score).toBe(19); // −36 → 50 + 50·tanh(−36/50)
   });
 
   it('準好機（RR 2.5 未満）は RR で減点、買われすぎも減点', () => {
@@ -161,6 +162,19 @@ describe('edgeScore', () => {
       { label: 'RR 1:2.1', points: -4 },
     ]);
     expect(r.score).toBe(40);
+  });
+
+  it('SMC のタグはそのまま加減点（PA: を付けて内訳に出す）', () => {
+    const r = edgeScore(
+      inputs({
+        paTags: [
+          { label: '安値スイープ（2本前・149.80）', tone: 'with', points: 7 },
+          { label: '値幅の中間（50%）', tone: 'info', points: 0 },
+        ],
+      }),
+    );
+    expect(r.items).toEqual([{ label: 'PA: 安値スイープ（2本前・149.80）', points: 7 }]);
+    expect(r.score).toBe(57);
   });
 
   it('ショートは売られすぎで減点・抵抗帯の下で入れると加点', () => {
