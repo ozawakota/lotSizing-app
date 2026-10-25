@@ -3,7 +3,7 @@
 // 抵抗帯のはしご(★・根拠)＋ブレイク確率＋RR＋プライスアクション(ローソク足チャート・パターン)＋そのほかの指標。全TF統合の総合判断・セッション別予測・RR好機も表示。
 // Worker(/mtf, VITE_MTF_URL) が Yahoo足＋Jev/Workers AI で算出。ペア選択で自動取得。
 // ※参考情報・投資助言ではない。
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type {
   BreakoutProb,
   PaClass,
@@ -18,12 +18,12 @@ import type {
 import { RR_MIN, pipSize } from '@/lib/stoploss';
 import { MARKET_SESSIONS, isSessionOpen } from '@/lib/session';
 import { fetchGoldSpot } from '@/lib/goldSpot';
-import { CONFIRMATION_LABEL, type PatternRead } from '@/lib/candleRead';
+import { CONFIRMATION_LABEL, priceActionHeadline, type PatternRead, type PriceActionTone } from '@/lib/candleRead';
 import type { OhlcCandle } from '@/lib/edge';
 import { PriceActionChart } from '@/components/PriceActionChart';
 import TfCountdown from '@/components/TfCountdown';
 import { DowHeader, KeyLevelRow, SwingChart, ZoneLadder } from '@/components/TfStructure';
-import { dowDirection, type DowAnalysis } from '@/lib/dow';
+import { dowDirection, dowSummary, type DowAnalysis } from '@/lib/dow';
 import type { SrZone } from '@/lib/srZones';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
@@ -431,6 +431,11 @@ function SessionOutlookCard({ outlook }: { outlook: SessionOutlook | null }) {
   );
 }
 
+// カード内の小見出し。
+function SectionLabel({ children }: { children: ReactNode }) {
+  return <p className="mb-1 mt-3 text-[11px] font-semibold text-gray-500">{children}</p>;
+}
+
 // 1TFの融合カード:
 //   見出し（時間足・確定カウントダウン・結論チップ）→ ダウ理論（トレンド・局面・強さ・スイング図・押し安値/戻り高値）
 //   → 抵抗帯のはしご（★・幅・距離・根拠）→ ブレイク確率・RR → プライスアクション（ローソク足チャート・パターンの一覧）
@@ -486,6 +491,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
       )}
 
       {/* 抵抗帯のはしご（新）。無ければ従来のレジ → 現在 → サポ */}
+      <SectionLabel>抵抗帯（★が多いほど強い）</SectionLabel>
       {hasZones && tf.zones ? (
         <ZoneLadder res={tf.zones.res} sup={tf.zones.sup} currentRate={currentRate} digits={digits} />
       ) : (
@@ -501,6 +507,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
       )}
 
       {/* ブレイク確率バー ＋ RR（判断に直結するので常に表示） */}
+      <SectionLabel>ブレイク確率・RR</SectionLabel>
       <BreakoutRow breakout={tf.breakout} />
       <RrRow rr={tf.rr} digits={digits} dow={tf.dow} />
 
@@ -595,12 +602,95 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
   );
 }
 
+// 全時間足のまとめ（1行=1時間足）。ダウの向き・局面／結論チップ／プライスアクションの一言／RR を並べ、
+// 行を押すとその時間足のタブに切り替わる。
+const TONE_DOT: Record<PriceActionTone, string> = { bull: 'bg-green-500', bear: 'bg-red-500', neutral: 'bg-gray-300' };
+function MtfOverview({
+  timeframes,
+  selected,
+  onSelect,
+}: {
+  timeframes: MtfTf[];
+  selected: SlTimeframe;
+  onSelect: (tf: SlTimeframe) => void;
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <p className="border-b border-gray-100 px-3 py-2 text-xs font-bold text-gray-700">全時間足のまとめ</p>
+      <ul>
+        {timeframes.map((t) => {
+          const v = verdict(t);
+          const trend = t.dow?.trend ?? t.trend;
+          const pa = t.candlePatterns ? priceActionHeadline(t.candlePatterns) : null;
+          const on = t.tf === selected;
+          return (
+            <li key={t.tf}>
+              <button
+                type="button"
+                onClick={() => onSelect(t.tf)}
+                aria-pressed={on}
+                className={`grid w-full grid-cols-[3.2rem_1fr_auto] items-center gap-2 border-b border-gray-50 px-3 py-2 text-left last:border-b-0 ${
+                  on ? 'bg-orange-50' : 'active:bg-gray-50'
+                }`}
+              >
+                <span className={`text-xs font-bold ${on ? 'text-orange-700' : 'text-gray-700'}`}>{TF_LABEL[t.tf].replace('足', '')}</span>
+                <span className="min-w-0">
+                  <span className="flex items-center gap-1.5">
+                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${TREND_STYLE[trend]}`}>{TREND_LABEL[trend]}</span>
+                    {t.dow && t.dow.trend !== 'range' && (
+                      <span className="truncate text-[10px] text-gray-500">{dowSummary(t.dow).replace(/^(上昇|下降)・/, '')}</span>
+                    )}
+                  </span>
+                  {pa && (
+                    <span className="mt-0.5 flex items-center gap-1 text-[10px] text-gray-500">
+                      <span aria-hidden className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${TONE_DOT[pa.tone]}`} />
+                      <span className="truncate">{pa.text}</span>
+                    </span>
+                  )}
+                </span>
+                <span className="flex flex-col items-end gap-0.5">
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${v.cls}`}>{v.label}</span>
+                  {t.rr?.qualifies ? (
+                    <span className={`text-[10px] font-bold ${DIR_STYLE[t.rr.direction]}`}>
+                      {DIR_LABEL[t.rr.direction]} RR 1:{t.rr.rr.toFixed(1)} ✓
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-gray-300">RR —</span>
+                  )}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+// 総合判断（AI）。長いときは3行で畳み、「続きを読む」で全文。
+function CommentCard({ comment }: { comment: string }) {
+  const [open, setOpen] = useState(false);
+  const long = comment.length > 90;
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
+      <p className="mb-1 text-xs font-bold text-gray-700">総合判断（AI）</p>
+      <p className={`whitespace-pre-wrap text-xs leading-relaxed text-gray-700 ${long && !open ? 'line-clamp-3' : ''}`}>{comment}</p>
+      {long && (
+        <button type="button" onClick={() => setOpen((o) => !o)} className="mt-1 text-[11px] text-orange-600">
+          {open ? '閉じる' : '続きを読む'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function TimeframeAnalysis() {
   const [instrument, setInstrument] = useState('XAU_USD');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<MtfResult | null>(null);
   const [showRrPopup, setShowRrPopup] = useState(false);
+  const [tfSel, setTfSel] = useState<SlTimeframe | null>(null); // 表示する時間足（null=自動: RR好機の足→1時間足→先頭）
 
   // ペア選択で自動取得（マウント時も既定ペアを取得）。
   useEffect(() => {
@@ -629,8 +719,10 @@ export default function TimeframeAnalysis() {
   }, [instrument]);
 
   // 分析完了時、RR 好機（RR_MIN 以上・トレンド方向）があればポップアップを1回開く（新しい分析ごとに再判定）。
+  // 表示する時間足は新しい分析ごとに自動選択に戻す。
   useEffect(() => {
     if (result?.rrOpportunity) setShowRrPopup(true);
+    setTfSel(null);
   }, [result]);
 
   const digits = result ? digitsFor(result.instrument) : 5;
@@ -645,10 +737,11 @@ export default function TimeframeAnalysis() {
 
   return (
     <div className="mx-auto max-w-md px-3 my-2">
-      <label className="flex flex-col gap-1 text-xs text-gray-600">
-        通貨ペア
+      {/* ペア選択 ＋ 現在レート・時間足のそろい具合・更新時刻 */}
+      <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
         <select
-          className="rounded border border-gray-300 bg-white px-2 py-2 text-sm"
+          aria-label="通貨ペア"
+          className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm font-semibold"
           value={instrument}
           onChange={(e) => setInstrument(e.target.value)}
         >
@@ -656,53 +749,69 @@ export default function TimeframeAnalysis() {
             <option key={p.instrument} value={p.instrument}>{p.label}</option>
           ))}
         </select>
-      </label>
-
-      {loading && <p className="mt-3 text-sm text-gray-500">分析中…</p>}
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
-
-      {result && (
-        <div className="mt-3 space-y-3">
-          <div className="flex items-center justify-between rounded-md border border-gray-200 bg-white p-3">
-            <div>
-              <p className="text-xs text-gray-500">現在レート</p>
-              <p className="text-xl font-bold text-gray-800">{result.currentRate.toFixed(digits)}</p>
-            </div>
-            <div className="flex flex-col items-end gap-1">
-              <span className="rounded-full bg-orange-50 px-2 py-1 text-xs font-semibold text-orange-700">
-                {result.alignment}
-              </span>
+        {result ? (
+          <>
+            <p className="text-xl font-bold tabular-nums text-gray-900">{result.currentRate.toFixed(digits)}</p>
+            <div className="ml-auto flex flex-col items-end gap-0.5">
+              <span className="rounded-full bg-orange-50 px-2 py-0.5 text-[11px] font-semibold text-orange-700">{result.alignment}</span>
               <span className="text-[10px] text-gray-400">
                 {new Date(result.generatedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })} 更新
               </span>
             </div>
+          </>
+        ) : (
+          <span className="ml-auto text-xs text-gray-400">{loading ? '分析中…' : ''}</span>
+        )}
+      </div>
+
+      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+
+      {result && (() => {
+        const tfs = result.timeframes;
+        const autoTf =
+          tfs.find((t) => t.tf === result.rrOpportunity?.tf)?.tf ?? tfs.find((t) => t.tf === '1h')?.tf ?? tfs[0]?.tf ?? '1h';
+        const current = tfs.find((t) => t.tf === (tfSel ?? autoTf)) ?? tfs[0];
+        return (
+          <div className="mt-3 space-y-3">
+            {/* 全時間足のまとめ（行を押すと下のタブが切り替わる） */}
+            <MtfOverview timeframes={tfs} selected={current?.tf ?? autoTf} onSelect={setTfSel} />
+
+            {result.comment && <CommentCard comment={result.comment} />}
+
+            {/* 時間足のタブ ＋ 選んだ時間足の詳細カード */}
+            {current && (
+              <div>
+                <div role="tablist" aria-label="時間足" className="mb-2 flex rounded-lg bg-gray-100 p-0.5">
+                  {tfs.map((t) => (
+                    <button
+                      key={t.tf}
+                      type="button"
+                      role="tab"
+                      aria-selected={t.tf === current.tf}
+                      onClick={() => setTfSel(t.tf)}
+                      className={`flex-1 rounded-md py-1.5 text-xs font-medium ${
+                        t.tf === current.tf ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'
+                      }`}
+                    >
+                      {TF_LABEL[t.tf]}
+                      {t.rr?.qualifies && <span className="ml-0.5 text-orange-500">●</span>}
+                    </button>
+                  ))}
+                </div>
+                <TfCard key={current.tf} tf={current} instrument={result.instrument} currentRate={result.currentRate} digits={digits} />
+              </div>
+            )}
+
+            {/* セッション別シナリオ予測 */}
+            <SessionOutlookCard outlook={result.sessionOutlook} />
+
+            <p className="text-center text-[10px] leading-relaxed text-gray-400">
+              プライスアクション判定: {result.paEngine === 'jev' ? 'Jev' : 'Workers AI'}／
+              レジサポは直近スイング高安、トレンド/ブレイク/反転・RRは複数時間軸の構造＋AI推定の参考値です。投資助言ではありません。
+            </p>
           </div>
-
-          {/* セッション別シナリオ予測 */}
-          <SessionOutlookCard outlook={result.sessionOutlook} />
-
-          {/* TF別の融合カード（全幅・縦積み） */}
-          <div className="space-y-2">
-            {result.timeframes.map((t) => (
-              <TfCard key={t.tf} tf={t} instrument={result.instrument} currentRate={result.currentRate} digits={digits} />
-            ))}
-          </div>
-
-          {result.comment && (
-            <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
-              <p className="mb-1 text-sm font-bold text-gray-700">総合判断（AI）</p>
-              <p className="whitespace-pre-wrap text-xs leading-relaxed text-gray-700">{result.comment}</p>
-            </div>
-          )}
-
-          <p className="text-[10px] text-gray-400">
-            プライスアクション判定: {result.paEngine === 'jev' ? 'Jev' : 'Workers AI'}
-          </p>
-          <p className="text-center text-[10px] text-gray-400">
-            ※ レジサポは直近スイング高安、トレンド/ブレイク/反転・RRは複数時間軸の構造＋AI推定の参考値です。投資助言ではありません。
-          </p>
-        </div>
-      )}
+        );
+      })()}
 
       {!result && !error && !loading && (
         <p className="mt-3 text-center text-gray-400">ペアを選ぶと自動で分析します。</p>
