@@ -1,12 +1,12 @@
 // RR好機ボード。各通貨ペア×時間足（15分/30分/1時間）で構造RRが成立した好機を、総合スコアの高い順に
-// 1列カードで一覧表示する。RR≥1:2.5=好機・1:2.0〜2.5=準好機（別枠）。ペア・時間足・方向で絞り込める。
-// カードには総合スコア（ダウ理論・上位足・帯・パターン・タイミング・AI の加減点）と内訳、抵抗帯に合わせた
-// 損切り・目標の調整メモを出す。旧キャッシュ（総合スコアが無いカード）は従来の信用度を表示する。
+// 1列カードで一覧表示する。RR≥1:2.5=好機・1:2.0〜2.5=準好機（別枠・隠せる）。ペア・方向・時間足で絞り込める。
+// カードは要約（売買・ペア・RR・総合スコア・リスク:リワードの棒・タイミング・有利/不利の数）を常に見せ、
+// タップで詳細（ダウ・帯での調整・プライスアクション・スコアの内訳）を開く。
+// 旧キャッシュ（総合スコアが無いカード）は従来の信用度を表示する。
 // currency-strength worker(/ranking, VITE_RANKING_URL) が算出・KVキャッシュ。整形は src/lib/ranking.ts を共有。
 // ※投資助言ではなく、値動きや利益を保証するものではない参考情報。
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { RANKING_PAIRS, RANKING_TIMEFRAMES, type RrBoardSnapshot, type RrCard } from '@/lib/ranking';
-import type { ScoreItem } from '@/lib/edgeScore';
 import type { EntryKind } from '@/lib/entrySignal';
 import type { SlTimeframe } from '@/lib/stoploss';
 
@@ -23,198 +23,243 @@ const pairLabel = (ins: string) => ins.replace('_', '/');
 const digitsFor = (ins: string) => (ins.startsWith('XAU') ? 2 : ins.endsWith('JPY') ? 3 : 5);
 const SOURCE_LABEL = { jev: 'AI', structure: '構造' } as const;
 
-// 総合スコアの色（70以上=強調・50未満=薄く）。
-const scoreCls = (n: number) => (n >= 70 ? 'text-indigo-700' : n >= 50 ? 'text-gray-700' : 'text-gray-400');
-const scoreBar = (n: number) => (n >= 70 ? 'bg-indigo-500' : n >= 50 ? 'bg-gray-400' : 'bg-gray-300');
+// 総合スコアの段階（70以上=強い・50〜69=普通・50未満=弱い）。
+function scoreTier(n: number): { label: string; cls: string } {
+  if (n >= 70) return { label: '強い', cls: 'bg-indigo-600 text-white' };
+  if (n >= 50) return { label: '普通', cls: 'bg-indigo-50 text-indigo-700' };
+  return { label: '弱い', cls: 'bg-gray-100 text-gray-500' };
+}
 
-// 内訳の1項目（加点=緑・減点=赤）。
-function ScoreChip({ item }: { item: ScoreItem }) {
-  const plus = item.points > 0;
-  return (
-    <span
-      className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] ${
-        plus ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-      }`}
-    >
-      <span className="font-bold tabular-nums">
-        {plus ? '+' : '−'}
-        {Math.abs(item.points)}
+// 総合スコアのバッジ（カード右上）。旧キャッシュは信用度を小さく出す。
+function ScoreBadge({ card }: { card: RrCard }) {
+  if (card.score == null) {
+    return (
+      <span className="text-right text-[10px] leading-tight text-gray-500">
+        信用度
+        <span className="block text-sm font-bold text-gray-700">{card.confidence ?? '—'}</span>
+        {card.confidenceSource && <span className="text-[9px] text-gray-400">{SOURCE_LABEL[card.confidenceSource]}</span>}
       </span>
-      {item.label}
+    );
+  }
+  const t = scoreTier(card.score);
+  return (
+    <span className={`flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-lg ${t.cls}`} aria-label={`総合スコア ${card.score}（${t.label}）`}>
+      <span className="text-base font-bold leading-none tabular-nums">{card.score}</span>
+      <span className="mt-0.5 text-[9px] leading-none">{t.label}</span>
     </span>
   );
 }
 
-// 1好機カード（ペア×TF）。見出し（ペア・時間足・売買・総合スコア）→ ダウ・タイミング → 入/損/利 → 調整メモ → 根拠（上位3つ＋内訳）。
-// 旧キャッシュ（総合スコアが無い）は従来の信用度を表示する。
+// リスク（損切りまで）とリワード（目標まで）の比率を1本の棒で見せる。左=損切り・右=目標・境目=エントリー。
+function RrBar({ card, digits }: { card: RrCard; digits: number }) {
+  const total = card.riskPips + card.rewardPips || 1;
+  const riskPct = Math.max(8, Math.min(50, (card.riskPips / total) * 100));
+  return (
+    <div className="mt-2">
+      <div className="flex h-2 overflow-hidden rounded-full" aria-hidden>
+        <div className="bg-red-400" style={{ width: `${riskPct}%` }} />
+        <div className="w-0.5 bg-gray-800" />
+        <div className="flex-1 bg-green-400" />
+      </div>
+      <div className="mt-1 grid grid-cols-3 text-[10px] tabular-nums leading-tight">
+        <span className="text-red-600">
+          損切り {card.stop.toFixed(digits)}
+          <span className="block text-gray-400">−{card.riskPips}pips</span>
+        </span>
+        <span className="text-center text-gray-800">
+          エントリー
+          <span className="block font-semibold">{card.entry.toFixed(digits)}</span>
+        </span>
+        <span className="text-right text-green-700">
+          目標 {card.target.toFixed(digits)}
+          <span className="block text-gray-400">+{card.rewardPips}pips</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// 加点/減点の1行（詳細の中）。
+function PointRow({ label, points }: { label: string; points: number }) {
+  return (
+    <li className="flex items-start justify-between gap-2">
+      <span className="flex items-start gap-1 text-gray-700">
+        <span aria-hidden className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${points > 0 ? 'bg-green-500' : points < 0 ? 'bg-red-500' : 'bg-gray-300'}`} />
+        {label}
+      </span>
+      {points !== 0 && (
+        <span className={`shrink-0 font-semibold tabular-nums ${points > 0 ? 'text-green-700' : 'text-red-700'}`}>
+          {points > 0 ? '+' : '−'}
+          {Math.abs(points)}
+        </span>
+      )}
+    </li>
+  );
+}
+
+// 1好機カード（ペア×TF）。
+//   要約（常に表示）: 売買・ペア・時間足・RR ／ 総合スコア → リスク:リワードの棒と価格 → タイミング・有利/不利の数・帯での調整
+//   詳細（タップで開く）: ダウの状態・帯での調整内容・プライスアクション・スコアの内訳
 function OpportunityCard({ card }: { card: RrCard }) {
   const [open, setOpen] = useState(false);
   const d = digitsFor(card.instrument);
   const long = card.direction === 'long';
   const near = card.tier === 'near';
   const items = card.scoreItems ?? [];
-  // 根拠の上位3つ（プライスアクションは下の専用の行に出すので除く）。
-  const top = items.filter((it) => !it.label.startsWith('PA: ')).slice(0, 3);
+  const pros = items.filter((it) => it.points > 0);
+  const cons = items.filter((it) => it.points < 0);
   const pa = card.paTags ?? [];
+  const adjusted = !!(card.stopNote || card.targetNote);
+  const hasDetail = items.length > 0 || !!card.dowLabel || adjusted || pa.length > 0;
+  const body = (
+    <>
+      {/* 見出し: 売買・ペア・時間足・RR ／ スコア */}
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className={`rounded px-1.5 py-0.5 text-[11px] font-bold ${long ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
+              {long ? '買い' : '売り'}
+            </span>
+            <span className="text-base font-bold text-gray-900">{pairLabel(card.instrument)}</span>
+            <span className="text-xs text-gray-500">{TF_LABEL[card.tf]}足</span>
+          </div>
+          <p className="mt-0.5 text-xs text-gray-600">
+            RR <span className="font-bold text-gray-900">1:{card.rr.toFixed(1)}</span>
+            {near && <span className="ml-1.5 rounded bg-gray-100 px-1 text-[10px] text-gray-500">準好機</span>}
+          </p>
+        </div>
+        <ScoreBadge card={card} />
+      </div>
+
+      <RrBar card={card} digits={d} />
+
+      {/* ひと目で分かる要約 */}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
+        {card.entrySignal && (
+          <span className={`rounded px-1.5 py-0.5 font-bold ${ENTRY_STYLE[card.entrySignal.kind].cls}`}>
+            {ENTRY_STYLE[card.entrySignal.kind].icon}
+            {card.entrySignal.label}
+          </span>
+        )}
+        {items.length > 0 && (
+          <span className="rounded bg-gray-50 px-1.5 py-0.5 text-gray-600">
+            有利 <span className="font-bold text-green-700">{pros.length}</span> ・ 不利{' '}
+            <span className="font-bold text-red-700">{cons.length}</span>
+          </span>
+        )}
+        {adjusted && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">帯で調整済み</span>}
+        {hasDetail && (
+          <span className="ml-auto text-gray-400">
+            {open ? '閉じる' : '詳しく'} <span className={`inline-block transition-transform ${open ? 'rotate-180' : ''}`}>▾</span>
+          </span>
+        )}
+      </div>
+    </>
+  );
+
   return (
-    <div
-      className={`rounded-lg border bg-white p-2.5 ${
-        near ? 'border-dashed border-gray-300' : long ? 'border-green-200' : 'border-red-200'
-      }`}
-    >
-      {/* 見出し */}
-      <div className="flex items-center gap-2">
-        <span className={`rounded px-1.5 py-0.5 text-[11px] font-bold ${long ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-          {long ? '▲買い' : '▼売り'}
-        </span>
-        <span className="text-sm font-bold text-gray-800">{pairLabel(card.instrument)}</span>
-        <span className="text-[11px] text-gray-500">{TF_LABEL[card.tf]}足</span>
-        <span className="ml-auto text-right">
-          {card.score != null ? (
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-1.5 w-12 overflow-hidden rounded-full bg-gray-100">
-                <span className={`block h-full ${scoreBar(card.score)}`} style={{ width: `${card.score}%` }} />
-              </span>
-              <span className={`text-sm font-bold tabular-nums ${scoreCls(card.score)}`}>{card.score}</span>
-            </span>
-          ) : card.confidence != null ? (
-            <span className="text-[11px] text-gray-500">
-              信用度 {card.confidence}
-              <span className="ml-0.5 text-[9px] text-gray-400">{card.confidenceSource ? SOURCE_LABEL[card.confidenceSource] : ''}</span>
-            </span>
-          ) : (
-            <span className="text-[10px] text-gray-400">信用度 —</span>
+    <div className={`rounded-xl border bg-white shadow-sm ${near ? 'border-dashed border-gray-300' : 'border-gray-200'}`}>
+      {hasDetail ? (
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="block w-full p-3 text-left">
+          {body}
+        </button>
+      ) : (
+        <div className="p-3">{body}</div>
+      )}
+
+      {open && hasDetail && (
+        <div className="space-y-2 border-t border-gray-100 px-3 pb-3 pt-2 text-[11px]">
+          {card.dowLabel && (
+            <p className="text-gray-600">
+              <span className="font-semibold text-gray-700">ダウ理論</span>　{card.dowLabel}
+            </p>
           )}
-        </span>
-      </div>
-
-      {/* ダウ理論の状態とタイミング */}
-      {(card.dowLabel || card.entrySignal) && (
-        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
-          {card.dowLabel && <span className="text-gray-600">ダウ: {card.dowLabel}</span>}
-          {card.entrySignal && (
-            <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${ENTRY_STYLE[card.entrySignal.kind].cls}`}>
-              {ENTRY_STYLE[card.entrySignal.kind].icon}
-              {card.entrySignal.label}
-            </span>
+          {adjusted && (
+            <p className="text-amber-700">
+              <span className="font-semibold">帯での調整</span>　{[card.stopNote, card.targetNote].filter(Boolean).join('・')}
+            </p>
           )}
-        </div>
-      )}
-
-      {/* 入 / 損 / 利 と RR */}
-      <div className="mt-1.5 grid grid-cols-[auto_1fr_1fr_1fr] items-end gap-x-2 text-[11px] tabular-nums">
-        <span className="text-xs font-bold text-gray-800">RR 1:{card.rr.toFixed(1)}</span>
-        <span className="text-right">
-          <span className="block text-[9px] text-gray-400">エントリー</span>
-          <span className="font-semibold text-gray-800">{card.entry.toFixed(d)}</span>
-        </span>
-        <span className="text-right">
-          <span className="block text-[9px] text-gray-400">損切り −{card.riskPips}p</span>
-          <span className="text-red-600">{card.stop.toFixed(d)}</span>
-        </span>
-        <span className="text-right">
-          <span className="block text-[9px] text-gray-400">目標 +{card.rewardPips}p</span>
-          <span className="text-green-600">{card.target.toFixed(d)}</span>
-        </span>
-      </div>
-      {(card.stopNote || card.targetNote) && (
-        <p className="mt-1 text-[10px] text-amber-700">
-          {[card.stopNote, card.targetNote].filter(Boolean).join('・')}
-        </p>
-      )}
-
-      {/* プライスアクション（SMC）: スイープ・オーダーブロック・FVG・OTE など */}
-      {card.paTags && (
-        <div className="mt-1.5 rounded bg-gray-50 px-1.5 py-1">
-          <p className="text-[10px] font-semibold text-gray-500">プライスアクション</p>
-          {pa.length === 0 ? (
-            <p className="text-[10px] text-gray-400">目立った痕跡なし</p>
-          ) : (
-            <ul className="mt-0.5 space-y-0.5">
-              {pa.map((t, k) => (
-                <li key={k} className="flex items-center gap-1 text-[11px]">
-                  <span
-                    aria-hidden
-                    className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
-                      t.tone === 'with' ? 'bg-green-500' : t.tone === 'against' ? 'bg-red-500' : 'bg-gray-300'
-                    }`}
-                  />
-                  <span className={t.tone === 'against' ? 'text-red-700' : t.tone === 'with' ? 'text-gray-800' : 'text-gray-500'}>
-                    {t.label}
-                  </span>
-                  {t.points !== 0 && (
-                    <span className={`ml-auto shrink-0 tabular-nums text-[10px] ${t.points > 0 ? 'text-green-700' : 'text-red-700'}`}>
-                      {t.points > 0 ? '+' : '−'}
-                      {Math.abs(t.points)}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
+          {card.paTags && (
+            <div>
+              <p className="font-semibold text-gray-700">プライスアクション</p>
+              {pa.length === 0 ? (
+                <p className="text-gray-400">目立った痕跡なし</p>
+              ) : (
+                <ul className="mt-0.5 space-y-0.5">
+                  {pa.map((t, k) => (
+                    <PointRow key={k} label={t.label} points={t.points} />
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
-        </div>
-      )}
-
-      {/* 根拠: 影響の大きい3つ＋内訳 */}
-      {top.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1">
-          {top.map((it, k) => (
-            <ScoreChip key={k} item={it} />
-          ))}
-        </div>
-      )}
-      {items.length > top.length && (
-        <>
-          <button
-            type="button"
-            onClick={() => setOpen((o) => !o)}
-            aria-expanded={open}
-            className="mt-1 text-[10px] text-gray-500 underline-offset-2 hover:underline"
-          >
-            {open ? '内訳を閉じる' : `内訳をすべて見る（${items.length}）`}
-          </button>
-          {open && (
-            <ul className="mt-1 space-y-0.5 border-t border-gray-100 pt-1 text-[10px]">
-              <li className="flex justify-between text-gray-400">
-                <span>基準</span>
-                <span className="tabular-nums">50</span>
-              </li>
-              {items.map((it, k) => (
-                <li key={k} className="flex justify-between gap-2">
-                  <span className="text-gray-600">{it.label}</span>
-                  <span className={`shrink-0 font-semibold tabular-nums ${it.points > 0 ? 'text-green-700' : 'text-red-700'}`}>
-                    {it.points > 0 ? '+' : '−'}
-                    {Math.abs(it.points)}
-                  </span>
-                </li>
-              ))}
-              <li className="flex justify-between border-t border-gray-100 pt-0.5 font-bold text-gray-700">
-                <span>総合スコア（合計を0〜100に換算）</span>
+          {items.length > 0 && (
+            <div>
+              <p className="font-semibold text-gray-700">スコアの内訳（基準 50）</p>
+              <ul className="mt-0.5 space-y-0.5">
+                {items
+                  .filter((it) => !it.label.startsWith('PA: '))
+                  .map((it, k) => (
+                    <PointRow key={k} label={it.label} points={it.points} />
+                  ))}
+                {pa.some((t) => t.points !== 0) && (
+                  <PointRow label="プライスアクション（上の合計）" points={pa.reduce((a, t) => a + t.points, 0)} />
+                )}
+              </ul>
+              <p className="mt-1 flex justify-between border-t border-gray-100 pt-1 font-bold text-gray-800">
+                <span>総合スコア</span>
                 <span className="tabular-nums">{card.score}</span>
-              </li>
-            </ul>
+              </p>
+            </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );
 }
 
-// 絞り込みのチップ。
-function FilterChip({ on, onClick, children }: { on: boolean; onClick: () => void; children: ReactNode }) {
+// セグメントの切り替え（全体 / 個別）。
+function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+}: {
+  value: T;
+  options: { v: T; label: string }[];
+  onChange: (v: T) => void;
+  label: string;
+}) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={on}
-      className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${on ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600'}`}
-    >
-      {children}
-    </button>
+    <div role="group" aria-label={label} className="flex rounded-lg bg-gray-100 p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.v}
+          type="button"
+          onClick={() => onChange(o.v)}
+          aria-pressed={value === o.v}
+          className={`flex-1 rounded-md px-2 py-1 text-[11px] font-medium ${value === o.v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// セクションの見出し（件数つき）。
+function SectionTitle({ title, note, count }: { title: string; note: string; count: number }) {
+  return (
+    <p className="mt-1 flex items-baseline gap-2 text-sm font-bold text-gray-800">
+      {title}
+      <span className="rounded-full bg-gray-100 px-2 text-[11px] font-semibold text-gray-600">{count}</span>
+      <span className="ml-auto text-[10px] font-normal text-gray-400">{note}</span>
+    </p>
   );
 }
 
 type DirFilter = 'all' | 'long' | 'short';
+type TfFilter = 'all' | SlTimeframe;
 
 // プライスアクション（SMC）の用語の説明。
 const PA_GLOSSARY: [string, string][] = [
@@ -232,7 +277,7 @@ export default function EdgeAnalysis() {
   const [error, setError] = useState('');
   const [data, setData] = useState<RrBoardSnapshot | null>(null);
   const [pair, setPair] = useState('all');
-  const [tfs, setTfs] = useState<SlTimeframe[]>([]); // 空=すべて
+  const [tf, setTf] = useState<TfFilter>('all');
   const [dir, setDir] = useState<DirFilter>('all');
   const [showNear, setShowNear] = useState(true);
 
@@ -266,144 +311,164 @@ export default function EdgeAnalysis() {
     );
   }
 
+  const shown = (data?.cards ?? []).filter(
+    (c) => (pair === 'all' || c.instrument === pair) && (tf === 'all' || c.tf === tf) && (dir === 'all' || c.direction === dir),
+  );
+  const prime = shown.filter((c) => c.tier !== 'near');
+  const near = shown.filter((c) => c.tier === 'near');
+  const updated = data?.generatedAt
+    ? new Date(data.generatedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+    : null;
+
   return (
-    <div className="mx-auto max-w-md px-3 my-2">
-      <div className="mb-2 flex items-center justify-between">
-        <p className="text-xs text-gray-500">RR好機（15分/30分/1時間足・総合スコア順）</p>
+    <div className="mx-auto my-2 max-w-md space-y-3 px-3">
+      {/* 見出し: 件数・更新時刻・更新ボタン */}
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold text-gray-800">
+            好機 {data ? prime.length : '–'}件
+            <span className="ml-1.5 text-xs font-normal text-gray-500">準好機 {data ? near.length : '–'}件</span>
+          </p>
+          <p className="text-[10px] text-gray-400">
+            15分・30分・1時間足／総合スコアの高い順{updated ? `／${updated} 更新` : ''}
+          </p>
+        </div>
         <button
           type="button"
           onClick={() => void load(true)}
-          className="rounded-md bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600 active:bg-gray-200"
+          className="rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-600 active:bg-gray-200"
         >
           更新
         </button>
       </div>
 
-      {loading && <p className="mt-3 text-sm text-gray-500">分析中…</p>}
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      {/* 絞り込み */}
+      <div className="space-y-1.5 rounded-xl bg-white p-2 shadow-sm">
+        <div className="flex items-center gap-2">
+          <select
+            value={pair}
+            onChange={(e) => setPair(e.target.value)}
+            className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-700"
+            aria-label="通貨ペア"
+          >
+            <option value="all">すべてのペア</option>
+            {RANKING_PAIRS.map((p) => (
+              <option key={p} value={p}>
+                {pairLabel(p)}
+              </option>
+            ))}
+          </select>
+          <div className="w-40">
+            <Segmented<DirFilter>
+              label="売買の方向"
+              value={dir}
+              onChange={setDir}
+              options={[
+                { v: 'all', label: '両方' },
+                { v: 'long', label: '買い' },
+                { v: 'short', label: '売り' },
+              ]}
+            />
+          </div>
+        </div>
+        <Segmented<TfFilter>
+          label="時間足"
+          value={tf}
+          onChange={setTf}
+          options={[{ v: 'all', label: '全時間足' }, ...SETUP_TFS.map((t) => ({ v: t as TfFilter, label: `${TF_LABEL[t]}足` }))]}
+        />
+      </div>
+
+      {loading && <p className="text-sm text-gray-500">分析中…</p>}
+      {error && <p className="text-sm text-red-600">{error}</p>}
 
       {data && (
-        <div className="space-y-2">
+        <>
           {data.jevPaused && (
-            <p className="rounded bg-amber-50 px-2 py-1 text-[10px] text-amber-700">
-              AI（Jev）は一時停止中（使用上限）。総合スコアは AI を除いた材料で計算しています。
+            <p className="rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-700">
+              AI（Jev）は一時停止中（使用上限）です。総合スコアは AI を除いた材料で計算しています。
             </p>
           )}
-          {/* 絞り込み: ペア・時間足・方向 */}
-          <div className="space-y-1.5 rounded-lg bg-white p-2 shadow-sm">
-            <div className="flex items-center gap-2">
-              <select
-                value={pair}
-                onChange={(e) => setPair(e.target.value)}
-                className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700"
-                aria-label="通貨ペア"
-              >
-                <option value="all">すべてのペア</option>
-                {RANKING_PAIRS.map((p) => (
-                  <option key={p} value={p}>
-                    {pairLabel(p)}
-                  </option>
-                ))}
-              </select>
-              <div className="ml-auto flex gap-1">
-                {(['all', 'long', 'short'] as DirFilter[]).map((v) => (
-                  <FilterChip key={v} on={dir === v} onClick={() => setDir(v)}>
-                    {v === 'all' ? '売買とも' : v === 'long' ? '買い' : '売り'}
-                  </FilterChip>
+
+          <SectionTitle title="好機" note="RR 1:2.5以上" count={prime.length} />
+          {prime.length === 0 ? (
+            <p className="rounded-xl bg-white py-6 text-center text-sm text-gray-400 shadow-sm">条件を満たす好機はありません</p>
+          ) : (
+            <div className="space-y-2">
+              {prime.map((c) => (
+                <OpportunityCard key={`${c.instrument}:${c.tf}`} card={c} />
+              ))}
+            </div>
+          )}
+
+          <div className="mt-1 flex items-baseline gap-2">
+            <p className="flex items-baseline gap-2 text-sm font-bold text-gray-500">
+              準好機
+              <span className="rounded-full bg-gray-100 px-2 text-[11px] font-semibold text-gray-600">{near.length}</span>
+              <span className="text-[10px] font-normal text-gray-400">RR 1:2.0〜2.5</span>
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowNear((v) => !v)}
+              aria-expanded={showNear}
+              className="ml-auto rounded-lg bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600"
+            >
+              {showNear ? '隠す ▴' : '表示 ▾'}
+            </button>
+          </div>
+          {showNear &&
+            (near.length === 0 ? (
+              <p className="py-2 text-center text-[11px] text-gray-400">準好機はありません</p>
+            ) : (
+              <div className="space-y-2">
+                {near.map((c) => (
+                  <OpportunityCard key={`${c.instrument}:${c.tf}`} card={c} />
                 ))}
               </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-1">
-              <FilterChip on={tfs.length === 0} onClick={() => setTfs([])}>
-                全時間足
-              </FilterChip>
-              {SETUP_TFS.map((t) => (
-                <FilterChip
-                  key={t}
-                  on={tfs.includes(t)}
-                  onClick={() => setTfs((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]))}
-                >
-                  {TF_LABEL[t]}足
-                </FilterChip>
-              ))}
-              <label className="ml-auto flex items-center gap-1 text-[11px] text-gray-600">
-                <input type="checkbox" checked={showNear} onChange={(e) => setShowNear(e.target.checked)} />
-                準好機も表示
-              </label>
-            </div>
-          </div>
+            ))}
 
-          {(() => {
-            const shown = data.cards.filter(
-              (c) =>
-                (pair === 'all' || c.instrument === pair) &&
-                (tfs.length === 0 || tfs.includes(c.tf)) &&
-                (dir === 'all' || c.direction === dir),
-            );
-            const prime = shown.filter((c) => c.tier !== 'near');
-            const near = shown.filter((c) => c.tier === 'near');
-            return (
-              <>
-                <p className="flex items-baseline justify-between text-xs font-bold text-gray-700">
-                  好機 <span className="font-normal text-gray-400">RR 1:2.5以上・{prime.length}件</span>
-                </p>
-                {prime.length === 0 ? (
-                  <p className="py-3 text-center text-sm text-gray-400">条件を満たす好機はありません。</p>
-                ) : (
-                  <div className="space-y-2">
-                    {prime.map((c) => (
-                      <OpportunityCard key={`${c.instrument}:${c.tf}`} card={c} />
-                    ))}
-                  </div>
-                )}
-                {showNear && (
-                  <>
-                    <p className="mt-3 flex items-baseline justify-between text-xs font-bold text-gray-500">
-                      準好機 <span className="font-normal text-gray-400">RR 1:2.0〜2.5・{near.length}件</span>
-                    </p>
-                    {near.length === 0 ? (
-                      <p className="py-2 text-center text-[11px] text-gray-400">準好機はありません。</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {near.map((c) => (
-                          <OpportunityCard key={`${c.instrument}:${c.tf}`} card={c} />
-                        ))}
-                      </div>
-                    )}
-                  </>
-                )}
-              </>
-            );
-          })()}
           {data.failed.length > 0 && (
             <p className="text-[11px] text-amber-600">取得できなかったペア: {data.failed.map(pairLabel).join(', ')}</p>
           )}
-          <details className="rounded bg-white px-2 py-1.5 text-[11px] text-gray-600 shadow-sm">
-            <summary className="cursor-pointer font-semibold text-gray-700">プライスアクションの用語</summary>
-            <dl className="mt-1 space-y-1">
-              {PA_GLOSSARY.map(([term, desc]) => (
-                <div key={term}>
-                  <dt className="font-semibold text-gray-800">{term}</dt>
-                  <dd className="text-gray-500">{desc}</dd>
-                </div>
-              ))}
-            </dl>
+
+          {/* 見方と用語（折りたたみ） */}
+          <details className="rounded-xl bg-white px-3 py-2 text-[11px] text-gray-600 shadow-sm">
+            <summary className="cursor-pointer font-semibold text-gray-700">この画面の見方・用語</summary>
+            <div className="mt-2 space-y-2 leading-relaxed">
+              <p>
+                <span className="font-semibold text-gray-800">方向</span>：ダウ理論で、高値・安値の切り上げは買い、切り下げは売り。レンジや転換の兆しは対象外です。
+              </p>
+              <p>
+                <span className="font-semibold text-gray-800">損切り・目標</span>：損切りはピボット＋ATR、目標は上位足のスイング。抵抗帯に合わせて、損切りは帯の外へ、目標は途中の★2以上の帯の手前に調整します（「帯で調整済み」）。
+              </p>
+              <p>
+                <span className="font-semibold text-gray-800">好機・準好機</span>：スプレッド込みの RR が 1:2.5以上なら好機、1:2.0〜2.5 なら準好機です。
+              </p>
+              <p>
+                <span className="font-semibold text-gray-800">総合スコア</span>：50を基準に、ダウ理論・上位足の向き・RR・損切りの強さ・帯との位置・ローソク足パターン・プライスアクション・タイミング・RSI/ストキャス・AI（Jev）を加点/減点し、0〜100に換算します。
+                <span className="ml-1 inline-flex gap-1 align-middle">
+                  <span className="rounded bg-indigo-600 px-1 text-[10px] text-white">70〜 強い</span>
+                  <span className="rounded bg-indigo-50 px-1 text-[10px] text-indigo-700">50〜 普通</span>
+                  <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500">〜49 弱い</span>
+                </span>
+              </p>
+              <p>
+                <span className="font-semibold text-gray-800">タイミング</span>：🟢押し目/戻り（入りどき）・🟡様子見・⚠反転警戒。移動平均（SMA21/EMA75/EMA200）・ストキャス・ローソク足で判定します。
+              </p>
+              <dl className="space-y-1 border-t border-gray-100 pt-2">
+                {PA_GLOSSARY.map(([term, desc]) => (
+                  <div key={term}>
+                    <dt className="font-semibold text-gray-800">{term}</dt>
+                    <dd className="text-gray-500">{desc}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
           </details>
           <p className="text-[10px] leading-relaxed text-gray-400">
-            方向はダウ理論（高値・安値の切り上げ＝買い／切り下げ＝売り。レンジ・転換の兆しは対象外）。
-            損切りはピボット＋ATR に、目標は上位足のスイングに置き、抵抗帯に合わせて調整します（損切りは帯の外、目標は途中の★2以上の帯の手前）。
-            スプレッド込みの実質RRが1:2.5以上を「好機」、1:2.0〜2.5を「準好機」とし、総合スコアの高い順に並べます。
-            総合スコアは50を基準に、ダウ理論・上位足の向き・RR・損切りラインの強さ・帯との位置・ローソク足パターン・
-            プライスアクション（流動性スイープ・オーダーブロック・FVG・プレミアム/ディスカウント・OTE・ディスプレイスメント）・
-            タイミング（🟢押し目/戻り・🟡様子見・⚠反転警戒）・RSI/ストキャス・AI（Jevのブレイク確率）を加減点し、
-            合計を0〜100に換算したものです（材料がそろうほど100に近づきます）。
-            対象は{SETUP_TFS.map((t) => TF_LABEL[t]).join('/')}足（4時間足は目標に使用）。データは Yahoo Finance。
-            {data.generatedAt
-              ? ` ${new Date(data.generatedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })} 更新。`
-              : ''}
-            ※将来の値動きや利益を保証するものではありません。
+            データは Yahoo Finance。※将来の値動きや利益を保証するものではありません。
           </p>
-        </div>
+        </>
       )}
     </div>
   );
