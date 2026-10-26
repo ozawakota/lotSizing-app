@@ -160,8 +160,9 @@ function OpportunityCard({ card }: { card: RrCard }) {
   return (
     <div className={`rounded-xl border bg-white shadow-sm ${near ? 'border-dashed border-gray-300' : 'border-gray-200'}`}>
       {hasDetail ? (
-        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="block w-full p-3 text-left">
-          {body}
+        // 余白は内側の要素に付ける（ボタン要素に付けると Mobiscroll のボタン用 CSS に打ち消されることがある）
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="block w-full text-left">
+          <span className="block p-3">{body}</span>
         </button>
       ) : (
         <div className="p-3">{body}</div>

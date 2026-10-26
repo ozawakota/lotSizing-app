@@ -624,15 +624,15 @@ function MtfOverview({
           const pa = t.candlePatterns ? priceActionHeadline(t.candlePatterns) : null;
           const on = t.tf === selected;
           return (
-            <li key={t.tf}>
+            <li key={t.tf} className="border-b border-gray-50 last:border-b-0">
+              {/* 余白とレイアウトは内側の要素に付ける（ボタン要素に付けると Mobiscroll のボタン用 CSS に打ち消されることがある） */}
               <button
                 type="button"
                 onClick={() => onSelect(t.tf)}
                 aria-pressed={on}
-                className={`grid w-full grid-cols-[3.2rem_1fr_auto] items-center gap-2 border-b border-gray-50 px-3 py-2 text-left last:border-b-0 ${
-                  on ? 'bg-orange-50' : 'active:bg-gray-50'
-                }`}
+                className={`block w-full text-left ${on ? 'bg-orange-50' : 'active:bg-gray-50'}`}
               >
+                <span className="grid grid-cols-[3.2rem_1fr_auto] items-center gap-2 px-3 py-2">
                 <span className={`text-xs font-bold ${on ? 'text-orange-700' : 'text-gray-700'}`}>{TF_LABEL[t.tf].replace('足', '')}</span>
                 <span className="min-w-0">
                   <span className="flex items-center gap-1.5">
@@ -657,6 +657,7 @@ function MtfOverview({
                   ) : (
                     <span className="text-[10px] text-gray-300">RR —</span>
                   )}
+                </span>
                 </span>
               </button>
             </li>
