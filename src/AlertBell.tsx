@@ -14,7 +14,7 @@ import {
   type AlertHistoryItem,
 } from '@/lib/push';
 import { ALERT_PAIRS, PAIR_CONFIG } from '@/lib/alert';
-import { LIST_RESET } from '@/lib/listReset';
+import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 
 const CLEARED_KEY = 'alertsClearedAt';
 
@@ -181,7 +181,7 @@ export default function AlertBell() {
                 style={{ ...LIST_RESET, WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
               >
                 {shownHistory.map((a) => (
-                  <li key={a.id} className="rounded bg-gray-50 px-2 py-1">
+                  <li style={LIST_ITEM_RESET} key={a.id} className="rounded bg-gray-50 px-2 py-1">
                     <div className="flex items-baseline justify-between gap-2">
                       <span className="text-xs font-semibold text-gray-700">{a.title || a.pair}</span>
                       <span className="shrink-0 text-[10px] text-gray-400">{relativeTime(a.created_at)}</span>

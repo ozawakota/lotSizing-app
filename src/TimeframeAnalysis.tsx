@@ -25,7 +25,7 @@ import TfCountdown from '@/components/TfCountdown';
 import { DowHeader, KeyLevelRow, SwingChart, ZoneLadder } from '@/components/TfStructure';
 import { dowDirection, dowSummary, type DowAnalysis } from '@/lib/dow';
 import type { SrZone } from '@/lib/srZones';
-import { LIST_RESET } from '@/lib/listReset';
+import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 
@@ -279,7 +279,7 @@ function PatternList({ reads, tf }: { reads: PatternRead[]; tf: SlTimeframe }) {
       ) : (
         <ul className="mt-0.5 space-y-0.5" style={LIST_RESET}>
           {reads.map((r, idx) => (
-            <li key={`${r.key}-${r.barsAgo}-${idx}`} className="flex flex-wrap items-center gap-x-1.5">
+            <li style={LIST_ITEM_RESET} key={`${r.key}-${r.barsAgo}-${idx}`} className="flex flex-wrap items-center gap-x-1.5">
               <span className={`font-semibold ${r.key.startsWith('bull') ? 'text-green-700' : 'text-red-700'}`}>{r.label}</span>
               <span className="text-[10px] text-gray-400">{r.barsAgo === 0 ? '確定足' : `${r.barsAgo}本前`}</span>
               <span className={`rounded px-1 text-[10px] ${CONF_STYLE[r.confirmation]}`}>{CONFIRMATION_LABEL[r.confirmation]}</span>
@@ -625,7 +625,7 @@ function MtfOverview({
           const pa = t.candlePatterns ? priceActionHeadline(t.candlePatterns) : null;
           const on = t.tf === selected;
           return (
-            <li key={t.tf} className="border-b border-gray-50 last:border-b-0">
+            <li style={LIST_ITEM_RESET} key={t.tf} className="border-b border-gray-50 last:border-b-0">
               {/* 余白とレイアウトは内側の要素に付ける（ボタン要素に付けると Mobiscroll のボタン用 CSS に打ち消されることがある） */}
               <button
                 type="button"

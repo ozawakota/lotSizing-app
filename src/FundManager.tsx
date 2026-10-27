@@ -18,7 +18,7 @@ import {
   type Trade,
 } from '@/lib/fund';
 import TradeCalendar from './TradeCalendar';
-import { LIST_RESET } from '@/lib/listReset';
+import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 const FUND_URL = import.meta.env.VITE_FUND_URL as string | undefined;
@@ -840,7 +840,7 @@ export default function FundManager() {
               {cashflows.length > 0 && (
                 <ul className="divide-y divide-gray-100 rounded-lg border border-gray-100" style={LIST_RESET}>
                   {cashflows.map((c) => (
-                    <li key={c.id} className="flex items-center gap-2 px-3 py-1.5 text-xs">
+                    <li style={LIST_ITEM_RESET} key={c.id} className="flex items-center gap-2 px-3 py-1.5 text-xs">
                       <span className="w-20 shrink-0 tabular-nums text-gray-500">{c.date}</span>
                       <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${c.type === 'deposit' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
                         {c.type === 'deposit' ? '入金' : '出金'}

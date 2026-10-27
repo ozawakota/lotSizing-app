@@ -12,7 +12,7 @@ import {
   type PriceActionTone,
 } from '@/lib/candleRead';
 import type { SrZone } from '@/lib/srZones';
-import { LIST_RESET } from '@/lib/listReset';
+import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 
 const UP = '#16a34a';
 const DOWN = '#dc2626';
@@ -222,7 +222,7 @@ export function PriceActionChart({
             const t = bar && r.confirmation === 'pending' ? patternTriggerLevels(bar, r.key) : null;
             const valid = isValidPattern(r);
             return (
-              <li key={`${r.key}-${r.barsAgo}-${n}`} className="text-[11px]">
+              <li style={LIST_ITEM_RESET} key={`${r.key}-${r.barsAgo}-${n}`} className="text-[11px]">
                 <div className="flex flex-wrap items-center gap-x-1.5">
                   <span
                     className={`inline-flex h-3.5 w-3.5 items-center justify-center rounded-full text-[8px] font-bold ${

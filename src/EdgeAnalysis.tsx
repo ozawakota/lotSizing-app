@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 import { RANKING_PAIRS, RANKING_TIMEFRAMES, type RrBoardSnapshot, type RrCard } from '@/lib/ranking';
 import type { EntryKind } from '@/lib/entrySignal';
 import type { SlTimeframe } from '@/lib/stoploss';
-import { LIST_RESET } from '@/lib/listReset';
+import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 
 const RANKING_URL = import.meta.env.VITE_RANKING_URL as string | undefined;
 
@@ -83,7 +83,7 @@ function RrBar({ card, digits }: { card: RrCard; digits: number }) {
 // 加点/減点の1行（詳細の中）。
 function PointRow({ label, points }: { label: string; points: number }) {
   return (
-    <li className="flex items-start justify-between gap-2">
+    <li style={LIST_ITEM_RESET} className="flex items-start justify-between gap-2">
       <span className="flex items-start gap-1 text-gray-700">
         <span aria-hidden className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${points > 0 ? 'bg-green-500' : points < 0 ? 'bg-red-500' : 'bg-gray-300'}`} />
         {label}
