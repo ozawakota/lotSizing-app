@@ -716,12 +716,13 @@ const App: FC = () => {
 
   const UpdateRatesButton = () => (
     <button
+      type="button"
       onClick={fetchCurrencyRates}
       disabled={isLoading}
-      className={`mt-2 px-3 py-2 rounded-full ${
-        isLoading ? 'bg-gray-300' : 'bg-blue-500 hover:bg-blue-600'
-      } text-white text-sm flex items-center justify-center`}
+      className={`shrink-0 rounded-full ${isLoading ? 'bg-gray-300' : 'bg-blue-500 hover:bg-blue-600'} text-xs text-white`}
     >
+      {/* 余白は内側の span に付ける（ボタン要素の余白は外部の CSS に打ち消されることがある） */}
+      <span className="flex items-center justify-center px-3 py-1.5">
       {isLoading ? (
         <>
           <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -738,6 +739,7 @@ const App: FC = () => {
           レート更新
         </>
       )}
+      </span>
     </button>
   );
 
@@ -800,197 +802,201 @@ const App: FC = () => {
 
       {/* エラーメッセージ表示 */}
       {errorMessage && (
-        <div className="mx-3 my-2 p-2 bg-red-100 border border-red-300 text-red-700 text-sm rounded">
+        <div className="mx-3 my-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {errorMessage}
         </div>
       )}
 
-      <div className='flex justify-center mt-1'>
-
-      {/* 計算結果表示 - 常に表示 */}
-      <div className="bg-blue-50 rounded-md px-2 py-1.5 border border-blue-200 mx-3 w-55 text-sm">
-        <div className="flex justify-between items-baseline">
-          <span className="text-gray-600">適正ロット:</span>
-          <span className="text-base font-bold text-blue-700">{calculatedLot} Lots</span>
-        </div>
-        <div className="flex justify-between items-baseline">
-          <span className="text-gray-600">損失許容額:</span>
-          <span className="text-base font-bold text-red-600">
-            {balanceCurrency === 'JPY' ? `${riskAmount}円` : `$${riskAmount}`}
-          </span>
-        </div>
-        <p className="text-xs text-gray-500 text-right leading-tight">
-          {balanceCurrency === 'JPY' ? `(約$${riskAmountUSD})` : `(約${riskAmountUSD}円)`}
-        </p>
-        {/* 証拠金維持率を追加 */}
-        {currency !== 'JPY' && parseFloat(marginRatio) > 0 && (
-          <div className="mt-1 border-t pt-1 flex justify-between items-baseline">
-            <span className="text-gray-600">証拠金維持率:</span>
-            <span className="text-right">
-              <span className={`text-base font-bold ${
-                parseFloat(marginRatio) < 100 ? 'text-red-600' :
-                parseFloat(marginRatio) < 200 ? 'text-yellow-600' : 'text-green-600'
-              }`}>
-                {marginRatio}%
+      {/* 計算ページ: 計算結果 → 口座 → リスク → 通貨とレバレッジ のカード。
+          見出しや説明は div にする（p 要素は外部の CSS に余白を打ち消されることがあるため）。 */}
+      <div className="mx-auto mt-2 max-w-md space-y-3 px-3">
+        {/* 計算結果（常に表示） */}
+        <section className="rounded-xl bg-white p-3 shadow-sm">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="text-xs text-gray-500">適正ロット</div>
+              <div className="text-3xl font-bold tabular-nums text-blue-700">
+                {calculatedLot}
+                <span className="ml-1 text-sm font-semibold text-gray-500">Lots</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={openModal}
+              className="shrink-0 rounded-lg border border-orange-300 bg-orange-50 text-xs font-semibold text-orange-700"
+            >
+              <span className="flex items-center gap-1 px-2.5 py-1.5">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
+                  <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
+                </svg>
+                設定確認
               </span>
-              <span className="text-xs text-gray-500 ml-1">(×{leverage})</span>
-            </span>
+            </button>
           </div>
-        )}
-      </div>
-
-      {/* 証拠金通貨選択 */}
-      <div className='px-1 mb-2 w-45'>
-        <p className="text-sm text-gray-600">証拠金通貨選択</p>
-        <Select
-          data={balanceCurrencyData}
-          value={balanceCurrency}
-          onChange={handleBalanceCurrencyChange}
-          display="inline"
-          touchUi={true}
-          rows={3}
-          itemHeight={30}
-          label="証拠金通貨"
-          labelStyle="stacked"
-        />
-      </div>
-      </div>
-
-      <div className='flex gap-2 px-3 mb-2 justify-center'>
-        <div className='w-45'>
-          <p className='text-center'>リスク%</p>
-          <Select
-            data={riskData}
-            value={riskPercentage}
-            onChange={handleRiskChange}
-            display="inline"
-            touchUi={true}
-            rows={3}
-            itemHeight={30}
-            label="リスク%"
-            labelStyle="stacked"
-          />
-        </div>
-        <div className='w-55 mb-0'>
-          <p className='text-center mb-1'>ストップ幅（pips）</p>
-          <Input
-            type="number"
-            value={stopLossPips}
-            onChange={handleStopLossChange}
-            placeholder="損切り幅を入力"
-            inputStyle="box"
-            labelStyle="stacked"
-            className='mb-0'
-          />
-          <p className='text-center'><small>ゴールドは1Points = 10pips</small></p>
-        </div>
-      </div>
-
-      {/* 証拠金入力フィールド + 設定確認ボタン */}
-      <div className='flex flex-row-reverse gap-2 px-3 mb-2 items-center'>
-        <div className='flex-1'>
-          <p className='text-center mb-1'>
-            証拠金額 ({balanceCurrency === 'JPY' ? '円' : 'USD'})
-          </p>
-          <div className='relative'>
-            <Input
-              type={balanceCurrency === 'USD' ? 'tel' : 'text'} // USDの場合はtelタイプを使用
-              value={inputBalance} // 編集中の入力値を使用
-              onChange={handleAccountBalanceChange}
-              placeholder={balanceCurrency === 'JPY' ? "証拠金額を入力" : "証拠金額を入力 (例: 1000.50)"}
-              inputStyle="box"
-              labelStyle="stacked"
-            />
-            {inputBalance && (
-              <button
-                onClick={handleClearBalance}
-                aria-label="証拠金額をクリア"
-                className="absolute right-6 top-1/2 -translate-y-1/2 flex items-center justify-center h-5 w-5 rounded-full bg-gray-300 text-white text-xs leading-none hover:bg-red-400 transition-colors duration-150"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-          <div className='text-xs text-gray-500 text-center mt-1'>
-            {/* 証拠金の換算表示 */}
-            {parseFloat(accountBalance) > 0 && (
-              <p className="mt-1 text-blue-600">
-                {balanceCurrency === 'JPY'
-                  ? `(約$${balanceEquivalent})`
-                  : `(約${balanceEquivalent}円 = $${accountBalance} × ${currencyPrices['USD']})`}
-              </p>
-            )}
-          </div>
-        </div>
-        {/* 設定確認ボタン */}
-        <button
-          onClick={openModal}
-          className="w-28 py-3 px-2 bg-gradient-to-r from-orange-400 to-orange-600 text-white rounded-lg shadow-md hover:shadow-lg transition-all duration-200 text-sm font-medium flex flex-col items-center justify-center"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16" className="mb-1">
-            <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
-            <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
-          </svg>
-          設定確認
-        </button>
-      </div>
-
-      {/* 基軸通貨選択と価格表示 */}
-      <div className='px-3'>
-        <div className="flex flex-col items-center">
-          {/* 通貨価格表示と更新日時 */}
-          <div className="flex items-center gap-8 mb-1">
-            <div className="bg-gray-100 rounded-full text-center">
-              <p className='font-bold'>通貨ベース（価格）</p>
-              <p className="text-center font-semibold">
-                {currency === 'JPY'
-                  ? `${currency} = ${currencyPrice}`
-                  : currency === 'XAU'
-                  ? `XAU/USD = ${currencyPrice}`
-                  : `${currency}/JPY = ${currencyPrice}`}
-              </p>
+          <div className="mt-2 grid grid-cols-2 divide-x divide-gray-100 rounded-lg bg-gray-50 text-center">
+            <div className="py-2">
+              <div className="text-[10px] text-gray-500">損失許容額</div>
+              <div className="text-base font-bold tabular-nums text-red-600">
+                {balanceCurrency === 'JPY' ? `${riskAmount}円` : `$${riskAmount}`}
+              </div>
+              <div className="text-[10px] text-gray-400">
+                {balanceCurrency === 'JPY' ? `約$${riskAmountUSD}` : `約${riskAmountUSD}円`}
+              </div>
             </div>
-            <div className='text-center'>
-              <p className='font-bold'>価格更新日時</p>
-              <p className="text-xs text-gray-500 p-2">{lastUpdated}</p>
-              <UpdateRatesButton />
+            <div className="py-2">
+              <div className="text-[10px] text-gray-500">証拠金維持率</div>
+              {currency !== 'JPY' && parseFloat(marginRatio) > 0 ? (
+                <div
+                  className={`text-base font-bold tabular-nums ${
+                    parseFloat(marginRatio) < 100 ? 'text-red-600' : parseFloat(marginRatio) < 200 ? 'text-yellow-600' : 'text-green-600'
+                  }`}
+                >
+                  {marginRatio}%
+                </div>
+              ) : (
+                <div className="text-base font-bold text-gray-300">—</div>
+              )}
+              <div className="text-[10px] text-gray-400">レバレッジ ×{leverage}</div>
             </div>
           </div>
-        </div>
-      </div>
+        </section>
 
-      <div className='flex gap-2 px-3 mb-2 justify-center'>
-        {/* 基軸通貨選択 */}
-        <div className='w-50'>
-          <p className='text-center mb-1'>基軸通貨</p>
-          <Select
-              data={currencyData}
-              value={currency}
-              onChange={handleCurrencyChange}
-              display="inline"
-              touchUi={true}
-              rows={3}
-              itemHeight={30}
-              label="基軸通貨"
-              labelStyle="stacked"
-            />
-        </div>
+        {/* 口座: 証拠金額 ＋ 証拠金通貨 */}
+        <section className="rounded-xl bg-white p-3 shadow-sm">
+          <div className="mb-1 text-xs font-bold text-gray-700">口座</div>
+          <div className="grid grid-cols-[1fr_7.5rem] items-start gap-3">
+            <div className="min-w-0">
+              <div className="text-[11px] text-gray-500">証拠金額（{balanceCurrency === 'JPY' ? '円' : 'USD'}）</div>
+              <div className="relative">
+                <Input
+                  type={balanceCurrency === 'USD' ? 'tel' : 'text'} // USDの場合はtelタイプを使用
+                  value={inputBalance} // 編集中の入力値を使用
+                  onChange={handleAccountBalanceChange}
+                  placeholder={balanceCurrency === 'JPY' ? '証拠金額を入力' : '例: 1000.50'}
+                  inputStyle="box"
+                  labelStyle="stacked"
+                />
+                {inputBalance && (
+                  <button
+                    type="button"
+                    onClick={handleClearBalance}
+                    aria-label="証拠金額をクリア"
+                    className="absolute right-6 top-1/2 -translate-y-1/2 flex items-center justify-center h-5 w-5 rounded-full bg-gray-300 text-white text-xs leading-none hover:bg-red-400 transition-colors duration-150"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+              {/* 証拠金の換算表示 */}
+              {parseFloat(accountBalance) > 0 && (
+                <div className="text-[11px] text-blue-600">
+                  {balanceCurrency === 'JPY'
+                    ? `約$${balanceEquivalent}`
+                    : `約${balanceEquivalent}円（$${accountBalance} × ${currencyPrices['USD']}）`}
+                </div>
+              )}
+            </div>
+            <div>
+              <div className="text-[11px] text-gray-500">証拠金通貨</div>
+              <Select
+                data={balanceCurrencyData}
+                value={balanceCurrency}
+                onChange={handleBalanceCurrencyChange}
+                display="inline"
+                touchUi={true}
+                rows={3}
+                itemHeight={30}
+                label="証拠金通貨"
+                labelStyle="stacked"
+              />
+            </div>
+          </div>
+        </section>
 
-        {/* レバレッジ選択 */}
-        <div className='w-50'>
-          <p className='text-center mb-1'>レバレッジ</p>
-          <Select
-            data={leverageData}
-            value={leverage}
-            onChange={handleLeverageChange}
-            display="inline"
-            touchUi={true}
-            rows={3}
-            itemHeight={30}
-            label="レバレッジ"
-            labelStyle="stacked"
-          />
-        </div>
+        {/* リスク: リスク% ＋ ストップ幅 */}
+        <section className="rounded-xl bg-white p-3 shadow-sm">
+          <div className="mb-1 text-xs font-bold text-gray-700">リスク</div>
+          <div className="grid grid-cols-2 items-start gap-3">
+            <div>
+              <div className="text-[11px] text-gray-500">リスク%</div>
+              <Select
+                data={riskData}
+                value={riskPercentage}
+                onChange={handleRiskChange}
+                display="inline"
+                touchUi={true}
+                rows={3}
+                itemHeight={30}
+                label="リスク%"
+                labelStyle="stacked"
+              />
+            </div>
+            <div>
+              <div className="text-[11px] text-gray-500">ストップ幅（pips）</div>
+              <Input
+                type="number"
+                value={stopLossPips}
+                onChange={handleStopLossChange}
+                placeholder="損切り幅を入力"
+                inputStyle="box"
+                labelStyle="stacked"
+                className="mb-0"
+              />
+              <div className="text-[10px] text-gray-400">ゴールドは 1 Point = 10 pips</div>
+            </div>
+          </div>
+        </section>
+
+        {/* 通貨とレバレッジ: 価格・更新 ＋ 基軸通貨 ＋ レバレッジ */}
+        <section className="rounded-xl bg-white p-3 shadow-sm">
+          <div className="mb-2 flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-bold text-gray-700">通貨とレバレッジ</div>
+              <div className="truncate text-[11px] text-gray-500">
+                <span className="font-semibold tabular-nums text-gray-800">
+                  {currency === 'JPY'
+                    ? `${currency} = ${currencyPrice}`
+                    : currency === 'XAU'
+                    ? `XAU/USD = ${currencyPrice}`
+                    : `${currency}/JPY = ${currencyPrice}`}
+                </span>
+                <span className="ml-1.5 text-gray-400">{lastUpdated}</span>
+              </div>
+            </div>
+            <UpdateRatesButton />
+          </div>
+          <div className="grid grid-cols-2 items-start gap-3">
+            <div>
+              <div className="text-[11px] text-gray-500">基軸通貨</div>
+              <Select
+                data={currencyData}
+                value={currency}
+                onChange={handleCurrencyChange}
+                display="inline"
+                touchUi={true}
+                rows={3}
+                itemHeight={30}
+                label="基軸通貨"
+                labelStyle="stacked"
+              />
+            </div>
+            <div>
+              <div className="text-[11px] text-gray-500">レバレッジ</div>
+              <Select
+                data={leverageData}
+                value={leverage}
+                onChange={handleLeverageChange}
+                display="inline"
+                touchUi={true}
+                rows={3}
+                itemHeight={30}
+                label="レバレッジ"
+                labelStyle="stacked"
+              />
+            </div>
+          </div>
+        </section>
       </div>
 
       {/* 設定内容のモーダル */}
