@@ -12,6 +12,7 @@ import {
   type PriceActionTone,
 } from '@/lib/candleRead';
 import type { SrZone } from '@/lib/srZones';
+import { LIST_RESET } from '@/lib/listReset';
 
 const UP = '#16a34a';
 const DOWN = '#dc2626';
@@ -214,7 +215,7 @@ export function PriceActionChart({
       {reads.length === 0 ? (
         <p className="mt-1 text-[10px] text-gray-400">{periodLabel}にピンバー・包み足はありません</p>
       ) : (
-        <ul className="mt-1 space-y-1">
+        <ul className="mt-1 space-y-1" style={LIST_RESET}>
           {reads.map((r, n) => {
             const bull = isBull(r);
             const bar = bars[idxOf(r.barsAgo)];
@@ -245,7 +246,7 @@ export function PriceActionChart({
                     <span className="tabular-nums">{r.quality}</span>
                   </span>
                 </div>
-                <p className="pl-5 text-[10px] text-gray-500">
+                <div className="pl-5 text-[10px] text-gray-500">
                   <span className={r.zone === 'key' ? 'text-orange-600' : 'text-gray-400'}>
                     {r.zone === 'key' ? `${r.zoneReasons.join('・')}の近く` : '意識されるラインから離れた場所'}
                   </span>
@@ -258,7 +259,7 @@ export function PriceActionChart({
                       {bull ? ' を割ったら' : ' を超えたら'}否定
                     </>
                   )}
-                </p>
+                </div>
               </li>
             );
           })}

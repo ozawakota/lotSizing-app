@@ -17,6 +17,7 @@ import {
 } from '@/lib/signal';
 import type { EconEvent } from '@/lib/news';
 import { ANOMALY_BIAS_LABEL, anomaliesForPair, detectAnomalies, type Anomaly, type AnomalyBias, type AnomalyKind } from '@/lib/anomaly';
+import { LIST_RESET } from '@/lib/listReset';
 
 interface NewsPayload {
   generatedAt: number;
@@ -74,10 +75,6 @@ const BIAS_STYLE: Record<AnomalyBias, { cls: string; mark: string }> = {
   down: { cls: 'bg-red-50 text-red-700', mark: '↓' },
   volatile: { cls: 'bg-purple-50 text-purple-700', mark: '⚡' },
 };
-
-// リストの既定の余白（左インデント）を確実に消す。Tailwind の基本スタイルは CSS の layer の中にあり、
-// layer の外で読み込む CSS（Mobiscroll など）に負けることがあるため、インラインスタイルで指定する。
-const LIST_RESET: React.CSSProperties = { margin: 0, padding: 0, listStyle: 'none' };
 
 // JST の日付キー（YYYY-MM-DD）と、見出し用の表示（今日 / 明日 / 10/29(水)）。
 const jstDateKey = (t: number): string => new Date(t + 9 * 3_600_000).toISOString().slice(0, 10);
@@ -148,7 +145,7 @@ const AnomalyPanel: FC<{ anomalies: Anomaly[] }> = ({ anomalies }) => {
                   <span className="font-bold text-gray-800">{a.title}</span>
                   <span className="text-gray-400">{a.when}</span>
                 </div>
-                <p className="pl-4 text-gray-600">{a.detail}</p>
+                <div className="pl-4 text-gray-600">{a.detail}</div>
               </li>
             );
           })}
@@ -277,7 +274,7 @@ const OutlookSummary: FC<{
   const count = (v: SignalVerdict) => signals.filter((s) => signalVerdict(s) === v).length;
   return (
     <section className="rounded-xl bg-white shadow-sm">
-      <p className="px-3 pt-2.5 text-xs font-bold text-gray-800">全体の見通し</p>
+      <div className="px-3 pt-2.5 text-xs font-bold text-gray-800">全体の見通し</div>
       <div className="grid grid-cols-3 gap-1.5 p-2">
         {(['up', 'down', 'flat'] as const).map((v) => {
           const on = filter === v;
@@ -494,10 +491,10 @@ const NewsSummary: FC = () => {
             <div className="space-y-2">
               {calendarByDay.map((g) => (
                 <section key={g.key} className="overflow-hidden rounded-xl border border-gray-200 bg-white">
-                  <p className="border-b border-gray-100 bg-gray-50 px-3 py-1.5 text-[11px] font-bold text-gray-700">
+                  <div className="border-b border-gray-100 bg-gray-50 px-3 py-1.5 text-[11px] font-bold text-gray-700">
                     {g.key === 'unknown' ? '日時不明' : dayLabel(g.key, now)}
                     <span className="ml-1.5 font-normal text-gray-400">{g.events.length}件</span>
-                  </p>
+                  </div>
                   <ul className="divide-y divide-gray-100" style={LIST_RESET}>
                     {g.events.map((e, i) => (
                       <EconRow key={`${e.date}-${e.title}-${i}`} e={e} now={now} />

@@ -14,6 +14,7 @@ import {
   type AlertHistoryItem,
 } from '@/lib/push';
 import { ALERT_PAIRS, PAIR_CONFIG } from '@/lib/alert';
+import { LIST_RESET } from '@/lib/listReset';
 
 const CLEARED_KEY = 'alertsClearedAt';
 
@@ -177,7 +178,7 @@ export default function AlertBell() {
               <ul
                 ref={alertListRef}
                 className="max-h-48 space-y-1 overflow-y-auto overscroll-contain"
-                style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
+                style={{ ...LIST_RESET, WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
               >
                 {shownHistory.map((a) => (
                   <li key={a.id} className="rounded bg-gray-50 px-2 py-1">

@@ -18,6 +18,7 @@ import {
   type Trade,
 } from '@/lib/fund';
 import TradeCalendar from './TradeCalendar';
+import { LIST_RESET } from '@/lib/listReset';
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 const FUND_URL = import.meta.env.VITE_FUND_URL as string | undefined;
@@ -57,8 +58,6 @@ const storedToken = (): string => {
 };
 
 const today = () => new Date().toISOString().slice(0, 10);
-// リストの既定の余白（左インデント）を確実に消す（外部の CSS に Tailwind の基本スタイルが負けることがあるため）。
-const LIST_RESET: React.CSSProperties = { margin: 0, padding: 0, listStyle: 'none' };
 const yen = (n: number) => n.toLocaleString();
 
 function EquityCurve({ startingBalance, balances }: { startingBalance: number; balances: number[] }) {
@@ -643,7 +642,7 @@ export default function FundManager() {
           </div>
           <p className="-mt-2 truncate text-right text-[10px] text-gray-400">{email}</p>
 
-          {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
+          {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>}
 
           {tab === 'sim' ? (
             <SimulationTab
@@ -726,9 +725,9 @@ export default function FundManager() {
 
           {/* 月間損益カレンダー */}
           <section>
-            <p className="mb-1 flex items-baseline justify-between px-1 text-xs font-bold text-gray-700">
+            <div className="mb-1 flex items-baseline justify-between px-1 text-xs font-bold text-gray-700">
               月間カレンダー<span className="text-[10px] font-normal text-gray-400">日付をタップして記録</span>
-            </p>
+            </div>
             <TradeCalendar trades={viewTrades} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
           </section>
 

@@ -36,6 +36,7 @@ import {
   specStrength,
 } from '@/lib/flow';
 import FlowInfoModal from './FlowInfoModal';
+import { LIST_RESET } from '@/lib/listReset';
 
 const REFRESH_MS = 60 * 60 * 1000; // 1時間
 
@@ -243,10 +244,6 @@ const Details: FC<{ flow: PairFlow }> = ({ flow }) => (
     )}
   </dl>
 );
-
-// リストの既定の余白（ブラウザの左インデント）を確実に消す。Tailwind の基本スタイルは CSS の layer の中にあり、
-// layer の外で読み込む CSS（Mobiscroll など）に負けることがあるため、インラインスタイルで指定する。
-const LIST_RESET: React.CSSProperties = { margin: 0, padding: 0, listStyle: 'none' };
 
 // 1ペア＝1カード。draggable のときだけ左端にグリップを出す。
 const PairCard: FC<{ pair: FlowPair; flow?: PairFlow; draggable: boolean }> = ({ pair, flow, draggable }) => {
@@ -467,9 +464,9 @@ const OrderFlow: FC = () => {
           ))}
         </ul>
       ) : visible.length === 0 ? (
-        <p className="rounded-xl bg-white px-3 py-6 text-center text-xs text-gray-500">
+        <div className="rounded-xl bg-white px-3 py-6 text-center text-xs text-gray-500">
           {sortMode === 'opposite' ? '個人と大口が逆向きのペアは、いまはありません。' : 'データがありません。'}
-        </p>
+        </div>
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={visible} strategy={verticalListSortingStrategy}>
