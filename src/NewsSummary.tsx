@@ -17,6 +17,7 @@ import {
 } from '@/lib/signal';
 import type { EconEvent } from '@/lib/news';
 import { ANOMALY_BIAS_LABEL, anomaliesForPair, detectAnomalies, type Anomaly, type AnomalyBias, type AnomalyKind } from '@/lib/anomaly';
+import { LIST_RESET } from '@/lib/listReset';
 
 interface NewsPayload {
   generatedAt: number;
@@ -74,10 +75,6 @@ const BIAS_STYLE: Record<AnomalyBias, { cls: string; mark: string }> = {
   down: { cls: 'bg-red-50 text-red-700', mark: '↓' },
   volatile: { cls: 'bg-purple-50 text-purple-700', mark: '⚡' },
 };
-
-// リストの既定の余白（左インデント）を確実に消す。Tailwind の基本スタイルは CSS の layer の中にあり、
-// layer の外で読み込む CSS（Mobiscroll など）に負けることがあるため、インラインスタイルで指定する。
-const LIST_RESET: React.CSSProperties = { margin: 0, padding: 0, listStyle: 'none' };
 
 // JST の日付キー（YYYY-MM-DD）と、見出し用の表示（今日 / 明日 / 10/29(水)）。
 const jstDateKey = (t: number): string => new Date(t + 9 * 3_600_000).toISOString().slice(0, 10);

@@ -18,6 +18,7 @@ import {
   type Trade,
 } from '@/lib/fund';
 import TradeCalendar from './TradeCalendar';
+import { LIST_RESET } from '@/lib/listReset';
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 const FUND_URL = import.meta.env.VITE_FUND_URL as string | undefined;
@@ -57,8 +58,6 @@ const storedToken = (): string => {
 };
 
 const today = () => new Date().toISOString().slice(0, 10);
-// リストの既定の余白（左インデント）を確実に消す（外部の CSS に Tailwind の基本スタイルが負けることがあるため）。
-const LIST_RESET: React.CSSProperties = { margin: 0, padding: 0, listStyle: 'none' };
 const yen = (n: number) => n.toLocaleString();
 
 function EquityCurve({ startingBalance, balances }: { startingBalance: number; balances: number[] }) {

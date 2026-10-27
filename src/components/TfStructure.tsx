@@ -6,6 +6,7 @@
 import type { DowAnalysis, DowPhase, SwingLabel } from '@/lib/dow';
 import { dowSummary } from '@/lib/dow';
 import type { SrZone } from '@/lib/srZones';
+import { LIST_RESET } from '@/lib/listReset';
 
 const TREND_CHIP: Record<DowAnalysis['trend'], string> = {
   up: 'bg-green-100 text-green-700',
@@ -192,7 +193,7 @@ function ZoneRow({ z, idx, digits }: { z: SrZone; idx: number; digits: number })
 export function ZoneLadder({ res, sup, currentRate, digits }: { res: SrZone[]; sup: SrZone[]; currentRate: number; digits: number }) {
   return (
     <div className="border-y border-gray-100 py-1">
-      <ul>
+      <ul style={LIST_RESET}>
         {[...res].reverse().map((z, i) => (
           <ZoneRow key={`r${i}`} z={z} idx={res.length - 1 - i} digits={digits} />
         ))}
@@ -203,7 +204,7 @@ export function ZoneLadder({ res, sup, currentRate, digits }: { res: SrZone[]; s
         <span className="flex-1 text-xl font-bold tabular-nums text-gray-900">{currentRate.toFixed(digits)}</span>
       </div>
       {sup.length === 0 && <p className="py-1 text-[10px] text-gray-400">近くに下の支持帯なし</p>}
-      <ul>
+      <ul style={LIST_RESET}>
         {sup.map((z, i) => (
           <ZoneRow key={`s${i}`} z={z} idx={i} digits={digits} />
         ))}

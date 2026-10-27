@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react';
 import { RANKING_PAIRS, RANKING_TIMEFRAMES, type RrBoardSnapshot, type RrCard } from '@/lib/ranking';
 import type { EntryKind } from '@/lib/entrySignal';
 import type { SlTimeframe } from '@/lib/stoploss';
+import { LIST_RESET } from '@/lib/listReset';
 
 const RANKING_URL = import.meta.env.VITE_RANKING_URL as string | undefined;
 
@@ -186,7 +187,7 @@ function OpportunityCard({ card }: { card: RrCard }) {
               {pa.length === 0 ? (
                 <p className="text-gray-400">目立った痕跡なし</p>
               ) : (
-                <ul className="mt-0.5 space-y-0.5">
+                <ul className="mt-0.5 space-y-0.5" style={LIST_RESET}>
                   {pa.map((t, k) => (
                     <PointRow key={k} label={t.label} points={t.points} />
                   ))}
@@ -197,7 +198,7 @@ function OpportunityCard({ card }: { card: RrCard }) {
           {items.length > 0 && (
             <div>
               <p className="font-semibold text-gray-700">スコアの内訳（基準 50）</p>
-              <ul className="mt-0.5 space-y-0.5">
+              <ul className="mt-0.5 space-y-0.5" style={LIST_RESET}>
                 {items
                   .filter((it) => !it.label.startsWith('PA: '))
                   .map((it, k) => (

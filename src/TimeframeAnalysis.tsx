@@ -25,6 +25,7 @@ import TfCountdown from '@/components/TfCountdown';
 import { DowHeader, KeyLevelRow, SwingChart, ZoneLadder } from '@/components/TfStructure';
 import { dowDirection, dowSummary, type DowAnalysis } from '@/lib/dow';
 import type { SrZone } from '@/lib/srZones';
+import { LIST_RESET } from '@/lib/listReset';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 
@@ -276,7 +277,7 @@ function PatternList({ reads, tf }: { reads: PatternRead[]; tf: SlTimeframe }) {
       {reads.length === 0 ? (
         <p className="mt-0.5 text-[10px] text-gray-400">パターンなし</p>
       ) : (
-        <ul className="mt-0.5 space-y-0.5">
+        <ul className="mt-0.5 space-y-0.5" style={LIST_RESET}>
           {reads.map((r, idx) => (
             <li key={`${r.key}-${r.barsAgo}-${idx}`} className="flex flex-wrap items-center gap-x-1.5">
               <span className={`font-semibold ${r.key.startsWith('bull') ? 'text-green-700' : 'text-red-700'}`}>{r.label}</span>
@@ -617,7 +618,7 @@ function MtfOverview({
   return (
     <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
       <div className="border-b border-gray-100 px-3 py-2 text-xs font-bold text-gray-700">全時間足のまとめ</div>
-      <ul>
+      <ul style={LIST_RESET}>
         {timeframes.map((t) => {
           const v = verdict(t);
           const trend = t.dow?.trend ?? t.trend;
