@@ -31,7 +31,7 @@ export default function TradeCalendar({
   const next = () => setCursor((c) => (c.m === 12 ? { y: c.y + 1, m: 1 } : { y: c.y, m: c.m + 1 }));
 
   return (
-    <div className="bg-white rounded-md p-2 border border-gray-200">
+    <div className="rounded-xl bg-white p-2 shadow-sm">
       {/* ヘッダー: 月移動 + 月間合計 */}
       <div className="flex items-center justify-between px-1 mb-1">
         <button type="button" aria-label="前の月" onClick={prev} className="p-1 text-gray-500">
