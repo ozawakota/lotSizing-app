@@ -10,6 +10,7 @@ import { RANKING_PAIRS, RANKING_TIMEFRAMES, type RrBoardSnapshot, type RrCard } 
 import type { EntryKind } from '@/lib/entrySignal';
 import type { SlTimeframe } from '@/lib/stoploss';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
+import type { ScoreItem } from '@/lib/edgeScore';
 
 const RANKING_URL = import.meta.env.VITE_RANKING_URL as string | undefined;
 
@@ -80,27 +81,9 @@ function RrBar({ card, digits }: { card: RrCard; digits: number }) {
   );
 }
 
-// 加点/減点の1行（詳細の中）。
-function PointRow({ label, points }: { label: string; points: number }) {
-  return (
-    <li style={LIST_ITEM_RESET} className="flex items-start justify-between gap-2">
-      <span className="flex items-start gap-1 text-gray-700">
-        <span aria-hidden className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${points > 0 ? 'bg-green-500' : points < 0 ? 'bg-red-500' : 'bg-gray-300'}`} />
-        {label}
-      </span>
-      {points !== 0 && (
-        <span className={`shrink-0 font-semibold tabular-nums ${points > 0 ? 'text-green-700' : 'text-red-700'}`}>
-          {points > 0 ? '+' : '−'}
-          {Math.abs(points)}
-        </span>
-      )}
-    </li>
-  );
-}
-
 // 1好機カード（ペア×TF）。
 //   要約（常に表示）: 売買・ペア・時間足・RR ／ 総合スコア → リスク:リワードの棒と価格 → タイミング・有利/不利の数・帯での調整
-//   詳細（タップで開く）: ダウの状態・帯での調整内容・プライスアクション・スコアの内訳
+//   詳細（タップで開く）: ダウの状態・帯での調整内容・スコアの内訳（有利な点 / 不利な点。プライスアクションは PA の印）
 function OpportunityCard({ card }: { card: RrCard }) {
   const [open, setOpen] = useState(false);
   const d = digitsFor(card.instrument);
@@ -110,6 +93,9 @@ function OpportunityCard({ card }: { card: RrCard }) {
   const pros = items.filter((it) => it.points > 0);
   const cons = items.filter((it) => it.points < 0);
   const pa = card.paTags ?? [];
+  const paInfo = pa.filter((t) => t.points === 0); // 加減点なしの参考情報（例: 値幅の中間）
+  const sumPros = pros.reduce((a, it) => a + it.points, 0);
+  const sumCons = cons.reduce((a, it) => a + it.points, 0);
   const adjusted = !!(card.stopNote || card.targetNote);
   const hasDetail = items.length > 0 || !!card.dowLabel || adjusted || pa.length > 0;
   const body = (
@@ -170,52 +156,87 @@ function OpportunityCard({ card }: { card: RrCard }) {
       )}
 
       {open && hasDetail && (
-        <div className="space-y-2 border-t border-gray-100 px-3 pb-3 pt-2 text-[11px]">
-          {card.dowLabel && (
-            <p className="text-gray-600">
-              <span className="font-semibold text-gray-700">ダウ理論</span>　{card.dowLabel}
-            </p>
-          )}
-          {adjusted && (
-            <p className="text-amber-700">
-              <span className="font-semibold">帯での調整</span>　{[card.stopNote, card.targetNote].filter(Boolean).join('・')}
-            </p>
-          )}
-          {card.paTags && (
-            <div>
-              <p className="font-semibold text-gray-700">プライスアクション</p>
-              {pa.length === 0 ? (
-                <p className="text-gray-400">目立った痕跡なし</p>
-              ) : (
-                <ul className="mt-0.5 space-y-0.5" style={LIST_RESET}>
-                  {pa.map((t, k) => (
-                    <PointRow key={k} label={t.label} points={t.points} />
-                  ))}
-                </ul>
+        <div className="space-y-2.5 border-t border-gray-100 px-3 pb-3 pt-2 text-[11px]">
+          {/* 状態: ダウ理論・帯での調整 */}
+          {(card.dowLabel || adjusted) && (
+            <dl className="grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-0.5">
+              {card.dowLabel && (
+                <>
+                  <dt className="font-semibold text-gray-500">ダウ理論</dt>
+                  <dd className="text-gray-700">{card.dowLabel}</dd>
+                </>
               )}
-            </div>
+              {adjusted && (
+                <>
+                  <dt className="font-semibold text-gray-500">帯での調整</dt>
+                  <dd className="text-amber-700">{[card.stopNote, card.targetNote].filter(Boolean).join('・')}</dd>
+                </>
+              )}
+            </dl>
           )}
+
+          {/* スコアの内訳: 有利な点 / 不利な点（プライスアクションは PA の印） */}
           {items.length > 0 && (
-            <div>
-              <p className="font-semibold text-gray-700">スコアの内訳（基準 50）</p>
-              <ul className="mt-0.5 space-y-0.5" style={LIST_RESET}>
-                {items
-                  .filter((it) => !it.label.startsWith('PA: '))
-                  .map((it, k) => (
-                    <PointRow key={k} label={it.label} points={it.points} />
-                  ))}
-                {pa.some((t) => t.points !== 0) && (
-                  <PointRow label="プライスアクション（上の合計）" points={pa.reduce((a, t) => a + t.points, 0)} />
-                )}
-              </ul>
-              <p className="mt-1 flex justify-between border-t border-gray-100 pt-1 font-bold text-gray-800">
-                <span>総合スコア</span>
-                <span className="tabular-nums">{card.score}</span>
-              </p>
-            </div>
+            <>
+              <PointGroup title="有利な点" tone="plus" items={pros} />
+              <PointGroup title="不利な点" tone="minus" items={cons} />
+              {paInfo.length > 0 && (
+                <div className="text-gray-400">
+                  <span className="mr-1 rounded bg-gray-100 px-1 text-[9px] font-bold text-gray-500">PA</span>
+                  {paInfo.map((t) => t.label).join('・')}
+                </div>
+              )}
+              <div className="flex items-baseline justify-between rounded-lg bg-gray-50 px-2 py-1.5">
+                <span className="text-gray-500">
+                  基準 50 {sumPros > 0 && <span className="text-green-700">+{sumPros}</span>}{' '}
+                  {sumCons < 0 && <span className="text-red-700">−{Math.abs(sumCons)}</span>}
+                  <span className="ml-1 text-[10px] text-gray-400">（0〜100に換算）</span>
+                </span>
+                <span className="text-sm font-bold tabular-nums text-gray-900">{card.score}</span>
+              </div>
+            </>
           )}
+          {items.length === 0 && card.paTags && pa.length === 0 && <div className="text-gray-400">目立った痕跡なし</div>}
         </div>
       )}
+    </div>
+  );
+}
+
+// 加点/減点のグループ（見出しに合計点）。プライスアクション由来の項目には PA の印を付ける。
+function PointGroup({ title, tone, items }: { title: string; tone: 'plus' | 'minus'; items: ScoreItem[] }) {
+  if (items.length === 0) return null;
+  const sum = items.reduce((a, it) => a + it.points, 0);
+  const plus = tone === 'plus';
+  return (
+    <div>
+      <div className={`mb-0.5 flex items-baseline justify-between font-bold ${plus ? 'text-green-700' : 'text-red-700'}`}>
+        <span>
+          {title}
+          <span className="ml-1 font-normal text-gray-400">{items.length}件</span>
+        </span>
+        <span className="tabular-nums">
+          {plus ? '+' : '−'}
+          {Math.abs(sum)}
+        </span>
+      </div>
+      <ul className={`space-y-0.5 rounded-lg px-2 py-1 ${plus ? 'bg-green-50/60' : 'bg-red-50/60'}`} style={LIST_RESET}>
+        {items.map((it, k) => {
+          const isPa = it.label.startsWith('PA: ');
+          return (
+            <li key={k} style={LIST_ITEM_RESET} className="flex items-start justify-between gap-2">
+              <span className="text-gray-700">
+                {isPa && <span className="mr-1 rounded bg-white px-1 text-[9px] font-bold text-gray-500">PA</span>}
+                {isPa ? it.label.slice(4) : it.label}
+              </span>
+              <span className={`shrink-0 font-semibold tabular-nums ${plus ? 'text-green-700' : 'text-red-700'}`}>
+                {plus ? '+' : '−'}
+                {Math.abs(it.points)}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
@@ -240,9 +261,9 @@ function Segmented<T extends string>({
           type="button"
           onClick={() => onChange(o.v)}
           aria-pressed={value === o.v}
-          className={`flex-1 rounded-md px-2 py-1 text-[11px] font-medium ${value === o.v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}
+          className={`flex-1 rounded-md text-[11px] font-medium ${value === o.v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}
         >
-          {o.label}
+          <span className="block px-2 py-1">{o.label}</span>
         </button>
       ))}
     </div>
@@ -338,9 +359,9 @@ export default function EdgeAnalysis() {
         <button
           type="button"
           onClick={() => void load(true)}
-          className="rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-600 active:bg-gray-200"
+          className="rounded-lg bg-gray-100 text-xs font-medium text-gray-600 active:bg-gray-200"
         >
-          更新
+          <span className="block px-3 py-1.5">更新</span>
         </button>
       </div>
 
@@ -413,9 +434,9 @@ export default function EdgeAnalysis() {
               type="button"
               onClick={() => setShowNear((v) => !v)}
               aria-expanded={showNear}
-              className="ml-auto rounded-lg bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600"
+              className="ml-auto rounded-lg bg-gray-100 text-[11px] text-gray-600"
             >
-              {showNear ? '隠す ▴' : '表示 ▾'}
+              <span className="block px-2 py-0.5">{showNear ? '隠す ▴' : '表示 ▾'}</span>
             </button>
           </div>
           {showNear &&
