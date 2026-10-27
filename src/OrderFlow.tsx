@@ -36,7 +36,7 @@ import {
   specStrength,
 } from '@/lib/flow';
 import FlowInfoModal from './FlowInfoModal';
-import { LIST_RESET } from '@/lib/listReset';
+import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 
 const REFRESH_MS = 60 * 60 * 1000; // 1時間
 
@@ -251,6 +251,7 @@ const PairCard: FC<{ pair: FlowPair; flow?: PairFlow; draggable: boolean }> = ({
   const [open, setOpen] = useState<boolean>(false);
   const contrast = flow ? flowContrast(flow) : 'none';
   const style: React.CSSProperties = {
+    ...LIST_ITEM_RESET,
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.6 : 1,
@@ -315,7 +316,7 @@ const PairCard: FC<{ pair: FlowPair; flow?: PairFlow; draggable: boolean }> = ({
 };
 
 const SkeletonCard: FC = () => (
-  <li className="list-none animate-pulse rounded-xl border border-gray-200 bg-white px-3 py-3">
+  <li style={LIST_ITEM_RESET} className="list-none animate-pulse rounded-xl border border-gray-200 bg-white px-3 py-3">
     <div className="mb-3 h-4 w-20 rounded bg-gray-200" />
     <div className="mb-2 h-3 rounded-full bg-gray-200" />
     <div className="h-3 rounded-full bg-gray-200" />

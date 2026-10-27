@@ -6,7 +6,7 @@
 import type { DowAnalysis, DowPhase, SwingLabel } from '@/lib/dow';
 import { dowSummary } from '@/lib/dow';
 import type { SrZone } from '@/lib/srZones';
-import { LIST_RESET } from '@/lib/listReset';
+import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 
 const TREND_CHIP: Record<DowAnalysis['trend'], string> = {
   up: 'bg-green-100 text-green-700',
@@ -165,7 +165,7 @@ function Stars({ n }: { n: 1 | 2 | 3 }) {
 function ZoneRow({ z, idx, digits }: { z: SrZone; idx: number; digits: number }) {
   const res = z.side === 'res';
   return (
-    <li className="flex items-center gap-2 py-1">
+    <li style={LIST_ITEM_RESET} className="flex items-center gap-2 py-1">
       <span className={`w-6 shrink-0 text-[11px] font-bold ${res ? 'text-red-600' : 'text-green-600'}`}>
         {res ? 'R' : 'S'}
         {idx + 1}

@@ -17,7 +17,7 @@ import {
 } from '@/lib/signal';
 import type { EconEvent } from '@/lib/news';
 import { ANOMALY_BIAS_LABEL, anomaliesForPair, detectAnomalies, type Anomaly, type AnomalyBias, type AnomalyKind } from '@/lib/anomaly';
-import { LIST_RESET } from '@/lib/listReset';
+import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 
 interface NewsPayload {
   generatedAt: number;
@@ -139,7 +139,7 @@ const AnomalyPanel: FC<{ anomalies: Anomaly[] }> = ({ anomalies }) => {
           {anomalies.map((a) => {
             const Icon = KIND_ICON[a.kind];
             return (
-              <li key={a.id} className="text-[11px] leading-relaxed">
+              <li style={LIST_ITEM_RESET} key={a.id} className="text-[11px] leading-relaxed">
                 <div className="flex flex-wrap items-center gap-x-1.5">
                   <Icon className="h-3 w-3 shrink-0 text-gray-400" aria-hidden="true" />
                   <span className="font-bold text-gray-800">{a.title}</span>
@@ -181,7 +181,7 @@ const ForecastCard: FC<{ s: PairSignal; anomalies: Anomaly[] }> = ({ s, anomalie
   const lead = verdict === 'down' ? { label: '売り', pct: sellPct, cls: 'text-red-600' } : { label: '買い', pct: s.buyPct, cls: verdict === 'up' ? 'text-green-600' : 'text-gray-600' };
 
   return (
-    <li className="rounded-xl border border-gray-200 bg-white shadow-sm">
+    <li style={LIST_ITEM_RESET} className="rounded-xl border border-gray-200 bg-white shadow-sm">
       <div className="px-3 py-2.5">
         {/* 見出し: ペア・予想 ／ 優勢な側の% */}
         <div className="flex items-center gap-2">
@@ -311,7 +311,7 @@ const EconRow: FC<{ e: EconEvent; now: number }> = ({ e, now }) => {
   const past = t < now;
   const soon = !past && t - now <= SOON_MS;
   return (
-    <li className={`flex items-center gap-3 px-3 py-2 ${past ? 'opacity-50' : ''} ${soon ? 'bg-amber-50' : ''}`}>
+    <li style={LIST_ITEM_RESET} className={`flex items-center gap-3 px-3 py-2 ${past ? 'opacity-50' : ''} ${soon ? 'bg-amber-50' : ''}`}>
       <span className="w-11 shrink-0 text-sm font-bold tabular-nums text-gray-800">{fmtTime(e.date)}</span>
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-1.5">
@@ -447,7 +447,7 @@ const NewsSummary: FC = () => {
       {!data && loading && (
         <ul className="space-y-2" style={LIST_RESET}>
           {[0, 1, 2].map((i) => (
-            <li key={i} className="animate-pulse rounded-xl border border-gray-200 bg-white px-3 py-3">
+            <li style={LIST_ITEM_RESET} key={i} className="animate-pulse rounded-xl border border-gray-200 bg-white px-3 py-3">
               <div className="mb-3 h-4 w-28 rounded bg-gray-200" />
               <div className="mb-2 h-4 rounded-full bg-gray-200" />
               <div className="h-3 w-3/4 rounded bg-gray-200" />
@@ -525,7 +525,7 @@ const NewsSummary: FC = () => {
               </h3>
               <ul className="divide-y divide-gray-100" style={LIST_RESET}>
                 {data.items.map((it, i) => (
-                  <li key={i} className="py-1.5 text-xs leading-snug">
+                  <li style={LIST_ITEM_RESET} key={i} className="py-1.5 text-xs leading-snug">
                     <a href={it.link} target="_blank" rel="noopener noreferrer" className="text-blue-700 hover:underline">
                       {it.title}
                     </a>
