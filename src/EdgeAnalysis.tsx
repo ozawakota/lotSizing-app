@@ -386,9 +386,9 @@ export default function EdgeAnalysis() {
       {data && (
         <>
           {data.jevPaused && (
-            <p className="rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-700">
+            <div className="rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-700">
               AI（Jev）は一時停止中（使用上限）です。総合スコアは AI を除いた材料で計算しています。
-            </p>
+            </div>
           )}
 
           <SectionTitle title="好機" note="RR 1:2.5以上" count={prime.length} />

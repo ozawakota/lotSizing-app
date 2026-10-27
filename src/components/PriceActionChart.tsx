@@ -245,7 +245,7 @@ export function PriceActionChart({
                     <span className="tabular-nums">{r.quality}</span>
                   </span>
                 </div>
-                <p className="pl-5 text-[10px] text-gray-500">
+                <div className="pl-5 text-[10px] text-gray-500">
                   <span className={r.zone === 'key' ? 'text-orange-600' : 'text-gray-400'}>
                     {r.zone === 'key' ? `${r.zoneReasons.join('・')}の近く` : '意識されるラインから離れた場所'}
                   </span>
@@ -258,7 +258,7 @@ export function PriceActionChart({
                       {bull ? ' を割ったら' : ' を超えたら'}否定
                     </>
                   )}
-                </p>
+                </div>
               </li>
             );
           })}

@@ -148,7 +148,7 @@ const AnomalyPanel: FC<{ anomalies: Anomaly[] }> = ({ anomalies }) => {
                   <span className="font-bold text-gray-800">{a.title}</span>
                   <span className="text-gray-400">{a.when}</span>
                 </div>
-                <p className="pl-4 text-gray-600">{a.detail}</p>
+                <div className="pl-4 text-gray-600">{a.detail}</div>
               </li>
             );
           })}
@@ -277,7 +277,7 @@ const OutlookSummary: FC<{
   const count = (v: SignalVerdict) => signals.filter((s) => signalVerdict(s) === v).length;
   return (
     <section className="rounded-xl bg-white shadow-sm">
-      <p className="px-3 pt-2.5 text-xs font-bold text-gray-800">全体の見通し</p>
+      <div className="px-3 pt-2.5 text-xs font-bold text-gray-800">全体の見通し</div>
       <div className="grid grid-cols-3 gap-1.5 p-2">
         {(['up', 'down', 'flat'] as const).map((v) => {
           const on = filter === v;
@@ -494,10 +494,10 @@ const NewsSummary: FC = () => {
             <div className="space-y-2">
               {calendarByDay.map((g) => (
                 <section key={g.key} className="overflow-hidden rounded-xl border border-gray-200 bg-white">
-                  <p className="border-b border-gray-100 bg-gray-50 px-3 py-1.5 text-[11px] font-bold text-gray-700">
+                  <div className="border-b border-gray-100 bg-gray-50 px-3 py-1.5 text-[11px] font-bold text-gray-700">
                     {g.key === 'unknown' ? '日時不明' : dayLabel(g.key, now)}
                     <span className="ml-1.5 font-normal text-gray-400">{g.events.length}件</span>
-                  </p>
+                  </div>
                   <ul className="divide-y divide-gray-100" style={LIST_RESET}>
                     {g.events.map((e, i) => (
                       <EconRow key={`${e.date}-${e.title}-${i}`} e={e} now={now} />

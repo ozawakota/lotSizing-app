@@ -467,9 +467,9 @@ const OrderFlow: FC = () => {
           ))}
         </ul>
       ) : visible.length === 0 ? (
-        <p className="rounded-xl bg-white px-3 py-6 text-center text-xs text-gray-500">
+        <div className="rounded-xl bg-white px-3 py-6 text-center text-xs text-gray-500">
           {sortMode === 'opposite' ? '個人と大口が逆向きのペアは、いまはありません。' : 'データがありません。'}
-        </p>
+        </div>
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={visible} strategy={verticalListSortingStrategy}>

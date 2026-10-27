@@ -643,7 +643,7 @@ export default function FundManager() {
           </div>
           <p className="-mt-2 truncate text-right text-[10px] text-gray-400">{email}</p>
 
-          {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
+          {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>}
 
           {tab === 'sim' ? (
             <SimulationTab
@@ -726,9 +726,9 @@ export default function FundManager() {
 
           {/* 月間損益カレンダー */}
           <section>
-            <p className="mb-1 flex items-baseline justify-between px-1 text-xs font-bold text-gray-700">
+            <div className="mb-1 flex items-baseline justify-between px-1 text-xs font-bold text-gray-700">
               月間カレンダー<span className="text-[10px] font-normal text-gray-400">日付をタップして記録</span>
-            </p>
+            </div>
             <TradeCalendar trades={viewTrades} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
           </section>
 
