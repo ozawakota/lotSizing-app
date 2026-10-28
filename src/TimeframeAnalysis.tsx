@@ -299,6 +299,9 @@ const TIMING_STYLE: Record<TimingVerdict, { chip: string; box: string; icon: str
   avoid: { chip: 'bg-red-100 text-red-700', box: 'border-red-200 bg-red-50', icon: '🔴' },
 };
 
+const TIMING_DOT: Record<TimingVerdict, string> = { ok: 'bg-green-500', wait: 'bg-amber-500', avoid: 'bg-red-500' };
+const TIMING_TEXT: Record<TimingVerdict, string> = { ok: 'text-green-700', wait: 'text-amber-700', avoid: 'text-red-700' };
+
 function TimingChip({ dir, t }: { dir: SlDirection; t: EntryTiming }) {
   return (
     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${TIMING_STYLE[t.verdict].chip}`}>
@@ -328,9 +331,23 @@ function MaLine({ mas, long, digits }: { mas: EntryTiming['mas']; long: boolean;
 }
 
 // 成行で入ってよいか（入りどき / 押し目待ち・戻り待ち / 高値掴み注意・安値売り注意）＋理由＋指値の目安。
-function EntryTimingRow({ dir, t, digits }: { dir: SlDirection; t: EntryTiming; digits: number }) {
+const REASONS_SHOWN = 3; // 理由は点数の大きい順に3つまで。残りは「ほか N 件」で開く
+function EntryTimingRow({
+  dir,
+  t,
+  digits,
+  showMa = false,
+}: {
+  dir: SlDirection;
+  t: EntryTiming;
+  digits: number;
+  showMa?: boolean; // 移動平均の値も出す（チャートが無い RR 好機ポップアップ用）
+}) {
+  const [allReasons, setAllReasons] = useState(false);
   const st = TIMING_STYLE[t.verdict];
   const long = dir === 'long';
+  const shown = allReasons ? t.reasons : t.reasons.slice(0, REASONS_SHOWN);
+  const hidden = t.reasons.length - shown.length;
   return (
     <div className={`mt-2 rounded-lg border px-2.5 py-2 text-[11px] ${st.box}`}>
       <div className="flex items-center justify-between gap-2">
@@ -340,7 +357,7 @@ function EntryTimingRow({ dir, t, digits }: { dir: SlDirection; t: EntryTiming; 
         </span>
         <span className="text-[10px] text-gray-400">{st.icon} 成行の判定</span>
       </div>
-      {t.mas.length > 0 && <MaLine mas={t.mas} long={long} digits={digits} />}
+      {showMa && t.mas.length > 0 && <MaLine mas={t.mas} long={long} digits={digits} />}
       {t.verdict === 'ok' ? (
         <div className="mt-1 text-[10px] text-gray-600">
           {long ? '支えに近く、伸び切っていない位置です。' : '抑えに近く、売られ切っていない位置です。'}
@@ -348,19 +365,26 @@ function EntryTimingRow({ dir, t, digits }: { dir: SlDirection; t: EntryTiming; 
         </div>
       ) : (
         <>
-          <ul className="mt-1 space-y-0.5 text-[10px] text-gray-700" style={LIST_RESET}>
-            {t.reasons.map((r) => (
+          <ul className="mt-1 space-y-0.5 text-[11px] text-gray-700" style={LIST_RESET}>
+            {shown.map((r) => (
               <li style={LIST_ITEM_RESET} key={r.label} className="flex items-start gap-1">
-                <span aria-hidden className="text-gray-400">・</span>
+                <span aria-hidden className={r.points >= 2 ? 'text-red-500' : 'text-gray-400'}>
+                  {r.points >= 2 ? '●' : '・'}
+                </span>
                 <span>{r.label}</span>
               </li>
             ))}
           </ul>
+          {(hidden > 0 || allReasons) && t.reasons.length > REASONS_SHOWN && (
+            <button type="button" onClick={() => setAllReasons((o) => !o)} className="mt-0.5 text-[10px] text-gray-500">
+              <span className="block py-0.5 underline decoration-dotted">{allReasons ? '閉じる' : `ほか ${hidden} 件`}</span>
+            </button>
+          )}
           {t.limit ? (
-            <div className="mt-1.5 rounded bg-white/70 px-2 py-1">
+            <div className="mt-1.5 rounded-md border border-white bg-white/80 px-2 py-1.5">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-gray-500">{long ? '押し目' : '戻り'}の指値の目安</span>
-                <span className="font-mono font-bold text-gray-900">{t.limit.price.toFixed(digits)}</span>
+                <span className="font-semibold text-gray-700">{long ? '押し目' : '戻り'}の指値の目安</span>
+                <span className="font-mono text-sm font-bold text-gray-900">{t.limit.price.toFixed(digits)}</span>
               </div>
               <div className="mt-0.5 flex flex-wrap items-center justify-between gap-x-2 text-[10px] text-gray-500">
                 <span>
@@ -561,13 +585,23 @@ function SessionOutlookCard({ outlook }: { outlook: SessionOutlook | null }) {
 }
 
 // カード内の小見出し。
-function SectionLabel({ children }: { children: ReactNode }) {
-  return <p className="mb-1 mt-3 text-[11px] font-semibold text-gray-500">{children}</p>;
+// カード内の見出し。上に区切り線、左に小さなアクセントを付けて、セクションの切れ目を分かりやすくする。
+function SectionLabel({ children, note }: { children: ReactNode; note?: ReactNode }) {
+  return (
+    <div className="mb-1.5 mt-3 flex items-center justify-between gap-2 border-t border-gray-100 pt-2.5">
+      <span className="flex items-center gap-1.5 text-xs font-bold text-gray-700">
+        <span aria-hidden className="inline-block h-3 w-1 rounded-full bg-orange-400" />
+        {children}
+      </span>
+      {note && <span className="text-[10px] text-gray-400">{note}</span>}
+    </div>
+  );
 }
 
 // 1TFの融合カード:
-//   見出し（時間足・確定カウントダウン・結論チップ）→ ダウ理論（トレンド・局面・強さ・スイング図・押し安値/戻り高値）
-//   → 抵抗帯のはしご（★・幅・距離・根拠）→ ブレイク確率・RR → プライスアクション（ローソク足チャート・パターンの一覧）
+//   見出し（時間足・確定カウントダウン・結論チップ）→ エントリー判断（RR・入りどき）
+//   → プライスアクション（ローソク足チャート・移動平均線・パターンの一覧）
+//   → トレンドとブレイク確率（ダウ理論のスイング図・押し安値/戻り高値・ブレイク確率）→ 抵抗帯のはしご（★・幅・距離・根拠）
 //   → 「そのほかの指標」（ロールリバーサル・ストキャス・出来高。旧キャッシュではパターンもここ）。
 // 旧キャッシュ（dow/zones が無い）では、従来のトレンドチップとスイング高安の2本線で表示する。
 function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument: string; currentRate: number; digits: number }) {
@@ -597,7 +631,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
       {/* 見出し: 時間足 ＋ 確定カウントダウン ／ 結論チップ ＋ 確信% */}
-      <div className="mb-2 flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <p className="text-sm font-bold text-gray-800">{TF_LABEL[tf.tf]}</p>
           {!tf.dow && (
@@ -611,34 +645,8 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
         </div>
       </div>
 
-      {/* ダウ理論: トレンド・局面・強さ → スイング図 → 押し安値/戻り高値 */}
-      {tf.dow && (
-        <div className="mb-2 rounded-lg bg-gray-50 px-2 py-1.5">
-          <DowHeader dow={tf.dow} />
-          <SwingChart dow={tf.dow} currentRate={currentRate} digits={digits} />
-          <KeyLevelRow dow={tf.dow} currentRate={currentRate} pip={pip} digits={digits} />
-        </div>
-      )}
-
-      {/* 抵抗帯のはしご（新）。無ければ従来のレジ → 現在 → サポ */}
-      <SectionLabel>抵抗帯（★が多いほど強い）</SectionLabel>
-      {hasZones && tf.zones ? (
-        <ZoneLadder res={tf.zones.res} sup={tf.zones.sup} currentRate={currentRate} digits={digits} />
-      ) : (
-        <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-3 gap-y-2 border-y border-gray-100 py-2">
-          <LevelLine side="res" price={tf.swingHigh} distancePips={resDist} digits={digits} />
-
-          <span className="text-sm font-medium text-gray-500">現在</span>
-          <span className="text-right text-xl font-bold tabular-nums text-gray-900">{currentRate.toFixed(digits)}</span>
-          <span />
-
-          <LevelLine side="sup" price={tf.swingLow} distancePips={supDist} digits={digits} />
-        </div>
-      )}
-
-      {/* ブレイク確率バー ＋ RR（判断に直結するので常に表示） */}
-      <SectionLabel>ブレイク確率・RR</SectionLabel>
-      <BreakoutRow breakout={tf.breakout} />
+      {/* エントリー判断（いちばん判断に直結するので先頭）: RR ＋ 入りどき（高値掴み・安値売りの回避） */}
+      <SectionLabel>エントリー判断</SectionLabel>
       <RrRow rr={tf.rr} digits={digits} dow={tf.dow} />
       {timing && <EntryTimingRow dir={timing.dir} t={timing.t} digits={digits} />}
 
@@ -654,6 +662,34 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
           periodLabel={`直近${PATTERN_PERIOD_LABEL[tf.tf]}`}
           maLines={tf.maLines ?? computeMaLines(tf.bars.map((b) => b.close), tf.bars.length)}
         />
+      )}
+
+      {/* トレンド: ダウ理論（トレンド・局面・強さ → スイング図 → 押し安値/戻り高値）＋ ブレイク確率 */}
+      <SectionLabel>トレンドとブレイク確率</SectionLabel>
+      {tf.dow && (
+        <div className="rounded-lg bg-gray-50 px-2 py-1.5">
+          <DowHeader dow={tf.dow} />
+          <SwingChart dow={tf.dow} currentRate={currentRate} digits={digits} />
+          <KeyLevelRow dow={tf.dow} currentRate={currentRate} pip={pip} digits={digits} />
+        </div>
+      )}
+
+      <BreakoutRow breakout={tf.breakout} />
+
+      {/* 抵抗帯のはしご（新）。無ければ従来のレジ → 現在 → サポ */}
+      <SectionLabel note="★が多いほど強い">抵抗帯</SectionLabel>
+      {hasZones && tf.zones ? (
+        <ZoneLadder res={tf.zones.res} sup={tf.zones.sup} currentRate={currentRate} digits={digits} />
+      ) : (
+        <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-3 gap-y-2 border-y border-gray-100 py-2">
+          <LevelLine side="res" price={tf.swingHigh} distancePips={resDist} digits={digits} />
+
+          <span className="text-sm font-medium text-gray-500">現在</span>
+          <span className="text-right text-xl font-bold tabular-nums text-gray-900">{currentRate.toFixed(digits)}</span>
+          <span />
+
+          <LevelLine side="sup" price={tf.swingLow} distancePips={supDist} digits={digits} />
+        </div>
       )}
 
       {/* そのほかの指標（ロールリバーサル・ローソク足パターン・ストキャス・出来高節目）は折りたたみ */}
@@ -785,16 +821,24 @@ function MtfOverview({
                     </span>
                   )}
                 </span>
-                <span className="flex flex-col items-end gap-0.5">
+                {/* 右: 結論チップ ／ RR と入りどき（色つきの点＋短いラベル）を1行に */}
+                <span className="flex flex-col items-end gap-1">
                   <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${v.cls}`}>{v.label}</span>
-                  {t.rr?.qualifies ? (
-                    <span className={`text-[10px] font-bold ${DIR_STYLE[t.rr.direction]}`}>
-                      {DIR_LABEL[t.rr.direction]} RR 1:{t.rr.rr.toFixed(1)} ✓
-                    </span>
-                  ) : (
-                    <span className="text-[10px] text-gray-300">RR —</span>
-                  )}
-                  {timing && timing.t.verdict !== 'ok' && <TimingChip dir={timing.dir} t={timing.t} />}
+                  <span className="flex items-center gap-1.5 text-[10px]">
+                    {t.rr?.qualifies ? (
+                      <span className={`font-bold ${DIR_STYLE[t.rr.direction]}`}>
+                        {DIR_LABEL[t.rr.direction]} 1:{t.rr.rr.toFixed(1)}
+                      </span>
+                    ) : (
+                      <span className="text-gray-300">RR —</span>
+                    )}
+                    {timing && t.rr?.qualifies && (
+                      <span className={`flex items-center gap-0.5 font-semibold ${TIMING_TEXT[timing.t.verdict]}`}>
+                        <span aria-hidden className={`inline-block h-1.5 w-1.5 rounded-full ${TIMING_DOT[timing.t.verdict]}`} />
+                        {TIMING_LABEL[timing.t.verdict][timing.dir]}
+                      </span>
+                    )}
+                  </span>
                 </span>
                 </span>
               </button>
@@ -1002,7 +1046,7 @@ export default function TimeframeAnalysis() {
             {(() => {
               const opp = result.timeframes.find((t) => t.tf === result.rrOpportunity?.tf);
               const timing = opp ? tfTiming(opp, result.instrument, result.currentRate) : null;
-              return timing ? <EntryTimingRow dir={timing.dir} t={timing.t} digits={digits} /> : null;
+              return timing ? <EntryTimingRow dir={timing.dir} t={timing.t} digits={digits} showMa /> : null;
             })()}
             <button
               type="button"
