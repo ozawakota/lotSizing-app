@@ -26,7 +26,7 @@ import { DowHeader, KeyLevelRow, SwingChart, ZoneLadder } from '@/components/TfS
 import { dowDirection, dowSummary, type DowAnalysis } from '@/lib/dow';
 import type { SrZone } from '@/lib/srZones';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
-import type { MaSet } from '@/lib/entrySignal';
+import { computeMaLines, type MaLines, type MaSet } from '@/lib/entrySignal';
 import { TIMING_LABEL, assessEntryTiming, type EntryTiming, type TimingVerdict } from '@/lib/entryTiming';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
@@ -64,6 +64,7 @@ interface MtfTf {
   bars?: OhlcCandle[]; // ローソク足チャート用の直近の確定足（古い順。末尾=barsAgo 0）。旧キャッシュには無い
   forming?: OhlcCandle | null; // 形成中の足。旧キャッシュには無い
   ma?: MaSet | null; // 21SMA・75EMA・200EMA。旧キャッシュには無い
+  maLines?: MaLines | null; // チャートの移動平均線（bars と同じ長さ）。旧キャッシュには無い
 }
 interface MtfResult {
   instrument: string;
@@ -99,6 +100,8 @@ async function toSpotBasis(body: MtfResult): Promise<MtfResult> {
     ema75: m.ema75 == null ? null : m.ema75 - off,
     ema200: m.ema200 == null ? null : m.ema200 - off,
   });
+  const shiftLine = (a: (number | null)[]) => a.map((v) => (v == null ? null : v - off));
+  const shiftLines = (l: MaLines): MaLines => ({ sma21: shiftLine(l.sma21), ema75: shiftLine(l.ema75), ema200: shiftLine(l.ema200) });
   const shiftBar = (b: OhlcCandle): OhlcCandle => ({ ...b, open: b.open - off, high: b.high - off, low: b.low - off, close: b.close - off });
   return {
     ...body,
@@ -118,6 +121,7 @@ async function toSpotBasis(body: MtfResult): Promise<MtfResult> {
       bars: t.bars?.map(shiftBar),
       forming: t.forming ? shiftBar(t.forming) : t.forming,
       ma: t.ma ? shiftMa(t.ma) : t.ma,
+      maLines: t.maLines ? shiftLines(t.maLines) : t.maLines,
     })),
     rrOpportunity: body.rrOpportunity ? shiftRr(body.rrOpportunity) : null,
   };
@@ -648,6 +652,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
           currentRate={currentRate}
           digits={digits}
           periodLabel={`直近${PATTERN_PERIOD_LABEL[tf.tf]}`}
+          maLines={tf.maLines ?? computeMaLines(tf.bars.map((b) => b.close), tf.bars.length)}
         />
       )}
 
