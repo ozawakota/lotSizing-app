@@ -18,6 +18,7 @@ import {
 import type { EconEvent } from '@/lib/news';
 import { ANOMALY_BIAS_LABEL, anomaliesForPair, detectAnomalies, type Anomaly, type AnomalyBias, type AnomalyKind } from '@/lib/anomaly';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
+import type { ForecastAccuracy, HitRate } from '@/lib/forecast';
 
 interface NewsPayload {
   generatedAt: number;
@@ -26,6 +27,7 @@ interface NewsPayload {
   signals: PairSignal[];
   items: { title: string; link: string; pubDate: string }[];
   calendar?: EconEvent[]; // 高重要度の経済指標（今日〜今週・対象8通貨）。旧キャッシュには無いため任意
+  accuracy?: ForecastAccuracy | null; // 直近の的中率。旧キャッシュには無い
 }
 
 const CACHE_KEY = 'news-cache';
@@ -168,7 +170,77 @@ const AnomalyPanel: FC<{ anomalies: Anomaly[] }> = ({ anomalies }) => {
 };
 
 // ペアごとの予測カード。見出し（ペア・予想・買い%）→ 買い/売りの棒 → トレンド・確信度 → 根拠（長ければ2行で畳む）→ アノマリー。
-const ForecastCard: FC<{ s: PairSignal; anomalies: Anomaly[] }> = ({ s, anomalies }) => {
+// 買い%を「上昇/下落/中立 + %」の短い表記に（内訳の行で使う）。
+const leanText = (buyPct: number) => {
+  const v = signalVerdict({ buyPct });
+  return v === 'up' ? `買い${buyPct}%` : v === 'down' ? `売り${100 - buyPct}%` : `中立${buyPct}%`;
+};
+const LEAN_CLS: Record<SignalVerdict, string> = { up: 'text-green-700', down: 'text-red-700', flat: 'text-gray-500' };
+
+// 予測の内訳: ニュース（AI）だけ・値動きだけの買い%と、向きがそろっているか。値動きの根拠は1行で。
+const PartsRow: FC<{ parts: NonNullable<PairSignal['parts']> }> = ({ parts }) => {
+  const price = parts.price as number;
+  return (
+    <div className="mt-2 rounded-lg bg-gray-50 px-2 py-1.5 text-[11px]">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+        <span className="text-gray-500">
+          ニュース <span className={`font-semibold ${LEAN_CLS[signalVerdict({ buyPct: parts.news })]}`}>{leanText(parts.news)}</span>
+        </span>
+        <span className="text-gray-500">
+          値動き <span className={`font-semibold ${LEAN_CLS[signalVerdict({ buyPct: price })]}`}>{leanText(price)}</span>
+        </span>
+        {parts.agree && <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-bold text-green-700">向きが一致</span>}
+        {parts.disagree && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">食い違い・控えめに</span>}
+      </div>
+      {parts.priceNotes && parts.priceNotes.length > 0 && (
+        <div className="mt-0.5 text-[10px] text-gray-500">{parts.priceNotes.join('・')}</div>
+      )}
+    </div>
+  );
+};
+
+const pctOf = (h: HitRate) => (h.n > 0 ? Math.round((h.hit / h.n) * 100) : null);
+
+// 予測の成績: 直近 N 日の的中率（合成後・ニュースだけ・値動きだけ）と合成の重み。件数が少ないうちは「集計中」。
+const AccuracyCard: FC<{ acc: ForecastAccuracy }> = ({ acc }) => {
+  const main = pctOf(acc.final);
+  const enough = acc.final.n >= 10;
+  const item = (label: string, h: HitRate) => (
+    <span key={label} className="text-gray-500">
+      {label} <span className="font-semibold tabular-nums text-gray-700">{pctOf(h) == null ? '—' : `${pctOf(h)}%`}</span>
+      <span className="text-gray-400">（{h.n}件）</span>
+    </span>
+  );
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 shadow-sm">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-bold text-gray-700">予測の成績（直近{acc.days}日・{acc.horizonH}時間後で答え合わせ）</span>
+      </div>
+      <div className="mt-1 flex items-baseline gap-2">
+        {enough && main != null ? (
+          <>
+            <span className={`text-2xl font-bold tabular-nums ${main >= 55 ? 'text-green-600' : main < 50 ? 'text-red-600' : 'text-gray-800'}`}>{main}%</span>
+            <span className="text-[11px] text-gray-500">的中（{acc.final.n}件中 {acc.final.hit}件）</span>
+          </>
+        ) : (
+          <span className="text-[11px] text-gray-500">
+            集計中です（答え合わせ済み {acc.final.n}件）。10件たまると的中率を表示します。
+          </span>
+        )}
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px]">
+        {item('ニュースだけ', acc.news)}
+        {item('値動きだけ', acc.price)}
+      </div>
+      <div className="mt-1 text-[10px] text-gray-400">
+        合成の重み: ニュース {Math.round(acc.weights.news * 100)}% / 値動き {Math.round((1 - acc.weights.news) * 100)}%
+        {acc.weights.adaptive ? '（的中率から自動調整）' : '（件数が少ないため半々）'}
+      </div>
+    </div>
+  );
+};
+
+const ForecastCard: FC<{ s: PairSignal; anomalies: Anomaly[]; pairHit?: HitRate }> = ({ s, anomalies, pairHit }) => {
   const [open, setOpen] = useState<boolean>(false);
   const verdict = signalVerdict(s);
   const v = VERDICT[verdict];
@@ -223,7 +295,15 @@ const ForecastCard: FC<{ s: PairSignal; anomalies: Anomaly[] }> = ({ s, anomalie
             <span className="font-semibold text-gray-700">{CONF_LABEL[conf]}</span>
           </span>
           {conflict && <span className="rounded bg-amber-100 px-1.5 py-0.5 font-bold text-amber-700">アノマリーと逆向き</span>}
+          {pairHit && pairHit.n >= 5 && (
+            <span className="rounded bg-gray-50 px-1.5 py-0.5 text-gray-500">
+              このペアの的中 <span className="font-semibold text-gray-700">{Math.round((pairHit.hit / pairHit.n) * 100)}%</span>（{pairHit.n}件）
+            </span>
+          )}
         </div>
+
+        {/* 内訳: ニュース（AI）と値動きの予測。食い違いは 50% に寄せている */}
+        {s.parts && s.parts.price != null && <PartsRow parts={s.parts} />}
 
         {/* 根拠（ニュース）。長い文は2行で畳む */}
         {s.rationale && (
@@ -460,10 +540,11 @@ const NewsSummary: FC = () => {
 
       {data && tab === 'forecast' && (
         <>
+          {data.accuracy && <AccuracyCard acc={data.accuracy} />}
           <OutlookSummary signals={signals} filter={verdictFilter} onFilter={setVerdictFilter} />
           <div className="flex items-center justify-between gap-2 text-[10px] text-gray-500">
             <span className="min-w-0 truncate">
-              {verdictFilter ? `${VERDICT[verdictFilter].label}だけ表示中` : 'ニュースと直近の値動きから推定'}（{data.engine === 'jev' ? 'Jev' : 'Workers AI'}）
+              {verdictFilter ? `${VERDICT[verdictFilter].label}だけ表示中` : 'ニュースと値動きから推定'}（{data.engine === 'jev' ? 'Jev' : 'Workers AI'}）
             </span>
             <span className="flex shrink-0 gap-1">
               <Pill on={sort === 'default'} onClick={() => changeSort('default')}>既定の順</Pill>
@@ -475,12 +556,12 @@ const NewsSummary: FC = () => {
           ) : (
             <ul className="space-y-2" style={LIST_RESET}>
               {shownSignals.map((s) => (
-                <ForecastCard key={s.pair} s={s} anomalies={anomalies} />
+                <ForecastCard key={s.pair} s={s} anomalies={anomalies} pairHit={data.accuracy?.byPair[s.pair]} />
               ))}
             </ul>
           )}
           <p className="text-[10px] leading-relaxed text-gray-400">
-            買い60%以上を上昇予想、40%以下を下落予想としています。アノマリーは「そう言われる」経験則で、毎回当てはまるわけではありません。
+            買い60%以上を上昇予想、40%以下を下落予想としています（今後8時間程度）。予測はニュース（AI）と15分足の値動き（2・8・24時間の勢い・移動平均・RSI）を合成し、向きが食い違うときは控えめにしています。的中率は過去の参考値で、将来を保証しません。アノマリーは「そう言われる」経験則で、毎回当てはまるわけではありません。
           </p>
         </>
       )}

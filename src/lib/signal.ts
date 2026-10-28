@@ -39,6 +39,14 @@ export interface PairSignal {
   trendPct: number; // 0-100（選ばれた trend の確からしさ）
   rationale: string; // 日本語の一言根拠（ニュース由来）
   anomaly?: string; // いま当てはまるアノマリーを踏まえた一言（該当なし・旧キャッシュ・Jev は空/無し）
+  // 合成の内訳（forecast.ts の blendSignal）。旧キャッシュには無い
+  parts?: {
+    news: number; // ニュース（AI）だけの買い%
+    price: number | null; // 値動きだけの買い%（系列が無ければ null）
+    agree?: boolean; // 両方が同じ向き
+    disagree?: boolean; // 向きが食い違い（50% に寄せて確信度を下げた）
+    priceNotes?: string[]; // 値動きの根拠
+  };
 }
 
 // 直近の値動き（反転/継続判定の state 用）。
@@ -46,13 +54,15 @@ export interface PairTrend {
   pair: SignalPair;
   changePct: number | null; // 直近 lookback 本での % 変化（不明なら null）
   direction: 'up' | 'down' | 'flat';
+  change8hPct?: number | null; // 8時間（15分足32本）での % 変化
+  change24hPct?: number | null; // 24時間（15分足96本）での % 変化
 }
 
 const clamp = (n: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, n));
 
 // RateSeries から各シグナルペアの価格系列を取り出す。
 // 対円はそのまま、ドルストレートは X/JPY ÷ USD/JPY、XAU/USD は XAU/JPY ÷ USD/JPY で復元。
-function pairSeries(series: RateSeries, pair: SignalPair): number[] | null {
+export function pairSeries(series: RateSeries, pair: SignalPair): number[] | null {
   const r = series.rates;
   const cross = (a?: number[], b?: number[]): number[] | null =>
     a && b ? a.map((v, i) => v / b[i]) : null;
@@ -87,7 +97,8 @@ export function computeRecentTrend(series: RateSeries | null, pair: SignalPair, 
   if (!(start > 0) || !(end > 0)) return { pair, changePct: null, direction: 'flat' };
   const changePct = (end / start - 1) * 100;
   const direction = changePct > 0.05 ? 'up' : changePct < -0.05 ? 'down' : 'flat';
-  return { pair, changePct, direction };
+  const longer = (bars: number) => (s.length > bars && s[s.length - 1 - bars] > 0 ? (end / s[s.length - 1 - bars] - 1) * 100 : null);
+  return { pair, changePct, direction, change8hPct: longer(32), change24hPct: longer(96) };
 }
 
 /** ニュースと直近トレンドから、LLM に厳密 JSON を返させるプロンプトを組み立てる。 */
@@ -99,14 +110,17 @@ export function buildSignalPrompt(
   anomalyNote = '', // いま意識されやすいアノマリー（src/lib/anomaly.ts の formatAnomalyDigest。空なら節を出さない）
 ): string {
   const news = items.map((it, i) => `${i + 1}. ${it.title} — ${it.description}`).join('\n');
+  const pct = (v: number | null | undefined) => (v == null ? '不明' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`);
   const trendLines = trends
     .map(
       (t) =>
-        `- ${t.pair}: 直近トレンド ${t.direction}${t.changePct != null ? ` (${t.changePct.toFixed(2)}%)` : '（不明）'}`,
+        `- ${t.pair}: 直近2時間 ${t.direction}${t.changePct != null ? ` (${t.changePct.toFixed(2)}%)` : '（不明）'}` +
+        (t.change8hPct !== undefined || t.change24hPct !== undefined ? ` / 8時間 ${pct(t.change8hPct)} / 24時間 ${pct(t.change24hPct)}` : ''),
     )
     .join('\n');
   return [
-    '以下の為替ニュースと各ペアの直近トレンドを踏まえ、ペアごとに「売買の傾き」と「トレンドの継続/反転」を推定してください。',
+    '以下の為替ニュースと各ペアの直近トレンドを踏まえ、ペアごとに「今後8時間程度の売買の傾き」と「トレンドの継続/反転」を推定してください。',
+    'そのペアの通貨に直接関係するニュースが無ければ、buyPct は 50 に近づけ confidence を低く（0.3以下）してください。',
     '',
     '# ニュース',
     news,
@@ -204,7 +218,13 @@ export function buildJevRequest(
   const dirByPair = new Map(trends.map((t) => [t.pair, t.direction]));
   const state = {
     news: items.map((it) => ({ title: it.title, summary: it.description })),
-    trends: trends.map((t) => ({ pair: t.pair, direction: t.direction, changePct: t.changePct })),
+    trends: trends.map((t) => ({
+      pair: t.pair,
+      direction: t.direction,
+      changePct: t.changePct,
+      change8hPct: t.change8hPct ?? null,
+      change24hPct: t.change24hPct ?? null,
+    })),
     ...(econEvents.length
       ? { calendar: econEvents.map((e) => ({ date: e.date, country: e.country, title: e.title, forecast: e.forecast, previous: e.previous })) }
       : {}),
@@ -216,7 +236,7 @@ export function buildJevRequest(
     const dir = dirByPair.get(pair) ?? 'flat';
     questions[`buy_${k}`] = {
       type: 'choice',
-      instructions: `${pair} について、ニュースと直近トレンドを踏まえ、短期的に買い(上昇)と売り(下落)のどちらが優勢か。`,
+      instructions: `${pair} について、ニュースと直近トレンド（2時間・8時間・24時間の変化）を踏まえ、今後8時間程度で買い(上昇)と売り(下落)のどちらが優勢か。`,
       criteria: { buy: '買い優勢（上昇が優勢）', sell: '売り優勢（下落が優勢）' },
     };
     questions[`trend_${k}`] = {
