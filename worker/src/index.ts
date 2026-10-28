@@ -74,6 +74,16 @@ import {
   type PairSignal,
   type PairTrend,
 } from '../../src/lib/signal';
+import {
+  accuracyStats,
+  blendSignal,
+  blendWeights,
+  evaluateHistory,
+  makeRecord,
+  priceSignals,
+  type ForecastAccuracy,
+  type ForecastRecord,
+} from '../../src/lib/forecast';
 // 損切り提案のロジック/型もフロントと共有。
 import {
   computeStructuralStop,
@@ -133,6 +143,7 @@ interface Env {
 const PAIRS: JpyPairCurrency[] = ['USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
 
 const KV_INTRADAY = 'intraday';
+const KV_NEWS_HIST = 'news:hist'; // ニュースの予測の記録（答え合わせ・的中率用。HISTORY_DAYS 日ぶん）
 const KV_DAILY = 'daily';
 // /flow 用のキャッシュキー。
 const KV_FLOW = 'flow';
@@ -241,6 +252,17 @@ const fetchSeries = async (env: Env, interval: string, outputsize: number): Prom
 const updateIntraday = async (env: Env): Promise<RateSeries> => {
   const series = await fetchSeries(env, '15min', 130); // 約32時間分（当日＋4時間前をカバー）
   await env.STRENGTH_KV.put(KV_INTRADAY, JSON.stringify(series));
+  // ニュースの予測の答え合わせ（ページが開かれなくても、答えの足が系列から外れる前に判定しておく）。
+  try {
+    const raw = await env.STRENGTH_KV.get(KV_NEWS_HIST);
+    if (raw) {
+      const before = JSON.parse(raw) as ForecastRecord[];
+      const after = evaluateHistory(before, series, Date.now());
+      if (JSON.stringify(after) !== raw) await env.STRENGTH_KV.put(KV_NEWS_HIST, JSON.stringify(after));
+    }
+  } catch (e) {
+    console.error('予測の答え合わせ 失敗:', e);
+  }
   return series;
 };
 
@@ -558,7 +580,8 @@ interface NewsPayload {
   generatedAt: number;
   engine: string; // 'workers-ai' | 'jev'
   summary: string;
-  signals: PairSignal[];
+  signals: PairSignal[]; // ニュース（AI）と値動きを合成した予測（内訳は parts）
+  accuracy: ForecastAccuracy | null; // 直近の的中率（記録が無ければ null）
   items: { title: string; link: string; pubDate: string }[];
   calendar: EconEvent[]; // 高重要度の経済指標（今日〜今週・対象8通貨）
 }
@@ -713,11 +736,31 @@ const buildNews = async (env: Env): Promise<NewsPayload> => {
     }),
   ]);
 
+  // 精度向上: 値動きの予測と合成し、過去の予測を答え合わせして的中率と合成の重みを求める。
+  const now = Date.now();
+  const histRaw = await env.STRENGTH_KV.get(KV_NEWS_HIST);
+  let history: ForecastRecord[] = [];
+  try {
+    history = histRaw ? (JSON.parse(histRaw) as ForecastRecord[]) : [];
+  } catch {
+    history = [];
+  }
+  history = evaluateHistory(history, series, now);
+  const stats = accuracyStats(history, now);
+  const weights = blendWeights(stats);
+  const prices = priceSignals(series, SIGNAL_PAIRS);
+  const blended = signals.map((s) => blendSignal(s, prices.get(s.pair) ?? null, weights));
+  const record = series ? makeRecord(now, series, blended, new Map(signals.map((s) => [s.pair, s.buyPct]))) : null;
+  // 同じ足を基準にした記録は1つだけ（短時間に作り直しても重複して数えない）。
+  if (record && !history.some((r) => r.baseTime === record.baseTime)) history.push(record);
+  await env.STRENGTH_KV.put(KV_NEWS_HIST, JSON.stringify(history));
+
   const payload: NewsPayload = {
-    generatedAt: Date.now(),
+    generatedAt: now,
     engine: env.SIGNAL_ENGINE === 'jev' ? 'jev' : 'workers-ai',
     summary,
-    signals,
+    signals: blended,
+    accuracy: stats.final.n + stats.news.n + stats.price.n > 0 || history.length > 0 ? { ...stats, weights } : null,
     items: items.map((it) => ({ title: it.title, link: it.link, pubDate: it.pubDate })),
     calendar,
   };
