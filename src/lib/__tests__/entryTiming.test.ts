@@ -84,6 +84,32 @@ describe('assessEntryTiming', () => {
     expect(t!.limit!.price).toBeLessThan(150.6);
   });
 
+  it('21SMA から離れすぎ・200EMA の下での買いを減点し、21SMA までの押しを指値の候補にする', () => {
+    const price = 150.3;
+    const base = {
+      direction: 'long' as const, price, instrument: 'USD_JPY', bars: bars(),
+      dow: null, zones: null, rsi: 55, stochK: 50,
+    };
+    const t = assessEntryTiming({ ...base, ma: { sma21: 150.1, ema75: 150.0, ema200: 150.5 } });
+    const labels = t?.reasons.map((r) => r.label) ?? [];
+    expect(labels).toContain('21SMA から離れすぎ（2.0 ATR）');
+    expect(labels).toContain('200EMAの下で買う（大きな流れに逆らう）');
+    expect(labels).not.toContain('75EMAの下で買う（大きな流れに逆らう）');
+    expect(t?.verdict).toBe('avoid'); // 21SMA +2・200EMA +1・直近3本の急上昇 +1
+    expect(t?.limit?.basis).toBe('21SMAまで押し');
+    expect(t?.limit?.price).toBeCloseTo(150.1, 5);
+    expect(t?.mas.map((m) => m.key)).toEqual(['sma21', 'ema75', 'ema200']);
+  });
+
+  it('Worker の MA が無ければ足から 21SMA だけ求める', () => {
+    const t = assessEntryTiming({
+      direction: 'long', price: 150.0, instrument: 'USD_JPY', bars: bars(), dow: null, zones: null, rsi: null, stochK: null,
+    });
+    expect(t?.mas).toHaveLength(1);
+    expect(t?.mas[0].price).toBeCloseTo(150.0, 5);
+    expect(t?.verdict).toBe('ok');
+  });
+
   it('足が足りなければ null', () => {
     expect(
       assessEntryTiming({ direction: 'long', price: 150, instrument: 'USD_JPY', bars: bars().slice(0, 5), dow: null, zones: null, rsi: null, stochK: null }),

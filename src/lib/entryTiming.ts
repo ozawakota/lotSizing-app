@@ -6,14 +6,16 @@
 //   - すぐ上の抵抗帯（0.5 ATR 以内）
 //   - RSI / ストキャスの買われすぎ
 //   - 直近3本の急上昇（1.5 ATR 以上）
+//   - 移動平均: 21SMA からの乖離（ATR 倍）と、75EMA・200EMA に対する位置（下で買う=大きな流れに逆らう）
 // 合計 0〜1=入りどき / 2〜3=押し目待ち / 4以上=高値掴み注意。
-// 待つべきときは、押し目の指値の目安（支持帯の上限・押し目の 50% / 61.8%・いちばん近い支えの少し上）と、
+// 待つべきときは、押し目の指値の目安（支持帯の上限・押し目の 50% / 61.8%・21SMA・75EMA・いちばん近い支えの少し上）と、
 // その価格で入った場合の RR（損切り・目標は同じ）を返す。※投資助言ではない参考情報。
 import { averageTrueRange, pipSize, type SlDirection } from './stoploss';
 import type { OhlcCandle } from './edge';
 import type { DowAnalysis } from './dow';
 import type { SrZone } from './srZones';
 import { premiumDiscount } from './smc';
+import { sma, type MaSet } from './entrySignal';
 
 export type TimingVerdict = 'ok' | 'wait' | 'avoid';
 
@@ -29,11 +31,19 @@ export interface LimitPlan {
   rr: number | null; // その価格で入った場合の RR（損切り・目標が無ければ null）
 }
 
+export interface MaRead {
+  key: 'sma21' | 'ema75' | 'ema200';
+  label: string; // 「21SMA」など
+  price: number;
+  atrFromPrice: number; // 現在値 − MA（ATR 倍。上=+）
+}
+
 export interface EntryTiming {
   verdict: TimingVerdict;
   score: number;
   reasons: EntryReason[]; // 点数の大きい順
   limit: LimitPlan | null; // verdict が ok のときは null
+  mas: MaRead[]; // 表示用の移動平均（算出できたものだけ）
 }
 
 export interface EntryTimingInput {
@@ -46,7 +56,10 @@ export interface EntryTimingInput {
   rsi: number | null | undefined;
   stochK: number | null | undefined;
   rr?: { stop: number; target: number; spreadPips: number } | null; // 現在の RR 計画（指値の RR を出すため）
+  ma?: MaSet | null; // 長い足の履歴から求めた移動平均（Worker）。無ければ bars から 21SMA だけ求める
 }
+
+const MA_LABEL: Record<MaRead['key'], string> = { sma21: '21SMA', ema75: '75EMA', ema200: '200EMA' };
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
@@ -106,14 +119,33 @@ export function assessEntryTiming(i: EntryTimingInput): EntryTiming | null {
   const run = long ? i.price - Math.min(...last3.map((b) => b.low)) : Math.max(...last3.map((b) => b.high)) - i.price;
   if (run > atr * 1.5) add(`直近3本で急${long ? '上昇' : '下落'}（${round1(run / atr)} ATR）`, 1);
 
+  // 6) 移動平均。21SMA から順方向に離れすぎていれば、MA まで押し戻されやすい。
+  //    75EMA・200EMA の逆側（買いなら下）で入るのは大きな流れに逆らうので注意（高値掴みとは別の減点）。
+  const ma: MaSet = {
+    sma21: i.ma?.sma21 ?? sma(i.bars.map((b) => b.close), 21),
+    ema75: i.ma?.ema75 ?? null,
+    ema200: i.ma?.ema200 ?? null,
+  };
+  const mas: MaRead[] = (['sma21', 'ema75', 'ema200'] as const)
+    .filter((key) => ma[key] != null)
+    .map((key) => ({ key, label: MA_LABEL[key], price: ma[key] as number, atrFromPrice: round1((i.price - (ma[key] as number)) / atr) }));
+  const sma21 = mas.find((m) => m.key === 'sma21');
+  if (sma21) {
+    const ext = long ? sma21.atrFromPrice : -sma21.atrFromPrice; // 順方向への乖離
+    if (ext > 1.5) add(`21SMA から離れすぎ（${ext.toFixed(1)} ATR）`, 2);
+    else if (ext > 0.8) add(`21SMA からやや離れている（${ext.toFixed(1)} ATR）`, 1);
+  }
+  const against = mas.filter((m) => m.key !== 'sma21' && (long ? m.atrFromPrice < 0 : m.atrFromPrice > 0));
+  if (against.length) add(`${against.map((m) => m.label).join('・')}の${long ? '下で買う' : '上で売る'}（大きな流れに逆らう）`, 1);
+
   reasons.sort((a, b) => b.points - a.points);
   const score = reasons.reduce((s, r) => s + r.points, 0);
   const verdict: TimingVerdict = score >= 4 ? 'avoid' : score >= 2 ? 'wait' : 'ok';
-  return { verdict, score, reasons, limit: verdict === 'ok' ? null : limitPlan(i, atr, pip, behind) };
+  return { verdict, score, reasons, limit: verdict === 'ok' ? null : limitPlan(i, atr, pip, behind, mas), mas };
 }
 
 /** 押し目（戻り）の指値の目安。現在値より 0.3 ATR 以上有利で、損切りより手前の候補のうち、最も近いもの。 */
-function limitPlan(i: EntryTimingInput, atr: number, pip: number, behind: Behind | null): LimitPlan | null {
+function limitPlan(i: EntryTimingInput, atr: number, pip: number, behind: Behind | null, mas: MaRead[]): LimitPlan | null {
   const long = i.direction === 'long';
   const cands: { price: number; basis: string }[] = [];
   const zone = ((long ? i.zones?.sup : i.zones?.res) ?? []).find((z) => !z.contains);
@@ -128,6 +160,10 @@ function limitPlan(i: EntryTimingInput, atr: number, pip: number, behind: Behind
   if (behind != null)
     cands.push({ price: long ? behind.price + atr * 0.2 : behind.price - atr * 0.2, basis: `${behind.name}の少し${long ? '上' : '下'}` });
 
+  // 移動平均までの押し（21SMA・75EMA）。順方向の側にあるものだけ。
+  for (const m of mas) {
+    if (m.key !== 'ema200' && (long ? m.price < i.price : m.price > i.price)) cands.push({ price: m.price, basis: `${m.label}まで${long ? '押し' : '戻り'}` });
+  }
   const minGap = atr * 0.3;
   const stop = i.rr?.stop ?? null;
   const ok = cands.filter(

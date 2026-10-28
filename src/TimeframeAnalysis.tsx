@@ -26,6 +26,7 @@ import { DowHeader, KeyLevelRow, SwingChart, ZoneLadder } from '@/components/TfS
 import { dowDirection, dowSummary, type DowAnalysis } from '@/lib/dow';
 import type { SrZone } from '@/lib/srZones';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
+import type { MaSet } from '@/lib/entrySignal';
 import { TIMING_LABEL, assessEntryTiming, type EntryTiming, type TimingVerdict } from '@/lib/entryTiming';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
@@ -62,6 +63,7 @@ interface MtfTf {
   rsi?: number | null; // RSI(14)。旧キャッシュには無い
   bars?: OhlcCandle[]; // ローソク足チャート用の直近の確定足（古い順。末尾=barsAgo 0）。旧キャッシュには無い
   forming?: OhlcCandle | null; // 形成中の足。旧キャッシュには無い
+  ma?: MaSet | null; // 21SMA・75EMA・200EMA。旧キャッシュには無い
 }
 interface MtfResult {
   instrument: string;
@@ -92,6 +94,11 @@ async function toSpotBasis(body: MtfResult): Promise<MtfResult> {
     rangeLow: d.rangeLow == null ? null : d.rangeLow - off,
   });
   const shiftZone = (z: SrZone): SrZone => ({ ...z, low: z.low - off, high: z.high - off, center: z.center - off });
+  const shiftMa = (m: MaSet): MaSet => ({
+    sma21: m.sma21 == null ? null : m.sma21 - off,
+    ema75: m.ema75 == null ? null : m.ema75 - off,
+    ema200: m.ema200 == null ? null : m.ema200 - off,
+  });
   const shiftBar = (b: OhlcCandle): OhlcCandle => ({ ...b, open: b.open - off, high: b.high - off, low: b.low - off, close: b.close - off });
   return {
     ...body,
@@ -110,6 +117,7 @@ async function toSpotBasis(body: MtfResult): Promise<MtfResult> {
       zones: t.zones ? { res: t.zones.res.map(shiftZone), sup: t.zones.sup.map(shiftZone) } : t.zones,
       bars: t.bars?.map(shiftBar),
       forming: t.forming ? shiftBar(t.forming) : t.forming,
+      ma: t.ma ? shiftMa(t.ma) : t.ma,
     })),
     rrOpportunity: body.rrOpportunity ? shiftRr(body.rrOpportunity) : null,
   };
@@ -276,6 +284,7 @@ function tfTiming(tf: MtfTf, instrument: string, currentRate: number): { dir: Sl
     rsi: tf.rsi,
     stochK: tf.stoch?.k ?? null,
     rr: tf.rr && tf.rr.direction === dir ? { stop: tf.rr.stop, target: tf.rr.target, spreadPips: tf.rr.spreadPips } : null,
+    ma: tf.ma,
   });
   return t ? { dir, t } : null;
 }
@@ -294,6 +303,26 @@ function TimingChip({ dir, t }: { dir: SlDirection; t: EntryTiming }) {
   );
 }
 
+// 移動平均と現在値の位置（ATR 倍）。順方向の側にあれば緑、逆側なら赤、21SMA から離れすぎ（>0.8 ATR）ならアンバー。
+function MaLine({ mas, long, digits }: { mas: EntryTiming['mas']; long: boolean; digits: number }) {
+  return (
+    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-gray-500">
+      {mas.map((m) => {
+        const along = long ? m.atrFromPrice : -m.atrFromPrice; // 順方向の側なら +
+        const cls = along < 0 ? 'text-red-600' : m.key === 'sma21' && along > 0.8 ? 'text-amber-700' : 'text-green-700';
+        return (
+          <span key={m.key} className="whitespace-nowrap">
+            {m.label} <span className="font-mono text-gray-700">{m.price.toFixed(digits)}</span>{' '}
+            <span className={`font-semibold ${cls}`}>
+              （{m.atrFromPrice >= 0 ? '上' : '下'} {Math.abs(m.atrFromPrice).toFixed(1)} ATR）
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 // 成行で入ってよいか（入りどき / 押し目待ち・戻り待ち / 高値掴み注意・安値売り注意）＋理由＋指値の目安。
 function EntryTimingRow({ dir, t, digits }: { dir: SlDirection; t: EntryTiming; digits: number }) {
   const st = TIMING_STYLE[t.verdict];
@@ -307,6 +336,7 @@ function EntryTimingRow({ dir, t, digits }: { dir: SlDirection; t: EntryTiming; 
         </span>
         <span className="text-[10px] text-gray-400">{st.icon} 成行の判定</span>
       </div>
+      {t.mas.length > 0 && <MaLine mas={t.mas} long={long} digits={digits} />}
       {t.verdict === 'ok' ? (
         <div className="mt-1 text-[10px] text-gray-600">
           {long ? '支えに近く、伸び切っていない位置です。' : '抑えに近く、売られ切っていない位置です。'}

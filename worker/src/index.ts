@@ -40,7 +40,7 @@ import { buildSrZones, type LevelSource, type SrZone } from '../../src/lib/srZon
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
 import { PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
 // エントリーサイン（押し目/戻り/反転警戒）の純粋ロジック。
-import { classifyEntry } from '../../src/lib/entrySignal';
+import { classifyEntry, computeMaSet, type MaSet } from '../../src/lib/entrySignal';
 // TF分析カードのローソク足パターン読み（質・場所・確定/否定）。フロントと共有。
 // 4時間足の出来高インジケーター(/volume)。フロントと共有。
 import {
@@ -965,6 +965,7 @@ interface MtfTf {
   rsi: number | null; // RSI(14)。抵抗帯のオシレーター加点と表示に使う。算出不可は null
   bars: OhlcCandle[]; // ローソク足チャート用の直近の確定足（古い順・最大 CHART_BARS 本。末尾=最新確定足=barsAgo 0）
   forming: OhlcCandle | null; // 形成中の足（チャートの右端に薄く描く）
+  ma: MaSet; // 確定足の終値から求めた 21SMA・75EMA・200EMA（本数不足は null）。入りどき判定に使う
 }
 interface MtfPayload {
   instrument: string;
@@ -1008,6 +1009,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
     stoch: StochReading | null;
     dow: DowAnalysis | null;
     rsi: number | null;
+    ma: MaSet;
   }[] = [];
   for (const tf of MTF_TIMEFRAMES) {
     const { candles, currentRate: cr } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf]);
@@ -1049,14 +1051,15 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
     // ダウ理論は確定足だけで判定する（末尾の形成中の足は除外）。
     const dow = analyzeDow(candles.slice(0, -1));
     const rsi = computeRsi(candles);
-    prep.push({ tf, structure, recentCloses, volumeLevel, stoch, dow, rsi });
+    const ma = computeMaSet(candles.slice(0, -1).map((c) => c.close));
+    prep.push({ tf, structure, recentCloses, volumeLevel, stoch, dow, rsi, ma });
   }
 
   // 全TFの足がそろってから、パターンの読み（質・出た場所・確定/否定）を求め、
   // 「有効なパターン」（確定・ライン上・質が高い）だけを Jev の判定材料に渡す。
   // 出た場所の判定には上位足の高安と出来高節目を使う（ロールリバーサルは Jev の結果に依存するため含めない）。
   for (let i = 0; i < prep.length; i++) {
-    const { tf, structure, recentCloses, volumeLevel, stoch, dow, rsi } = prep[i];
+    const { tf, structure, recentCloses, volumeLevel, stoch, dow, rsi, ma } = prep[i];
     const higherTfs = prep.slice(i + 1).map((h) => ({ tf: h.tf, structure: h.structure }));
     const candlePatterns = readCandlePatterns(tfOhlc[i] ?? [], {
       instrument,
@@ -1098,6 +1101,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       rsi,
       bars: (tfOhlc[i] ?? []).slice(-CHART_BARS),
       forming: tfForming[i] ?? null,
+      ma,
     });
   }
 
