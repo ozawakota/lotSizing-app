@@ -1,6 +1,7 @@
 // TF分析カードの「プライスアクション」。直近の確定足をローソク足で描き、
-// ピンバー/包み足の位置（番号つき）・確定待ちのパターンの確定ライン/否定ライン・抵抗帯・現在値を重ねる。
+// ピンバー/包み足の位置（番号つき）・確定待ちのパターンの確定ライン/否定ライン・抵抗帯・移動平均線・現在値を重ねる。
 // 下に、番号と対応するパターンの一覧（確定/未確定/否定・形の質・出た場所）を並べる。
+import { useId } from 'react';
 import type { OhlcCandle } from '@/lib/edge';
 import { PATTERN_DIRECTION } from '@/lib/edge';
 import {
@@ -13,12 +14,20 @@ import {
 } from '@/lib/candleRead';
 import type { SrZone } from '@/lib/srZones';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
+import type { MaLines } from '@/lib/entrySignal';
 
 const UP = '#16a34a';
 const DOWN = '#dc2626';
 const NOW = '#f97316';
 const CONFIRM = '#2563eb';
 const INVALIDATE = '#6b7280';
+
+// 移動平均線（ローソク足の緑/赤・確定ラインの青と見分けやすい色）。
+const MA_STYLE: { key: keyof MaLines; label: string; color: string; width: number }[] = [
+  { key: 'sma21', label: '21SMA', color: '#0891b2', width: 1.1 },
+  { key: 'ema75', label: '75EMA', color: '#9333ea', width: 1.1 },
+  { key: 'ema200', label: '200EMA', color: '#374151', width: 1.3 },
+];
 
 const TONE_CHIP: Record<PriceActionTone, string> = {
   bull: 'bg-green-100 text-green-700',
@@ -41,6 +50,7 @@ export function PriceActionChart({
   currentRate,
   digits,
   periodLabel,
+  maLines,
 }: {
   bars: OhlcCandle[];
   forming: OhlcCandle | null;
@@ -49,7 +59,9 @@ export function PriceActionChart({
   currentRate: number;
   digits: number;
   periodLabel: string; // 例「直近6時間」
+  maLines?: MaLines | null; // 移動平均線（bars と同じ長さ）。無ければ描かない
 }) {
+  const clipId = useId().replace(/:/g, '');
   if (bars.length < 2) return null;
   const head = priceActionHeadline(reads);
   const all = forming ? [...bars, forming] : bars;
@@ -83,6 +95,26 @@ export function PriceActionChart({
     y,
     H,
   );
+
+  // 移動平均線: 値幅はローソク足に合わせたまま（遠い MA で足が潰れないように）、はみ出た部分は切り取る。
+  // 線の末尾が値幅の外なら、凡例に「上/下（範囲外）」と出す。
+  const maDrawn = MA_STYLE.flatMap((st) => {
+    const vals = maLines?.[st.key];
+    if (!vals || vals.length !== bars.length) return [];
+    const segs: string[] = [];
+    let cur: string[] = [];
+    vals.forEach((v, i) => {
+      if (v == null) {
+        if (cur.length > 1) segs.push(cur.join(' '));
+        cur = [];
+      } else cur.push(`${cx(i).toFixed(1)},${y(v).toFixed(1)}`);
+    });
+    if (cur.length > 1) segs.push(cur.join(' '));
+    const last = [...vals].reverse().find((v) => v != null) ?? null;
+    if (last == null) return [];
+    const where: 'in' | 'above' | 'below' = last > hi ? 'above' : last < lo ? 'below' : 'in';
+    return [{ ...st, segs, last, where }];
+  });
 
   const visibleZones = [...(zones?.res ?? []), ...(zones?.sup ?? [])].filter((z) => z.high >= lo && z.low <= hi);
   const fmt = (p: number) => p.toFixed(digits);
@@ -134,6 +166,22 @@ export function PriceActionChart({
             opacity="0.1"
           />
         ))}
+
+        {/* 移動平均線（チャートの枠の外は切り取る） */}
+        {maDrawn.length > 0 && (
+          <>
+            <defs>
+              <clipPath id={clipId}>
+                <rect x={padL} y={0} width={W - padL - padR} height={H} />
+              </clipPath>
+            </defs>
+            <g clipPath={`url(#${clipId})`} fill="none" strokeLinejoin="round" strokeLinecap="round">
+              {maDrawn.map((m) =>
+                m.segs.map((pts, k) => <polyline key={`${m.key}-${k}`} points={pts} stroke={m.color} strokeWidth={m.width} opacity="0.85" />),
+              )}
+            </g>
+          </>
+        )}
 
         {/* 確定待ちパターンの確定ライン（青）と否定ライン（灰） */}
         {pending && trig && (
@@ -210,6 +258,18 @@ export function PriceActionChart({
         )}
         {visibleZones.length > 0 && <span>帯 = 抵抗帯</span>}
       </p>
+      {maDrawn.length > 0 && (
+        <div className="mt-0.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[9px] text-gray-500">
+          {maDrawn.map((m) => (
+            <span key={m.key} className="flex items-center gap-1 whitespace-nowrap">
+              <span aria-hidden className="inline-block h-0.5 w-3 rounded" style={{ backgroundColor: m.color }} />
+              {m.label}
+              <span className="font-mono text-gray-600">{fmt(m.last)}</span>
+              {m.where !== 'in' && <span className="text-gray-400">（{m.where === 'above' ? '上' : '下'}・範囲外）</span>}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* パターンの一覧（チャートの番号と対応） */}
       {reads.length === 0 ? (

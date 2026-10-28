@@ -40,6 +40,49 @@ export function computeMaSet(closes: number[]): MaSet {
   return { sma21: sma(closes, 21), ema75: ema(closes, 75), ema200: ema(closes, 200) };
 }
 
+// 足ごとの単純移動平均（closes と同じ長さ。本数不足の位置は null）。
+export function smaSeries(values: number[], period: number): (number | null)[] {
+  const out: (number | null)[] = [];
+  let s = 0;
+  for (let i = 0; i < values.length; i++) {
+    s += values[i];
+    if (i >= period) s -= values[i - period];
+    out.push(i >= period - 1 ? s / period : null);
+  }
+  return out;
+}
+
+// 足ごとの指数移動平均（ema() と同じ初期化。closes と同じ長さ。本数不足の位置は null）。
+export function emaSeries(values: number[], period: number): (number | null)[] {
+  const out: (number | null)[] = [];
+  if (values.length < period) return values.map(() => null);
+  const k = 2 / (period + 1);
+  let e = 0;
+  for (let i = 0; i < period; i++) {
+    e += values[i];
+    out.push(null);
+  }
+  e /= period;
+  out[period - 1] = e;
+  for (let i = period; i < values.length; i++) {
+    e = values[i] * k + e * (1 - k);
+    out.push(e);
+  }
+  return out;
+}
+
+/** チャートに描く移動平均の線（足と同じ長さ・古い順）。 */
+export interface MaLines {
+  sma21: (number | null)[];
+  ema75: (number | null)[];
+  ema200: (number | null)[];
+}
+/** closes 全体から線を求め、末尾 n 本（チャートの足）に合わせて切り出す。 */
+export function computeMaLines(closes: number[], n: number): MaLines {
+  const tail = (a: (number | null)[]) => a.slice(-n);
+  return { sma21: tail(smaSeries(closes, 21)), ema75: tail(emaSeries(closes, 75)), ema200: tail(emaSeries(closes, 200)) };
+}
+
 // setup 方向基準でエントリータイミングを分類する。stoch/パターンは任意（null/0 可）。
 export function classifyEntry(opts: {
   closes: number[]; // 古い→新しい

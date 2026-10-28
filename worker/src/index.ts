@@ -40,7 +40,7 @@ import { buildSrZones, type LevelSource, type SrZone } from '../../src/lib/srZon
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
 import { PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
 // エントリーサイン（押し目/戻り/反転警戒）の純粋ロジック。
-import { classifyEntry, computeMaSet, type MaSet } from '../../src/lib/entrySignal';
+import { classifyEntry, computeMaLines, computeMaSet, type MaLines, type MaSet } from '../../src/lib/entrySignal';
 // TF分析カードのローソク足パターン読み（質・場所・確定/否定）。フロントと共有。
 // 4時間足の出来高インジケーター(/volume)。フロントと共有。
 import {
@@ -966,6 +966,7 @@ interface MtfTf {
   bars: OhlcCandle[]; // ローソク足チャート用の直近の確定足（古い順・最大 CHART_BARS 本。末尾=最新確定足=barsAgo 0）
   forming: OhlcCandle | null; // 形成中の足（チャートの右端に薄く描く）
   ma: MaSet; // 確定足の終値から求めた 21SMA・75EMA・200EMA（本数不足は null）。入りどき判定に使う
+  maLines: MaLines; // チャートに描く移動平均の線（bars と同じ長さ・古い順。本数不足の位置は null）
 }
 interface MtfPayload {
   instrument: string;
@@ -1102,6 +1103,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       bars: (tfOhlc[i] ?? []).slice(-CHART_BARS),
       forming: tfForming[i] ?? null,
       ma,
+      maLines: computeMaLines((tfOhlc[i] ?? []).map((b) => b.close), Math.min(CHART_BARS, (tfOhlc[i] ?? []).length)),
     });
   }
 
