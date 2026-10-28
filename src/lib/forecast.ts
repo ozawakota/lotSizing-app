@@ -15,11 +15,20 @@ const MIN_SAMPLES_FOR_WEIGHTS = 12; // これ未満なら重みは既定（半�
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 
+/** 値動きの予測の材料1つ（「予測の理由」に表示）。 */
+export interface PriceFactor {
+  label: string; // 例「24時間の値動き」
+  detail: string; // 例「+0.85%」「EMA20 が EMA60 の上」
+  lean: 1 | -1 | 0; // その材料が示す向き（上昇=1・下落=-1・どちらでもない=0）
+  weight: number; // 合成での重み（%）。RSI は補正なので 0
+}
+
 /** 値動きだけから求めた予測（買い% 0–100・確信度 0–1）。 */
 export interface PriceSignal {
   buyPct: number;
   confidence: number;
-  notes: string[]; // 例「24時間で上昇（+0.85%）」
+  notes: string[]; // 例「24時間で上昇（+0.85%）」（目立つものだけ）
+  factors: PriceFactor[]; // すべての材料（向きと重み）
 }
 
 function emaLast(values: number[], period: number): number | null {
@@ -81,10 +90,31 @@ export function priceSignal(closes: number[] | null): PriceSignal | null {
     m += 0.5;
     notes.push(`RSI ${Math.round(rsi)}（売られすぎ・反動に注意）`);
   }
+  // 材料ごとの向き（z が ±0.5 未満は「どちらでもない」）。
+  const leanOf = (v: number, th = 0.5): 1 | -1 | 0 => (v >= th ? 1 : v <= -th ? -1 : 0);
+  const signed = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+  const factors: PriceFactor[] = [
+    { label: '2時間の値動き', detail: signed(chg(8)), lean: leanOf(z2), weight: 20 },
+    { label: '8時間の値動き', detail: signed(chg(32)), lean: leanOf(z8), weight: 30 },
+    { label: '24時間の値動き', detail: signed(chg(96)), lean: leanOf(z24), weight: 30 },
+    {
+      label: '移動平均（EMA20/60）',
+      detail: fast == null || slow == null ? '本数不足' : fast > slow ? 'EMA20 が EMA60 の上' : 'EMA20 が EMA60 の下',
+      lean: leanOf(zt),
+      weight: 20,
+    },
+    {
+      label: 'RSI(14)',
+      detail: rsi == null ? '—' : `${Math.round(rsi)}${rsi >= 75 ? '（買われすぎ → 下げの反動を加味）' : rsi <= 25 ? '（売られすぎ → 上げの反動を加味）' : '（中立）'}`,
+      lean: rsi == null ? 0 : rsi >= 75 ? -1 : rsi <= 25 ? 1 : 0,
+      weight: 0,
+    },
+  ];
   return {
     buyPct: Math.round(50 + 40 * Math.tanh(m / 1.5)),
     confidence: Math.round(clamp(Math.abs(m) / 2, 0, 1) * 100) / 100,
     notes,
+    factors,
   };
 }
 
@@ -100,7 +130,7 @@ export interface BlendWeights {
 
 /** AI のニュース予測と値動きの予測を合成する。値動きが無ければ AI のまま。 */
 export function blendSignal(ai: PairSignal, price: PriceSignal | null, w: BlendWeights): PairSignal {
-  if (!price) return { ...ai, parts: { news: ai.buyPct, price: null } };
+  if (!price) return { ...ai, parts: { news: ai.buyPct, price: null, newsConfidence: ai.confidence } };
   const dn = ai.buyPct - 50;
   const dp = price.buyPct - 50;
   let dev = w.news * dn + (1 - w.news) * dp;
@@ -114,7 +144,18 @@ export function blendSignal(ai: PairSignal, price: PriceSignal | null, w: BlendW
     ...ai,
     buyPct: Math.round(clamp(50 + dev, 0, 100)),
     confidence: Math.round(clamp(confidence, 0, 1) * 100) / 100,
-    parts: { news: ai.buyPct, price: price.buyPct, agree, disagree, priceNotes: price.notes },
+    parts: {
+      news: ai.buyPct,
+      price: price.buyPct,
+      agree,
+      disagree,
+      priceNotes: price.notes,
+      priceFactors: price.factors,
+      weightNews: w.news,
+      adaptive: w.adaptive,
+      newsConfidence: ai.confidence,
+      priceConfidence: price.confidence,
+    },
   };
 }
 

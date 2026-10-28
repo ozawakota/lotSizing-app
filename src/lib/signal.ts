@@ -45,8 +45,14 @@ export interface PairSignal {
     price: number | null; // 値動きだけの買い%（系列が無ければ null）
     agree?: boolean; // 両方が同じ向き
     disagree?: boolean; // 向きが食い違い（50% に寄せて確信度を下げた）
-    priceNotes?: string[]; // 値動きの根拠
+    priceNotes?: string[]; // 値動きの根拠（目立つものだけ）
+    priceFactors?: { label: string; detail: string; lean: 1 | -1 | 0; weight: number }[]; // 値動きの材料すべて
+    weightNews?: number; // 合成でのニュースの重み（0–1。値動き = 1 - weightNews）
+    adaptive?: boolean; // 重みを的中率から決めたか
+    newsConfidence?: number; // ニュース（AI）の確信度
+    priceConfidence?: number; // 値動きの確信度
   };
+  refs?: number[]; // 根拠にしたニュースの番号（payload.items の 0 始まりの位置）。Jev・旧キャッシュには無い
 }
 
 // 直近の値動き（反転/継続判定の state 用）。
@@ -139,7 +145,7 @@ export function buildSignalPrompt(
     '# 出力ルール',
     `対象ペア: ${pairs.join(', ')}`,
     '次のJSONのみを返してください（前置き・説明・コードフェンスなし）。',
-    '{"signals":[{"pair":"USD/JPY","buyPct":<0-100の整数>,"confidence":<0-1の小数>,"trend":"continuation|reversal|neutral","trendPct":<0-100の整数>,"rationale":"<ニュースを根拠にした日本語の一言>","anomaly":"<そのペアに当てはまるアノマリーの解説を日本語で一言。無ければ空文字>"}]}',
+    '{"signals":[{"pair":"USD/JPY","buyPct":<0-100の整数>,"confidence":<0-1の小数>,"trend":"continuation|reversal|neutral","trendPct":<0-100の整数>,"rationale":"<ニュースを根拠にした日本語の一言>","refs":[<根拠にしたニュースの番号（上の一覧の番号）。最大3つ。無ければ空配列>],"anomaly":"<そのペアに当てはまるアノマリーの解説を日本語で一言。無ければ空文字>"}]}',
     'buyPct は買い優勢度（売り=100-buyPct）。trend は直近トレンドが継続か反転か。確信が低ければ confidence を小さく。',
     'rationale と anomaly はそれぞれ60字以内。anomaly は上のアノマリー一覧に該当があるペアだけ書き、ニュースとどう組み合わさるかに触れてください。',
   ].join('\n');
@@ -170,7 +176,11 @@ function normalizeSignal(pair: SignalPair, s: Record<string, unknown> | undefine
   const trendPct = Number.isFinite(tpRaw) ? Math.round(clamp(tpRaw, 0, 100)) : 50;
   const rationale = typeof s?.rationale === 'string' ? s.rationale.slice(0, 120) : '';
   const anomaly = typeof s?.anomaly === 'string' ? s.anomaly.trim().slice(0, 120) : '';
-  return { pair, buyPct, confidence, trend, trendPct, rationale, anomaly };
+  // 根拠のニュース番号（プロンプトは 1 始まり → 0 始まりに。重複・不正値は除く・最大3つ）。
+  const refs = Array.isArray(s?.refs)
+    ? [...new Set((s.refs as unknown[]).map((v) => Math.round(Number(v)) - 1).filter((v) => Number.isInteger(v) && v >= 0))].slice(0, 3)
+    : [];
+  return { pair, buyPct, confidence, trend, trendPct, rationale, anomaly, ...(refs.length ? { refs } : {}) };
 }
 
 /**
