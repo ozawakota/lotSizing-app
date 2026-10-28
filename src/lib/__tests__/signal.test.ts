@@ -183,3 +183,17 @@ describe('signalVerdict / confidenceLevel / sortSignalsByStrength', () => {
     expect(out.map((s) => s.pair)).toEqual(['GBP/JPY', 'EUR/USD', 'USD/JPY']);
   });
 });
+
+describe('根拠のニュース番号（refs）', () => {
+  it('1 始まりの番号を 0 始まりに直し、重複・不正値を除いて最大3つ', () => {
+    const [s] = parseSignalResponse(
+      JSON.stringify({ signals: [{ pair: 'USD/JPY', buyPct: 70, confidence: 0.6, refs: [2, 2, 0, 'x', 5, 1, 7] }] }),
+      ['USD/JPY'],
+    );
+    expect(s.refs).toEqual([1, 4, 0]);
+  });
+  it('無ければ refs を付けない', () => {
+    const [s] = parseSignalResponse(JSON.stringify({ signals: [{ pair: 'USD/JPY', buyPct: 70 }] }), ['USD/JPY']);
+    expect(s.refs).toBeUndefined();
+  });
+});

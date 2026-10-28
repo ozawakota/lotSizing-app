@@ -49,6 +49,13 @@ describe('priceSignal', () => {
     expect(priceSignal(closes(130, 0.0003))!.buyPct).toBeGreaterThan(60);
     expect(priceSignal(closes(130, -0.0003))!.buyPct).toBeLessThan(40);
   });
+  it('材料ごとの向きと重みを返す（理由の表示用）', () => {
+    const f = priceSignal(closes(130, 0.0003))!.factors;
+    expect(f.map((x) => x.label)).toEqual(['2時間の値動き', '8時間の値動き', '24時間の値動き', '移動平均（EMA20/60）', 'RSI(14)']);
+    expect(f.find((x) => x.label === '24時間の値動き')).toMatchObject({ lean: 1, weight: 30 });
+    expect(f.find((x) => x.label === '移動平均（EMA20/60）')?.detail).toBe('EMA20 が EMA60 の上');
+    expect(f.reduce((a, x) => a + x.weight, 0)).toBe(100);
+  });
   it('本数が足りなければ null', () => {
     expect(priceSignal(closes(20, 0.001))).toBeNull();
     expect(priceSignal(null)).toBeNull();
@@ -58,13 +65,13 @@ describe('priceSignal', () => {
 describe('blendSignal', () => {
   const half = { news: 0.5, adaptive: false };
   it('同じ向きなら合成して確信度を上げる', () => {
-    const r = blendSignal(ai(70), { buyPct: 66, confidence: 0.6, notes: [] }, half);
+    const r = blendSignal(ai(70), { buyPct: 66, confidence: 0.6, notes: [], factors: [] }, half);
     expect(r.buyPct).toBe(68);
     expect(r.confidence).toBeCloseTo(0.75, 5);
-    expect(r.parts).toMatchObject({ news: 70, price: 66, agree: true, disagree: false });
+    expect(r.parts).toMatchObject({ news: 70, price: 66, agree: true, disagree: false, weightNews: 0.5, newsConfidence: 0.6, priceConfidence: 0.6 });
   });
   it('向きが食い違えば 50% に寄せ、確信度を 0.35 以下に', () => {
-    const r = blendSignal(ai(80, 0.9), { buyPct: 30, confidence: 0.8, notes: [] }, half);
+    const r = blendSignal(ai(80, 0.9), { buyPct: 30, confidence: 0.8, notes: [], factors: [] }, half);
     expect(r.buyPct).toBe(53); // 50 + (15 - 10) * 0.6
     expect(r.confidence).toBeLessThanOrEqual(0.35);
     expect(r.parts?.disagree).toBe(true);
@@ -72,7 +79,7 @@ describe('blendSignal', () => {
   it('値動きが無ければ AI のまま', () => {
     const r = blendSignal(ai(72), null, half);
     expect(r.buyPct).toBe(72);
-    expect(r.parts).toEqual({ news: 72, price: null });
+    expect(r.parts).toEqual({ news: 72, price: null, newsConfidence: 0.6 });
   });
 });
 

@@ -240,7 +240,136 @@ const AccuracyCard: FC<{ acc: ForecastAccuracy }> = ({ acc }) => {
   );
 };
 
-const ForecastCard: FC<{ s: PairSignal; anomalies: Anomaly[]; pairHit?: HitRate }> = ({ s, anomalies, pairHit }) => {
+// 「予測の理由」パネル: 合成のしかた → ニュース（AI）の根拠と参照したニュース → 値動きの材料 → 近い経済指標。
+const LEAN_MARK: Record<1 | -1 | 0, { mark: string; cls: string }> = {
+  1: { mark: '▲ 上昇', cls: 'text-green-700' },
+  [-1]: { mark: '▼ 下落', cls: 'text-red-700' },
+  0: { mark: '― 中立', cls: 'text-gray-400' },
+};
+const ReasonSection: FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+  <div className="border-t border-gray-100 pt-2 first:border-t-0 first:pt-0">
+    <div className="mb-1 text-[11px] font-bold text-gray-700">{title}</div>
+    {children}
+  </div>
+);
+
+// ペアの通貨（XAU は USD の指標を見る）。
+const pairCurrencies = (pair: string) => pair.split('/').map((c) => (c === 'XAU' ? 'USD' : c));
+
+const ReasonPanel: FC<{
+  s: PairSignal;
+  items: NewsPayload['items'];
+  calendar: EconEvent[];
+  now: number;
+}> = ({ s, items, calendar, now }) => {
+  const p = s.parts;
+  const wn = p?.weightNews ?? 0.5;
+  const refs = (s.refs ?? []).map((i) => items[i]).filter(Boolean);
+  const cur = pairCurrencies(s.pair);
+  // 今から24時間以内の、ペアの通貨の高重要度の指標（発表済み1時間以内も含める）。
+  const events = calendar
+    .filter((e) => cur.includes(e.country))
+    .map((e) => ({ e, t: Date.parse(e.date) }))
+    .filter(({ t }) => Number.isFinite(t) && t >= now - 3600_000 && t <= now + 24 * 3600_000)
+    .sort((a, b) => a.t - b.t)
+    .slice(0, 4);
+  const fmtTime = (t: number) =>
+    new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  return (
+    <div className="mt-2 space-y-2 rounded-lg border border-gray-100 bg-gray-50/70 px-2.5 py-2 text-[11px] text-gray-700">
+      {p && p.price != null && (
+        <ReasonSection title="① 合成のしかた">
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span>
+              ニュース <span className={`font-semibold ${LEAN_CLS[signalVerdict({ buyPct: p.news })]}`}>{leanText(p.news)}</span>
+              <span className="text-gray-400">（重み{Math.round(wn * 100)}%）</span>
+            </span>
+            <span className="text-gray-400">＋</span>
+            <span>
+              値動き <span className={`font-semibold ${LEAN_CLS[signalVerdict({ buyPct: p.price })]}`}>{leanText(p.price)}</span>
+              <span className="text-gray-400">（重み{Math.round((1 - wn) * 100)}%）</span>
+            </span>
+            <span className="text-gray-400">→</span>
+            <span className={`font-bold ${LEAN_CLS[signalVerdict(s)]}`}>{leanText(s.buyPct)}</span>
+          </div>
+          <div className="mt-0.5 text-[10px] text-gray-500">
+            {p.disagree
+              ? '向きが食い違うため、方向感を弱め（50%寄りに）、確信度を低くしています。'
+              : p.agree
+                ? '向きが一致しているため、確信度を上げています。'
+                : 'どちらかが中立に近いため、そのまま合成しています。'}
+            {p.adaptive ? ' 重みは直近の的中率から自動で決めています。' : ' 答え合わせの件数がたまるまでは重みは半々です。'}
+          </div>
+        </ReasonSection>
+      )}
+
+      <ReasonSection title={`② ニュース（AI）${p?.newsConfidence != null ? `・確信度 ${Math.round(p.newsConfidence * 100)}%` : ''}`}>
+        {s.rationale ? <p className="leading-relaxed">{s.rationale}</p> : <p className="text-gray-400">AI の一言根拠はありません（判定エンジンが根拠文を返さない場合があります）。</p>}
+        <div className="mt-0.5 text-[10px] text-gray-500">
+          {TREND_LABEL[s.trend]} {s.trendPct}%（直近の流れが続くか・反転するかの AI の見立て）
+        </div>
+        {refs.length > 0 && (
+          <ul className="mt-1 space-y-0.5" style={LIST_RESET}>
+            {refs.map((it) => (
+              <li style={LIST_ITEM_RESET} key={it.link + it.title} className="flex gap-1">
+                <Newspaper className="mt-0.5 h-3 w-3 shrink-0 text-gray-400" aria-hidden="true" />
+                <a href={it.link} target="_blank" rel="noreferrer" className="min-w-0 text-blue-700 underline decoration-dotted">
+                  {it.title}
+                </a>
+              </li>
+            ))}
+          </ul>
+        )}
+      </ReasonSection>
+
+      {p?.priceFactors && p.priceFactors.length > 0 && (
+        <ReasonSection title={`③ 値動き（15分足）${p.priceConfidence != null ? `・確信度 ${Math.round(p.priceConfidence * 100)}%` : ''}`}>
+          <ul className="space-y-0.5" style={LIST_RESET}>
+            {p.priceFactors.map((f) => (
+              <li style={LIST_ITEM_RESET} key={f.label} className="grid grid-cols-[1fr_auto_auto] items-center gap-x-2">
+                <span className="min-w-0">
+                  {f.label}
+                  <span className="ml-1 text-gray-500">{f.detail}</span>
+                </span>
+                <span className="text-[10px] text-gray-400">{f.weight > 0 ? `重み${f.weight}%` : '補正'}</span>
+                <span className={`w-12 text-right text-[10px] font-semibold ${LEAN_MARK[f.lean].cls}`}>{LEAN_MARK[f.lean].mark}</span>
+              </li>
+            ))}
+          </ul>
+        </ReasonSection>
+      )}
+
+      <ReasonSection title="④ 24時間以内の重要指標">
+        {events.length === 0 ? (
+          <p className="text-gray-400">{cur.join('・')} の高重要度の指標はありません。</p>
+        ) : (
+          <ul className="space-y-0.5" style={LIST_RESET}>
+            {events.map(({ e, t }) => (
+              <li style={LIST_ITEM_RESET} key={e.date + e.title} className="flex flex-wrap gap-x-1.5">
+                <span className="tabular-nums text-gray-500">{fmtTime(t)}</span>
+                <span className="font-semibold">{e.country}</span>
+                <span>{e.title}</span>
+                {t < now && <span className="text-[10px] text-gray-400">（発表済み）</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="mt-0.5 text-[10px] text-gray-500">発表の前後は値動きが荒くなりやすく、予測が外れやすくなります。</div>
+      </ReasonSection>
+    </div>
+  );
+};
+
+const ForecastCard: FC<{
+  s: PairSignal;
+  anomalies: Anomaly[];
+  pairHit?: HitRate;
+  items: NewsPayload['items'];
+  calendar: EconEvent[];
+  now: number;
+}> = ({ s, anomalies, pairHit, items, calendar, now }) => {
+  const [showReason, setShowReason] = useState(false);
   const [open, setOpen] = useState<boolean>(false);
   const verdict = signalVerdict(s);
   const v = VERDICT[verdict];
@@ -335,6 +464,20 @@ const ForecastCard: FC<{ s: PairSignal; anomalies: Anomaly[]; pairHit?: HitRate 
             {s.anomaly && <p className="mt-1 text-[11px] leading-relaxed text-gray-700">{s.anomaly}</p>}
           </div>
         )}
+
+        {/* 予測の理由（合成のしかた・ニュース・値動きの材料・近い指標）。余白は内側の span に付ける */}
+        <button
+          type="button"
+          onClick={() => setShowReason((o) => !o)}
+          aria-expanded={showReason}
+          className="mt-2 w-full rounded-lg border border-gray-200 bg-white text-[11px] font-semibold text-gray-600 active:bg-gray-50"
+        >
+          <span className="flex items-center justify-center gap-1 py-1.5">
+            予測の理由{showReason ? 'を閉じる' : 'を見る'}
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showReason ? 'rotate-180' : ''}`} aria-hidden="true" />
+          </span>
+        </button>
+        {showReason && <ReasonPanel s={s} items={items} calendar={calendar} now={now} />}
       </div>
     </li>
   );
@@ -556,7 +699,15 @@ const NewsSummary: FC = () => {
           ) : (
             <ul className="space-y-2" style={LIST_RESET}>
               {shownSignals.map((s) => (
-                <ForecastCard key={s.pair} s={s} anomalies={anomalies} pairHit={data.accuracy?.byPair[s.pair]} />
+                <ForecastCard
+                  key={s.pair}
+                  s={s}
+                  anomalies={anomalies}
+                  pairHit={data.accuracy?.byPair[s.pair]}
+                  items={data.items}
+                  calendar={data.calendar ?? []}
+                  now={now}
+                />
               ))}
             </ul>
           )}
