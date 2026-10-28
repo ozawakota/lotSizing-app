@@ -26,6 +26,7 @@ import { DowHeader, KeyLevelRow, SwingChart, ZoneLadder } from '@/components/TfS
 import { dowDirection, dowSummary, type DowAnalysis } from '@/lib/dow';
 import type { SrZone } from '@/lib/srZones';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
+import { TIMING_LABEL, assessEntryTiming, type EntryTiming, type TimingVerdict } from '@/lib/entryTiming';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 
@@ -260,6 +261,99 @@ function RrRow({ rr, digits, dow }: { rr: RrSetup | null; digits: number; dow?: 
   );
 }
 
+// エントリーのタイミング（高値掴み・安値売りの回避）。RR の方向（無ければダウ理論の向き）で、
+// いま成行で入ってよいかを判定する。足・方向が無ければ null。
+function tfTiming(tf: MtfTf, instrument: string, currentRate: number): { dir: SlDirection; t: EntryTiming } | null {
+  const dir = tf.rr?.direction ?? (tf.dow ? dowDirection(tf.dow) : null);
+  if (!dir || !tf.bars) return null;
+  const t = assessEntryTiming({
+    direction: dir,
+    price: currentRate,
+    instrument,
+    bars: tf.bars,
+    dow: tf.dow ?? null,
+    zones: tf.zones,
+    rsi: tf.rsi,
+    stochK: tf.stoch?.k ?? null,
+    rr: tf.rr && tf.rr.direction === dir ? { stop: tf.rr.stop, target: tf.rr.target, spreadPips: tf.rr.spreadPips } : null,
+  });
+  return t ? { dir, t } : null;
+}
+
+const TIMING_STYLE: Record<TimingVerdict, { chip: string; box: string; icon: string }> = {
+  ok: { chip: 'bg-green-100 text-green-700', box: 'border-green-200 bg-green-50', icon: '🟢' },
+  wait: { chip: 'bg-amber-100 text-amber-700', box: 'border-amber-200 bg-amber-50', icon: '🟡' },
+  avoid: { chip: 'bg-red-100 text-red-700', box: 'border-red-200 bg-red-50', icon: '🔴' },
+};
+
+function TimingChip({ dir, t }: { dir: SlDirection; t: EntryTiming }) {
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${TIMING_STYLE[t.verdict].chip}`}>
+      {TIMING_LABEL[t.verdict][dir]}
+    </span>
+  );
+}
+
+// 成行で入ってよいか（入りどき / 押し目待ち・戻り待ち / 高値掴み注意・安値売り注意）＋理由＋指値の目安。
+function EntryTimingRow({ dir, t, digits }: { dir: SlDirection; t: EntryTiming; digits: number }) {
+  const st = TIMING_STYLE[t.verdict];
+  const long = dir === 'long';
+  return (
+    <div className={`mt-2 rounded-lg border px-2.5 py-2 text-[11px] ${st.box}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5">
+          <span className="text-gray-500">{long ? '買い' : '売り'}の入りどき</span>
+          <TimingChip dir={dir} t={t} />
+        </span>
+        <span className="text-[10px] text-gray-400">{st.icon} 成行の判定</span>
+      </div>
+      {t.verdict === 'ok' ? (
+        <div className="mt-1 text-[10px] text-gray-600">
+          {long ? '支えに近く、伸び切っていない位置です。' : '抑えに近く、売られ切っていない位置です。'}
+          {t.reasons.length > 0 && `（気になる点: ${t.reasons.map((r) => r.label).join('・')}）`}
+        </div>
+      ) : (
+        <>
+          <ul className="mt-1 space-y-0.5 text-[10px] text-gray-700" style={LIST_RESET}>
+            {t.reasons.map((r) => (
+              <li style={LIST_ITEM_RESET} key={r.label} className="flex items-start gap-1">
+                <span aria-hidden className="text-gray-400">・</span>
+                <span>{r.label}</span>
+              </li>
+            ))}
+          </ul>
+          {t.limit ? (
+            <div className="mt-1.5 rounded bg-white/70 px-2 py-1">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-gray-500">{long ? '押し目' : '戻り'}の指値の目安</span>
+                <span className="font-mono font-bold text-gray-900">{t.limit.price.toFixed(digits)}</span>
+              </div>
+              <div className="mt-0.5 flex flex-wrap items-center justify-between gap-x-2 text-[10px] text-gray-500">
+                <span>
+                  {t.limit.basis}・現在値から{long ? '−' : '+'}
+                  {t.limit.distancePips.toFixed(1)}pips
+                </span>
+                {t.limit.rr != null && (
+                  <span className={t.limit.rr >= RR_MIN ? 'font-bold text-orange-600' : ''}>その価格なら RR 1:{t.limit.rr.toFixed(1)}</span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-1 text-[10px] text-gray-500">
+              {long ? '押し目' : '戻り'}の目安が見当たらないため、次の足の確定を待つのが無難です。
+            </div>
+          )}
+          <div className="mt-1 text-[10px] text-gray-500">
+            {t.verdict === 'avoid'
+              ? `いま成行で${long ? '買う' : '売る'}と${long ? '高値掴み' : '安値売り'}になりやすい位置です。`
+              : `成行より、${long ? '押し目' : '戻り'}を待った方が有利です。`}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ローソク足パターンの一覧（期間内・新しい順）。1行 = パターン名・何本前・確定/否定・形の質・出た場所。
 const CONF_STYLE: Record<PatternRead['confirmation'], string> = {
   confirmed: 'bg-blue-50 text-blue-700',
@@ -448,6 +542,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
   const resDist = Math.abs(tf.swingHigh - currentRate) / pip;
   const supDist = Math.abs(currentRate - tf.swingLow) / pip;
   const v = verdict(tf);
+  const timing = tfTiming(tf, instrument, currentRate);
   const stochLabel = !tf.stoch ? null : tf.stoch.k >= 80 ? '買われすぎ' : tf.stoch.k <= 20 ? '売られすぎ' : '中立';
   const stochCls = !tf.stoch
     ? ''
@@ -511,6 +606,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
       <SectionLabel>ブレイク確率・RR</SectionLabel>
       <BreakoutRow breakout={tf.breakout} />
       <RrRow rr={tf.rr} digits={digits} dow={tf.dow} />
+      {timing && <EntryTimingRow dir={timing.dir} t={timing.t} digits={digits} />}
 
       {/* プライスアクション: ローソク足チャート（パターンの位置・確定/否定ライン・抵抗帯）＋パターンの一覧 */}
       {hasChart && tf.bars && tf.candlePatterns && (
@@ -610,10 +706,14 @@ function MtfOverview({
   timeframes,
   selected,
   onSelect,
+  instrument,
+  currentRate,
 }: {
   timeframes: MtfTf[];
   selected: SlTimeframe;
   onSelect: (tf: SlTimeframe) => void;
+  instrument: string;
+  currentRate: number;
 }) {
   return (
     <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -624,6 +724,7 @@ function MtfOverview({
           const trend = t.dow?.trend ?? t.trend;
           const pa = t.candlePatterns ? priceActionHeadline(t.candlePatterns) : null;
           const on = t.tf === selected;
+          const timing = tfTiming(t, instrument, currentRate);
           return (
             <li style={LIST_ITEM_RESET} key={t.tf} className="border-b border-gray-50 last:border-b-0">
               {/* 余白とレイアウトは内側の要素に付ける（ボタン要素に付けると Mobiscroll のボタン用 CSS に打ち消されることがある） */}
@@ -658,6 +759,7 @@ function MtfOverview({
                   ) : (
                     <span className="text-[10px] text-gray-300">RR —</span>
                   )}
+                  {timing && timing.t.verdict !== 'ok' && <TimingChip dir={timing.dir} t={timing.t} />}
                 </span>
                 </span>
               </button>
@@ -776,7 +878,13 @@ export default function TimeframeAnalysis() {
         return (
           <div className="mt-3 space-y-3">
             {/* 全時間足のまとめ（行を押すと下のタブが切り替わる） */}
-            <MtfOverview timeframes={tfs} selected={current?.tf ?? autoTf} onSelect={setTfSel} />
+            <MtfOverview
+              timeframes={tfs}
+              selected={current?.tf ?? autoTf}
+              onSelect={setTfSel}
+              instrument={result.instrument}
+              currentRate={result.currentRate}
+            />
 
             {result.comment && <CommentCard comment={result.comment} />}
 
@@ -856,6 +964,11 @@ export default function TimeframeAnalysis() {
                 </span>
               </div>
             </div>
+            {(() => {
+              const opp = result.timeframes.find((t) => t.tf === result.rrOpportunity?.tf);
+              const timing = opp ? tfTiming(opp, result.instrument, result.currentRate) : null;
+              return timing ? <EntryTimingRow dir={timing.dir} t={timing.t} digits={digits} /> : null;
+            })()}
             <button
               type="button"
               onClick={() => setShowRrPopup(false)}
