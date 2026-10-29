@@ -1,0 +1,64 @@
+name: ci
+
+# PR ごとにテストとビルドを実行する（Dependabot の更新 PR を含む）。main へのデプロイは deploy / deploy-workers が行う。
+# Mobiscroll の取得に MOBISCROLL_TOKEN が必要:
+# - 通常の PR: Settings → Secrets and variables → Actions の MOBISCROLL_TOKEN
+# - Dependabot の PR: Settings → Secrets and variables → Dependabot の MOBISCROLL_TOKEN（Actions 用は渡されない）
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      MOBISCROLL_TOKEN: ${{ secrets.MOBISCROLL_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check secrets
+        run: |
+          if [ -z "$MOBISCROLL_TOKEN" ]; then
+            if [ "${{ github.actor }}" = "dependabot[bot]" ]; then
+              echo "::error::Dependabot 用の Secrets に MOBISCROLL_TOKEN が登録されていません（Settings → Secrets and variables → Dependabot）"
+            else
+              echo "::error::Secrets に MOBISCROLL_TOKEN が登録されていません（Settings → Secrets and variables → Actions）"
+            fi
+            exit 1
+          fi
+      # 以下の取得手順は deploy（main.yml）と同じ。理由は main.yml のコメントを参照。
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Load VITE_* from netlify.toml
+        run: |
+          grep -E '^\s*VITE_[A-Z0-9_]+\s*=\s*"' netlify.toml \
+            | sed -E 's/^\s*(VITE_[A-Z0-9_]+)\s*=\s*"(.*)"\s*$/\1=\2/' >> "$GITHUB_ENV"
+      - name: Refresh integrity for Mobiscroll trial only
+        run: |
+          set -o pipefail
+          url="https://npm.mobiscroll.com/@mobiscroll/react-next-trial/-/react-next-trial-5.34.0.tgz"
+          sum="sha512-$(curl -fsSL -H "Authorization: Bearer ${MOBISCROLL_TOKEN}" "${url}" | openssl dgst -sha512 -binary | base64 -w0)"
+          sed -i -E "/^  '@mobiscroll\/react-next-trial@5\.34\.0':\$/{n;s#integrity: [^}]*#integrity: ${sum}#}" pnpm-lock.yaml
+          grep -qF "integrity: ${sum}}" pnpm-lock.yaml
+      - name: Configure Mobiscroll auth (user-level ~/.npmrc)
+        run: pnpm config set "//npm.mobiscroll.com/:_authToken" "${MOBISCROLL_TOKEN}"
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Test
+        run: pnpm test
+      - name: Build (型チェック + ビルド)
+        run: pnpm build
