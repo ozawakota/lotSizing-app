@@ -63,44 +63,54 @@ describe('OrderFlow', () => {
     }
   });
 
-  it('取引量・割合と優勢ラベルを表示する', async () => {
+  // ペアのカード（li）。詳細（取引量・前回比・最大など）はカードを開くと出る。
+  const cardOf = (pair: string) => screen.getByText(pair).closest('li') as HTMLElement;
+  const openCard = async (pair: string) => {
+    fireEvent.click(screen.getByRole('button', { name: `${pair} の詳細を開く` }));
+    await waitFor(() => expect(screen.getByRole('button', { name: `${pair} の詳細を閉じる` })).toBeTruthy());
+  };
+
+  it('個人の優勢と割合を常時表示し、取引量はカードを開くと表示する', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
     render(<OrderFlow />);
 
     await waitFor(() => expect(screen.getByText('USD/JPY')).toBeTruthy());
-    expect(screen.getByText('1,200')).toBeTruthy(); // longVolume
-    expect(screen.getByText('800')).toBeTruthy(); // shortVolume
-    expect(screen.getAllByText('買い').length).toBeGreaterThan(0); // 優勢ラベル
-    expect(screen.getAllByText('売り').length).toBeGreaterThan(0);
+    expect(cardOf('USD/JPY').textContent).toContain('個人買い 60%');
+    expect(cardOf('EUR/JPY').textContent).toContain('個人売り 70%');
+    expect(cardOf('USD/JPY').textContent).not.toContain('1,200');
+    await openCard('USD/JPY');
+    expect(cardOf('USD/JPY').textContent).toContain('買い量1,200');
+    expect(cardOf('USD/JPY').textContent).toContain('売り量800');
   });
 
-  it('前回比の積み増し/巻き戻しを符号付きで表示する', async () => {
+  it('前回比の建玉の増減を表示し、開くと符号付きの数量を表示する', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
     render(<OrderFlow />);
 
     await waitFor(() => expect(screen.getByText('USD/JPY')).toBeTruthy());
-    // 増=積み増し（新規優勢）、符号付き +200
-    expect(screen.getByText('積み増し')).toBeTruthy();
-    expect(screen.getByText('+200')).toBeTruthy();
-    // 減=巻き戻し（決済優勢）、符号付き −250（全角マイナス）
-    expect(screen.getByText('巻き戻し')).toBeTruthy();
-    expect(screen.getByText('−250')).toBeTruthy();
+    // 増=積み増し（新規優勢）、減=巻き戻し（決済優勢）
+    expect(cardOf('USD/JPY').textContent).toContain('前回から建玉 増');
+    expect(cardOf('EUR/JPY').textContent).toContain('前回から建玉 減');
+    await openCard('USD/JPY');
+    await openCard('EUR/JPY');
+    expect(cardOf('USD/JPY').textContent).toContain('前回比（合計）+200');
+    expect(cardOf('EUR/JPY').textContent).toContain('前回比（合計）−250'); // 全角マイナス
   });
 
-  it('投機筋（CFTC COT）の方向・強さ・前週比・リテール対比と報告日（週次）を表示する', async () => {
+  it('大口（CFTC COT）の方向・強さ・前週比・個人との逆行と報告日（週次）を表示する', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
     render(<OrderFlow />);
 
     await waitFor(() => expect(screen.getByText('USD/JPY')).toBeTruthy());
-    expect(screen.getAllByText('投機筋').length).toBeGreaterThan(0); // サブブロック見出し
-    // USD/JPY: cot net=-0.5(sell/中), deltaNet=-0.2 → 売り越しを強化。retail=buy → 逆行
-    expect(screen.getByText('売り越し・中')).toBeTruthy();
-    expect(screen.getByText('売り越しを強化')).toBeTruthy();
-    expect(screen.getByText('リテール(買い)と逆行')).toBeTruthy();
-    // EUR/JPY: cot net=0.3(buy/弱), retail=sell → 逆行
-    expect(screen.getByText('買い越し・弱')).toBeTruthy();
-    expect(screen.getByText('リテール(売り)と逆行')).toBeTruthy();
-    expect(screen.getByText('投機筋 10/06時点（週次）')).toBeTruthy(); // 報告日チップ
+    // USD/JPY: cot net=-0.5(sell/中), deltaNet=-0.2 → 売り越しが強まる。個人=買い → 逆行
+    expect(cardOf('USD/JPY').textContent).toContain('大口売り越し・中強まる');
+    expect(cardOf('USD/JPY').textContent).toContain('個人と大口が逆');
+    // EUR/JPY: cot net=0.3(buy/弱), 個人=売り → 逆行
+    expect(cardOf('EUR/JPY').textContent).toContain('大口買い越し・弱');
+    expect(cardOf('EUR/JPY').textContent).toContain('個人と大口が逆');
+    await openCard('USD/JPY');
+    expect(cardOf('USD/JPY').textContent).toContain('大口のネット-0.50（前週比 -0.20）');
+    expect(document.body.textContent).toContain('10/06時点'); // 報告日（週次）
   });
 
   it('「見方」ボタンから説明モーダルを開ける', async () => {
@@ -114,26 +124,25 @@ describe('OrderFlow', () => {
     await waitFor(() => expect(screen.getByText('表示の見方')).toBeTruthy());
   });
 
-  it('最大取引量ピークはヘッダー常時表示、レートはアコーディオンで開閉する', async () => {
+  it('記録上の最大取引量と日時・レートはカードを開くと表示する', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
     render(<OrderFlow />);
 
     await waitFor(() => expect(screen.getByText('USD/JPY')).toBeTruthy());
-    // ヘッダー（最大値）は常時表示、詳細（レート）は初期状態で非表示。
-    expect(screen.getByText('最大 2,500')).toBeTruthy();
-    expect(screen.queryByText('157.84')).toBeNull();
-    // トグルを開くとレートが表示される。
-    fireEvent.click(screen.getByRole('button', { name: 'USD/JPY の最大取引量の詳細' }));
-    await waitFor(() => expect(screen.getByText('157.84')).toBeTruthy());
+    expect(cardOf('USD/JPY').textContent).not.toContain('157.84');
+    await openCard('USD/JPY');
+    expect(cardOf('USD/JPY').textContent).toContain('記録上の最大2,500');
+    expect(cardOf('USD/JPY').textContent).toContain('157.84');
   });
 
-  it('データが無いペアは — を表示する', async () => {
+  it('データが無いペアは「データを取得できませんでした」を表示する', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
     render(<OrderFlow />);
 
-    // GBP/JPY などは欠損 → —
+    // GBP/JPY などは欠損
     await waitFor(() => expect(screen.getByText('GBP/JPY')).toBeTruthy());
-    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(5);
+    expect(cardOf('GBP/JPY').textContent).toContain('データを取得できませんでした');
+    expect(screen.getAllByText('データを取得できませんでした').length).toBeGreaterThanOrEqual(5);
   });
 
   it('取得失敗時はエラーを表示する', async () => {
