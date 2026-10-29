@@ -1,0 +1,72 @@
+# Dependabot: 依存パッケージと GitHub Actions の更新 PR を毎週自動で作る。
+# - 毎週月曜 9:00（日本時間）に確認。マイナー/パッチ更新はディレクトリごとに1つの PR にまとめ、メジャー更新は個別の PR
+# - ルート（pnpm）は Mobiscroll の非公開レジストリを使うため、トークンを Dependabot 用の Secrets から読む:
+#   Settings → Secrets and variables → Dependabot に MOBISCROLL_TOKEN を登録すること（Actions 用とは別枠）
+# - @mobiscroll/react はトライアル版のエイリアス（npm:@mobiscroll/react-next-trial）で、CI がチェックサムを
+#   この版に合わせて差し替えているため、自動更新の対象外にする（上げるときは手動で）
+# - Python（backend / infra/sync）の requirements.txt は版を固定していないため対象外
+version: 2
+
+registries:
+  mobiscroll:
+    type: npm-registry
+    url: https://npm.mobiscroll.com
+    token: ${{secrets.MOBISCROLL_TOKEN}}
+
+updates:
+  # フロントエンド（ルート・pnpm）
+  - package-ecosystem: npm
+    directory: /
+    registries:
+      - mobiscroll
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    ignore:
+      - dependency-name: "@mobiscroll/react"
+    groups:
+      frontend-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Cloudflare Workers・edge-server（それぞれ独立した package.json）
+  - package-ecosystem: npm
+    directories:
+      - /worker
+      - /alert-worker
+      - /fund-worker
+      - /edge-server
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      workers-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions（actions/checkout など）
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns:
+          - "*"
