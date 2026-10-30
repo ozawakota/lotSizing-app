@@ -1,0 +1,26 @@
+# 自動売買ボット（infra/autotrade）を Wine 上の Windows 版 Python で常駐する。
+# 配置: /etc/systemd/system/mt5-autotrade.service
+# ※ mt5.service（MT5 端末）が動いていて、デモ口座にログイン済みであること。
+# ※ /opt/autotrade/config.json を用意してから有効化（enable --now mt5-autotrade.service）。
+# ※ MT5 のログイン情報を Python から渡す場合は /etc/mt5-autotrade.env（権限600）に MT5_LOGIN / MT5_PASSWORD / MT5_SERVER。
+[Unit]
+Description=Lotsizing auto-trade bot (MetaTrader5 Python on Wine)
+After=mt5.service
+Requires=mt5.service
+
+[Service]
+User=ubuntu
+Environment=DISPLAY=:99
+Environment=WINEPREFIX=/home/ubuntu/.wine
+Environment=WINEDEBUG=-all
+Environment=PYTHONIOENCODING=utf-8
+EnvironmentFile=-/etc/mt5-autotrade.env
+WorkingDirectory=/opt/lotsizing-app/infra/autotrade
+# 端末の起動を待ってから接続する
+ExecStartPre=/bin/sleep 30
+ExecStart=/usr/bin/wine "C:\\users\\ubuntu\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" main.py --config Z:/opt/autotrade/config.json --loop
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

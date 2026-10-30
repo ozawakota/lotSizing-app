@@ -85,6 +85,12 @@ python3 sync.py --dir /path/to/mt5sync --once
   - 本番 Turso への実疎通（トークンが必要。SQL は SQLite 互換のためローカルで論理検証済み）。
   - OCI 上の Wine/MT5 稼働（サブプロジェクト②で扱う）。
 
+## 自動売買（autotrade）
+
+`infra/autotrade/` は、TF分析の「入りどき」判定（Worker の `/mtf`）を使って MT5 の**デモ口座**に自動発注する
+Python ボット（Wine 上の Windows 版 Python + `MetaTrader5`）。同期 EA（読み取り専用）とは別に動く。
+手順は `infra/autotrade/README.md`。
+
 ## 後続サブプロジェクト
 
 - **②OCI プロビジョニング**: Terraform/cloud-init で Always Free インスタンス＋Wine＋MT5＋Python 環境を構築。
