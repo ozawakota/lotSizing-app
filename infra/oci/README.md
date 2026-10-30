@@ -92,3 +92,7 @@ turso db shell mt5-sync "SELECT COUNT(*) FROM deals;"
 - Wine で MT5 が起動しない: `journalctl -u mt5.service`、`WINEDEBUG=war+all wine .../terminal64.exe` で切り分け。`winetricks corefonts vcrun2019` を追加。
 - メモリ逼迫: `free -h` でスワップ使用を確認。チャート・インジケータを最小化。
 - 最新 Wine が必要な場合: WineHQ リポジトリ（`dpkg --add-architecture i386` 済）から `winehq-stable` を導入。
+
+## 自動売買ボット（任意）
+MT5 の導入・デモ口座のログインが済んだら、`bash setup-python-mt5.sh` で Wine に Windows 版 Python と
+`MetaTrader5` を入れ、`systemd/mt5-autotrade.service` で常駐させる。詳細は `infra/autotrade/README.md`。

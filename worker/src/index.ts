@@ -41,6 +41,7 @@ import { buildSrZones, type LevelSource, type SrZone } from '../../src/lib/srZon
 import { PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
 // エントリーサイン（押し目/戻り/反転警戒）の純粋ロジック。
 import { classifyEntry, computeMaLines, computeMaSet, type MaLines, type MaSet } from '../../src/lib/entrySignal';
+import { assessEntryTiming, type EntryTiming } from '../../src/lib/entryTiming';
 // TF分析カードのローソク足パターン読み（質・場所・確定/否定）。フロントと共有。
 // 4時間足の出来高インジケーター(/volume)。フロントと共有。
 import {
@@ -1010,6 +1011,7 @@ interface MtfTf {
   forming: OhlcCandle | null; // 形成中の足（チャートの右端に薄く描く）
   ma: MaSet; // 確定足の終値から求めた 21SMA・75EMA・200EMA（本数不足は null）。入りどき判定に使う
   maLines: MaLines; // チャートに描く移動平均の線（bars と同じ長さ・古い順。本数不足の位置は null）
+  timing: EntryTiming | null; // 入りどき（高値掴み・安値売りの回避）。方向が無い（レンジ等）・足不足は null。自動売買（infra/autotrade）が使う
 }
 interface MtfPayload {
   instrument: string;
@@ -1147,6 +1149,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       forming: tfForming[i] ?? null,
       ma,
       maLines: computeMaLines((tfOhlc[i] ?? []).map((b) => b.close), Math.min(CHART_BARS, (tfOhlc[i] ?? []).length)),
+      timing: null, // 下の2パス目で算出（RR の損切り・目標が必要なため）
     });
   }
 
@@ -1222,6 +1225,19 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
     );
     // 有効なローソク足パターン（確定・ライン上・質が高い）で補正: 同じ向き=裏付け / 逆向き=見送り。
     t.rr = applyPatternToRr(t.rr, pickValidPattern(t.candlePatterns));
+    // 入りどき（TF分析の画面と同じ判定）。自動売買はこれを見て、成行・指値・見送りを決める。
+    t.timing = assessEntryTiming({
+      direction,
+      price: currentRate,
+      instrument,
+      bars: t.bars,
+      dow: t.dow,
+      zones: t.zones,
+      rsi: t.rsi,
+      stochK: t.stoch?.k ?? null,
+      rr: t.rr ? { stop: t.rr.stop, target: t.rr.target, spreadPips: t.rr.spreadPips } : null,
+      ma: t.ma,
+    });
     if (t.rr?.qualifies && (!rrOpportunity || t.rr.rr > rrOpportunity.rr)) {
       rrOpportunity = { ...t.rr, tf: t.tf };
     }

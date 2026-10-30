@@ -1,0 +1,19 @@
+{
+  "pairs": [
+    { "instrument": "USD_JPY", "symbol": "USDJPY", "timeframe": "1h" }
+  ],
+  "risk_pct": 2.0,
+  "max_positions": 3,
+  "daily_max_loss_pct": 6.0,
+  "max_spread_pips": 3.0,
+  "use_limit_orders": true,
+  "limit_expiry_hours": 4,
+  "min_rr": 2.0,
+  "cooldown_hours": 4,
+  "poll_seconds": 300,
+  "magic": 20261030,
+  "deviation_points": 20,
+  "dry_run": true,
+  "demo_only": true,
+  "state_path": "Z:/opt/autotrade/autotrade_state.json"
+}
