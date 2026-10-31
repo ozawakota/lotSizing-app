@@ -32,15 +32,14 @@ import { filterEconEvents, formatEconDigest, parseRssItems, type EconEvent, type
 // 五十日・月末・季節性などのアノマリー判定（フロントの為替ニュースタブと共有）。
 import { detectAnomalies, formatAnomalyDigest, type Anomaly } from '../../src/lib/anomaly';
 // ダウ理論の判定（TF分析・好機ボード・RR好機通知の RR の方向に使う）と、TF分析の抵抗帯。
-import { analyzeDow, dowDirection, dowSummary, fibLevels, type DowAnalysis } from '../../src/lib/dow';
+import { analyzeDow, dowDirection, fibLevels, type DowAnalysis } from '../../src/lib/dow';
 // エッジページ（RR好機ボード）の損切り・目標の帯合わせと総合スコア。
-import { NEAR_RR_MIN, edgeScore, fitSetupToZones } from '../../src/lib/edgeScore';
-import { analyzeSmc, smcTags } from '../../src/lib/smc';
+import { cardsFromMtf } from '../../src/lib/rankingCards';
 import { buildSrZones, type LevelSource, type SrZone } from '../../src/lib/srZones';
 // ローソク足パターン（ピンバー/包み足）検出をエッジ分析のロジックから共有流用。
-import { PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
+import { type OhlcCandle } from '../../src/lib/edge';
 // エントリーサイン（押し目/戻り/反転警戒）の純粋ロジック。
-import { classifyEntry, computeMaLines, computeMaSet, type MaLines, type MaSet } from '../../src/lib/entrySignal';
+import { computeMaLines, computeMaSet, type MaLines, type MaSet } from '../../src/lib/entrySignal';
 import { assessEntryTiming, type EntryTiming } from '../../src/lib/entryTiming';
 // TF分析カードのローソク足パターン読み（質・場所・確定/否定）。フロントと共有。
 // 4時間足の出来高インジケーター(/volume)。フロントと共有。
@@ -64,7 +63,7 @@ import {
   type PatternRead,
 } from '../../src/lib/candleRead';
 // RR好機ボード（エッジページ）の型・整形をフロントと共有。
-import { RANKING_PAIRS, RANKING_TIMEFRAMES, sortCards, type RrBoardSnapshot, type RrCard } from '../../src/lib/ranking';
+import { RANKING_PAIRS, sortCards, type RrBoardSnapshot, type RrCard } from '../../src/lib/ranking';
 import {
   SIGNAL_PAIRS,
   buildJevRequest,
@@ -111,7 +110,6 @@ import {
   computeStochastic,
   computeRsi,
   scoreRoleReversal,
-  scanStructuralRrAll,
   VOLUME_SYMBOL,
   type BreakoutProb,
   type RoleReversal,
@@ -1034,7 +1032,10 @@ const VOLUME_ANCHOR: Record<SlTimeframe, { agoMs: number; windowMs: number }> = 
   '4h': { agoMs: 14 * DAY_MS, windowMs: 2 * DAY_MS },
 };
 
-const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
+// opts.light: RR好機ボード用。セッション予測と AI の解説を省く（Jev/Workers AI の呼び出しを節約）。
+// opts.skipPa: Jev が使用上限などで止まっている間は、プライスアクション分類（Jev→Workers AI）を呼ばず、
+//   ブレイク確率なし（breakout=null）で計算する。RR の方向はダウ理論なので、確率条件なしで判定される。
+const buildMtf = async (env: Env, instrument: string, opts: { light?: boolean; skipPa?: boolean } = {}): Promise<MtfPayload> => {
   const symbol = YAHOO_SYMBOL[instrument];
   const timeframes: MtfTf[] = [];
   let currentRate = 0;
@@ -1120,12 +1121,14 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
     const valid = pickValidPattern(candlePatterns);
     const candlePattern = valid ? { key: valid.key, label: valid.label, barsAgo: valid.barsAgo } : null;
 
-    const { pa, breakout, paEngine: eng } = await classifyPa(env, structure, recentCloses, {
-      sessionStatus,
-      volumeLevel,
-      stoch,
-      candlePattern: valid ? { label: valid.label, barsAgo: valid.barsAgo, detail: patternDetail(valid) } : null,
-    });
+    const { pa, breakout, paEngine: eng } = opts.skipPa
+      ? { pa: { pa: 'range' as const, paPct: 0, confidence: 0 }, breakout: null, paEngine: 'none' }
+      : await classifyPa(env, structure, recentCloses, {
+          sessionStatus,
+          volumeLevel,
+          stoch,
+          candlePattern: valid ? { label: valid.label, barsAgo: valid.barsAgo, detail: patternDetail(valid) } : null,
+        });
     paEngine = eng;
     timeframes.push({
       tf,
@@ -1253,7 +1256,9 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       return `${t.tf}:${d ? (d.direction === 'long' ? '上' : '下') : '継続'}`;
     })
     .join(' ');
-  const sessionOutlook = await buildSessionOutlook(env, {
+  const sessionOutlook = opts.light
+    ? null
+    : await buildSessionOutlook(env, {
     trend: top.trend,
     currentRate,
     swingHigh: top.swingHigh,
@@ -1265,7 +1270,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
   });
 
   let comment = '';
-  try {
+  if (!opts.light) try {
     const table = timeframes
       .map((t) => {
         const bk = t.breakout ? ` ブレイク上${t.breakout.up}%/下${t.breakout.down}%/継続${t.breakout.range}%` : '';
@@ -1348,15 +1353,18 @@ const handleMtf = async (env: Env, url: URL): Promise<Response> => {
 };
 
 // ---------------------------------------------------------------------------
-// /ranking: 通貨優位性ランキング（AI非依存・cron で KV キャッシュ）
+// /ranking: RR好機ボード（cron で KV キャッシュ）
 // ---------------------------------------------------------------------------
-// RR好機ボード（エッジページ）。各ペア×TF で構造RR(≥RR_MIN)が成立した好機を1カードにする。
-// 信用度は Jev のブレイク方向確率。Jev が使用上限/失敗なら一定時間 Jev を止め、roleReversal(純粋)で代替。
+// RR好機ボード（エッジページ）。各ペアの TF分析（/mtf と同じ buildMtf）から、RR が出た時間足を1カードにする
+// （cardsFromMtf）。RR・損切り・目標・入りどき・逆指値の目安は TF分析ページと同じ。
+// /mtf のキャッシュが新しければそれを使い、古ければ軽量版（セッション予測・AI 解説なし）で作り直す。
+// Jev が使用上限/失敗（プライスアクション分類が Workers AI に落ちた）なら一定時間 Jev を止め、ブレイク確率なしで計算する。
 // 1リクエスト50サブリクエスト上限を超えないよう、cron でペアをローテーション構築して KV に蓄積する。
 const KV_RANKING = 'ranking';
-const RANKING_GROUP_SIZE = 4; // 1 tick で構築するペア数（4ペア×4TF=16取得 + 好機のみ Jev ≤ 32 サブリクエスト）
+const RANKING_GROUP_SIZE = 2; // 1 tick で構築するペア数（1ペア ≒ 足4＋先物出来高≤4＋Jev 4 = 12 サブリクエスト）
 const RANKING_TICK_MS = 5 * 60 * 1000; // cron 間隔（ローテーションの単位）
 const RANKING_JEV_COOLDOWN_MS = 30 * 60 * 1000; // Jev 使用上限/失敗時に Jev を止める時間
+const RANKING_MTF_MAX_AGE_MS = 15 * 60 * 1000; // これより新しい /mtf のキャッシュはそのまま使う
 
 interface RankingKv {
   pairs: Record<string, RrCard[]>; // instrument -> 好機カード
@@ -1365,185 +1373,23 @@ interface RankingKv {
   failed: string[];
 }
 
-// Jev にブレイク確率だけを問う（classifyPa と違い Workers AI にはフォールバックしない）。
-// 非200/失敗/キー無しは limited=true を返し、呼び出し側で一定時間 Jev を止める（＝使用上限対応）。
-const jevBreakout = async (
-  env: Env,
-  structure: SlStructure,
-  recentCloses: number[],
-  ctx: PaContext,
-): Promise<{ breakout: BreakoutProb | null; limited: boolean }> => {
-  if (!env.TYPESAFE_API_KEY) return { breakout: null, limited: true };
-  try {
-    const body = { model: 'jev-latest', ...buildPaJevRequest(structure, recentCloses, ctx) };
-    const res = await fetch(JEV_ENDPOINT, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${env.TYPESAFE_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      console.error(`/ranking Jev HTTP ${res.status}（以降 Jev を一時停止）: ${(await res.text()).slice(0, 120)}`);
-      return { breakout: null, limited: true };
-    }
-    const data = (await res.json()) as {
-      answers?: Record<string, { choice?: string; probabilities?: Record<string, number>; confidence?: number }>;
-    };
-    return { breakout: parseBreakoutJev(data.answers), limited: false };
-  } catch (e) {
-    console.error('/ranking Jev 失敗（以降 Jev を一時停止）:', e);
-    return { breakout: null, limited: true };
-  }
-};
-
-// 1ペアの好機カードを作る。構造RR（RR≥NEAR_RR_MIN）が成立したTFだけ。
-// 損切り・目標を抵抗帯に合わせて RR を計算し直し、RR≥RR_MIN=好機・NEAR_RR_MIN≤RR<RR_MIN=準好機に分ける。
-// 総合スコア（edgeScore）は ダウ理論・上位足の向き・RR・損切りの強さ・帯との位置・パターン・タイミング・
-// SMC（スイープ・オーダーブロック・FVG・OTE など）・オシレーター・AI（Jev のブレイク方向確率）の合算。Jev は jevState.paused の間は呼ばず、上限/失敗したら止める。
-// 信用度（confidence）は旧表示との互換のため Jev→roleReversal の順で従来どおり残す。
+// 1ペアの TF分析（/mtf のキャッシュ or 軽量版で作り直し）→ 好機カード。
 const buildPairCards = async (env: Env, instrument: string, jevState: { paused: boolean }): Promise<RrCard[]> => {
-  const symbol = YAHOO_SYMBOL[instrument];
-  const perTf: {
-    tf: SlTimeframe;
-    candles: Candle[];
-    ohlc: OhlcCandle[];
-    price: number;
-    structure: SlStructure;
-    recentCloses: number[];
-    stoch: StochReading | null;
-    dow: DowAnalysis | null;
-    rsi: number | null;
-  }[] = [];
-  for (const tf of RANKING_TIMEFRAMES) {
-    // 4h は EMA200 に 200 本必要なため取得レンジを延ばす（取得回数は不変）。
-    const { candles, currentRate } = await fetchYahooCandles(symbol, YAHOO_INTERVAL[tf], tf === '4h' ? '3mo' : '1mo');
-    const ohlc: OhlcCandle[] = candles
-      .filter((c) => typeof c.open === 'number')
-      .map((c) => ({ open: c.open as number, high: c.high, low: c.low, close: c.close, t: c.t }));
-    perTf.push({
-      tf,
-      candles,
-      ohlc,
-      price: currentRate,
-      structure: computeStructure(candles, currentRate),
-      recentCloses: candles.slice(-12).map((c) => c.close),
-      stoch: computeStochastic(candles),
-      dow: analyzeDow(candles.slice(0, -1)), // 確定足のスイング
-      rsi: computeRsi(candles),
-    });
-  }
-  // 構造的RR（短い足→長い足・スプレッド込みの実質RR）。方向は TF分析ページ・RR好機通知と同じくダウ理論
-  // （上昇=ロング・下降=ショート、レンジ・転換の兆しは対象外）。準好機まで拾うため下限は NEAR_RR_MIN。
-  const setups = scanStructuralRrAll(
-    perTf.map((p) => ({ tf: p.tf, structure: p.structure, candles: p.candles, direction: dowDirection(p.dow) })),
-    instrument,
-    NEAR_RR_MIN,
-    typicalSpreadPips(instrument),
-  );
-  const cards: RrCard[] = [];
-  for (const raw of setups) {
-    const i = perTf.findIndex((x) => x.tf === raw.tf);
-    const p = perTf[i];
-    const higher = perTf.slice(i + 1);
-
-    // 抵抗帯（★2以上を近い順に全部）。根拠は上位足の高安・押し安値/戻り高値・フィボナッチ・オシレーター。
-    const zoneExtra: LevelSource[] = [
-      ...higher.flatMap((h) => [
-        { price: h.structure.swingHigh, kind: 'higher_tf' as const, label: `${h.tf}の高値` },
-        { price: h.structure.swingLow, kind: 'higher_tf' as const, label: `${h.tf}の安値` },
-      ]),
-      ...(p.dow?.keyLevel
-        ? [{ price: p.dow.keyLevel.price, kind: 'dow' as const, label: p.dow.keyLevel.kind === 'pullback_low' ? '押し安値' : '戻り高値' }]
-        : []),
-      ...(p.dow ? fibLevels(p.dow).map((f) => ({ price: f.price, kind: 'fib' as const, label: f.label })) : []),
-    ];
-    const z = buildSrZones(p.candles.slice(0, -1), p.price, {
-      instrument,
-      extra: zoneExtra,
-      oscillator: { rsi: p.rsi, stochK: p.stoch?.k ?? null },
-      maxPerSide: 6,
-      keepAll: true,
-    });
-    const fit = fitSetupToZones(raw, z, z.atr, instrument);
-    const setup = fit.setup;
-    if (setup.rr < NEAR_RR_MIN) continue; // 途中に強い帯があって RR が足りなくなった
-
-    // AI（Jev）のブレイク方向確率。停止中/失敗なら構造（roleReversal）を旧表示用の信用度に使う。
-    let confidence: number | null = null;
-    let confidenceSource: 'jev' | 'structure' | null = null;
-    let jevProb: number | null = null;
-    if (!jevState.paused) {
-      const { breakout, limited } = await jevBreakout(env, p.structure, p.recentCloses, { stoch: p.stoch });
-      if (limited) jevState.paused = true;
-      else if (breakout) {
-        jevProb = setup.direction === 'long' ? breakout.up : breakout.down;
-        confidence = Math.round(jevProb);
-        confidenceSource = 'jev';
-      }
+  let payload: MtfPayload | null = null;
+  const cached = await env.STRENGTH_KV.get(`${KV_MTF_PREFIX}${instrument}`);
+  if (cached) {
+    try {
+      const p = JSON.parse(cached) as MtfPayload;
+      if (Date.now() - p.generatedAt < RANKING_MTF_MAX_AGE_MS && p.timeframes.every((t) => 'timing' in t)) payload = p;
+    } catch {
+      // 作り直す
     }
-    if (confidence == null) {
-      const higherLevels = higher.flatMap((h) => [h.structure.swingHigh, h.structure.swingLow]);
-      const rrv = scoreRoleReversal(p.candles, p.structure, { instrument, breakout: null, stoch: p.stoch, volumeLevel: null, higherLevels });
-      if (rrv) {
-        confidence = rrv.score;
-        confidenceSource = 'structure';
-      }
-    }
-    // エントリータイミング（押し目/戻り/反転警戒）。MA(SMA21/EMA75/EMA200)+ストキャス+有効パターンで判定。
-    const levels = higher.flatMap((h) => [
-      { price: h.structure.swingHigh, label: `${h.tf}の高値` },
-      { price: h.structure.swingLow, label: `${h.tf}の安値` },
-    ]);
-    const valid = pickValidPattern(readCandlePatterns(p.ohlc.slice(0, -1), { instrument, windowBars: PATTERN_WINDOW_BARS[raw.tf], levels }));
-    const entrySignal = classifyEntry({
-      closes: p.candles.map((c) => c.close),
-      price: p.price,
-      direction: setup.direction,
-      stoch: p.stoch,
-      patternDir: valid ? PATTERN_DIRECTION[valid.key] : 0,
-    });
-    // SMC（流動性スイープ・オーダーブロック・FVG・プレミアム/ディスカウント・ディスプレイスメント）。確定足だけで読む。
-    const smc = analyzeSmc(p.ohlc.slice(0, -1), p.price, setup.direction, p.dow);
-    const paTags = smcTags(smc, setup.direction, instrument.startsWith('XAU') ? 2 : instrument.endsWith('JPY') ? 3 : 5);
-    const { score, items } = edgeScore({
-      direction: setup.direction,
-      rr: setup.rr,
-      stopStrength: setup.stopStrength ?? null,
-      dow: p.dow,
-      higherDows: higher.map((h) => ({ tf: h.tf, dow: h.dow })),
-      zones: z,
-      atr: z.atr,
-      instrument,
-      pattern: valid ? { label: valid.label, dir: PATTERN_DIRECTION[valid.key] } : null,
-      entryKind: entrySignal.kind,
-      rsi: p.rsi,
-      stochK: p.stoch?.k ?? null,
-      jevProb,
-      paTags,
-    });
-    cards.push({
-      instrument,
-      tf: raw.tf,
-      direction: setup.direction,
-      entry: setup.entry,
-      stop: setup.stop,
-      target: setup.target,
-      rr: setup.rr,
-      riskPips: setup.riskPips,
-      rewardPips: setup.rewardPips,
-      spreadPips: setup.spreadPips,
-      confidence,
-      confidenceSource,
-      entrySignal,
-      tier: setup.rr >= RR_MIN ? 'prime' : 'near',
-      score,
-      scoreItems: items,
-      dowLabel: p.dow ? dowSummary(p.dow) : undefined,
-      stopNote: fit.stopNote,
-      targetNote: fit.targetNote,
-      paTags,
-    });
   }
-  return cards;
+  if (!payload) {
+    payload = await buildMtf(env, instrument, { light: true, skipPa: jevState.paused });
+    if (payload.paEngine === 'workers-ai') jevState.paused = true; // Jev が失敗して Workers AI に落ちた
+  }
+  return cardsFromMtf(payload);
 };
 
 // cron 用: ローテーションで RANKING_GROUP_SIZE ペアずつ構築し、KV にマージする（他ペアは保持）。

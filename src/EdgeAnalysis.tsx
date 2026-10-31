@@ -1,8 +1,9 @@
-// RR好機ボード。各通貨ペア×時間足（15分/30分/1時間）で構造RRが成立した好機を、総合スコアの高い順に
-// 1列カードで一覧表示する。RR≥1:2.5=好機・1:2.0〜2.5=準好機（別枠・隠せる）。ペア・方向・時間足で絞り込める。
-// カードは要約（売買・ペア・RR・総合スコア・リスク:リワードの棒・タイミング・有利/不利の数）を常に見せ、
-// タップで詳細（ダウ・帯での調整・プライスアクション・スコアの内訳）を開く。
-// 旧キャッシュ（総合スコアが無いカード）は従来の信用度を表示する。
+// RR好機ボード。各通貨ペア×時間足で RR が出た好機を、総合スコアの高い順に1列カードで一覧表示する。
+// RR・損切り・目標・入りどきは TF分析ページと同じ（Worker が TF分析の結果からカードを作る。rankingCards.ts）。
+// RR 成立=好機・1:2.0 以上で不成立=準好機（別枠・隠せる）。ペア・方向・時間足で絞り込める。
+// カードは要約（売買・ペア・RR・総合スコア・リスク:リワードの棒・入りどき・有利/不利の数）を常に見せ、
+// タップで詳細（ローソク足とエントリー/損切り/目標のチャート・ダウ・損切りの根拠・指値/逆指値の目安・AI・スコアの内訳）を開く。
+// 旧キャッシュ（総合スコアが無いカード・タイミングが旧方式のカード）は従来の表示にする。
 // currency-strength worker(/ranking, VITE_RANKING_URL) が算出・KVキャッシュ。整形は src/lib/ranking.ts を共有。
 // ※投資助言ではなく、値動きや利益を保証するものではない参考情報。
 import { useEffect, useState } from 'react';
@@ -11,6 +12,8 @@ import type { EntryKind } from '@/lib/entrySignal';
 import type { SlTimeframe } from '@/lib/stoploss';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 import type { ScoreItem } from '@/lib/edgeScore';
+import { pipSize } from '@/lib/stoploss';
+import { TradeChart } from '@/components/TradeChart';
 
 const RANKING_URL = import.meta.env.VITE_RANKING_URL as string | undefined;
 
@@ -24,6 +27,13 @@ const ENTRY_STYLE: Record<EntryKind, { cls: string; icon: string }> = {
 const pairLabel = (ins: string) => ins.replace('_', '/');
 const digitsFor = (ins: string) => (ins.startsWith('XAU') ? 2 : ins.endsWith('JPY') ? 3 : 5);
 const SOURCE_LABEL = { jev: 'AI', structure: '構造' } as const;
+// 入りどき（TF分析と同じ判定）のバッジ。
+const TIMING_CHIP = {
+  ok: 'bg-green-100 text-green-700',
+  wait: 'bg-amber-100 text-amber-700',
+  avoid: 'bg-red-100 text-red-700',
+} as const;
+const TIMING_ICON = { ok: '🟢', wait: '🟡', avoid: '🔴' } as const;
 
 // 総合スコアの段階（70以上=強い・50〜69=普通・50未満=弱い）。
 function scoreTier(n: number): { label: string; cls: string } {
@@ -82,7 +92,7 @@ function RrBar({ card, digits }: { card: RrCard; digits: number }) {
 }
 
 // 1好機カード（ペア×TF）。
-//   要約（常に表示）: 売買・ペア・時間足・RR ／ 総合スコア → リスク:リワードの棒と価格 → タイミング・有利/不利の数・帯での調整
+//   要約（常に表示）: 売買・ペア・時間足・RR ／ 総合スコア → リスク:リワードの棒と価格 → 入りどき・有利/不利の数
 //   詳細（タップで開く）: ダウの状態・帯での調整内容・スコアの内訳（有利な点 / 不利な点。プライスアクションは PA の印）
 function OpportunityCard({ card }: { card: RrCard }) {
   const [open, setOpen] = useState(false);
@@ -96,8 +106,10 @@ function OpportunityCard({ card }: { card: RrCard }) {
   const paInfo = pa.filter((t) => t.points === 0); // 加減点なしの参考情報（例: 値幅の中間）
   const sumPros = pros.reduce((a, it) => a + it.points, 0);
   const sumCons = cons.reduce((a, it) => a + it.points, 0);
-  const adjusted = !!(card.stopNote || card.targetNote);
-  const hasDetail = items.length > 0 || !!card.dowLabel || adjusted || pa.length > 0;
+  const adjusted = !!(card.stopNote || card.targetNote); // 旧キャッシュのみ
+  const orders = card.timing && (card.timing.limitPrice != null || card.timing.stopEntryPrice != null);
+  const hasChart = !!card.bars && card.bars.length >= 2;
+  const hasDetail = items.length > 0 || !!card.dowLabel || adjusted || pa.length > 0 || !!orders || hasChart;
   const body = (
     <>
       {/* 見出し: 売買・ペア・時間足・RR ／ スコア */}
@@ -122,7 +134,13 @@ function OpportunityCard({ card }: { card: RrCard }) {
 
       {/* ひと目で分かる要約 */}
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
-        {card.entrySignal && (
+        {card.timing && (
+          <span className={`rounded px-1.5 py-0.5 font-bold ${TIMING_CHIP[card.timing.verdict]}`}>
+            {TIMING_ICON[card.timing.verdict]}
+            {card.timing.label}
+          </span>
+        )}
+        {!card.timing && card.entrySignal && (
           <span className={`rounded px-1.5 py-0.5 font-bold ${ENTRY_STYLE[card.entrySignal.kind].cls}`}>
             {ENTRY_STYLE[card.entrySignal.kind].icon}
             {card.entrySignal.label}
@@ -157,13 +175,60 @@ function OpportunityCard({ card }: { card: RrCard }) {
 
       {open && hasDetail && (
         <div className="space-y-2.5 border-t border-gray-100 px-3 pb-3 pt-2 text-[11px]">
+          {/* ローソク足とエントリー・損切り・目標（指値/逆指値の目安があれば点線） */}
+          {hasChart && card.bars && (
+            <TradeChart
+              bars={card.bars}
+              forming={card.forming}
+              direction={card.direction}
+              entry={card.entry}
+              stop={card.stop}
+              target={card.target}
+              digits={d}
+              pip={pipSize(card.instrument)}
+              limitPrice={card.timing?.limitPrice ?? null}
+              stopEntryPrice={card.timing?.stopEntryPrice ?? null}
+            />
+          )}
           {/* 状態: ダウ理論・帯での調整 */}
-          {(card.dowLabel || adjusted) && (
+          {(card.dowLabel || adjusted || card.stopReasons?.length || orders || card.jevProb != null) && (
             <dl className="grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-0.5">
               {card.dowLabel && (
                 <>
                   <dt className="font-semibold text-gray-500">ダウ理論</dt>
                   <dd className="text-gray-700">{card.dowLabel}</dd>
+                </>
+              )}
+              {card.stopReasons && card.stopReasons.length > 0 && (
+                <>
+                  <dt className="font-semibold text-gray-500">損切りの根拠</dt>
+                  <dd className="text-gray-700">{card.stopReasons.join('・')}</dd>
+                </>
+              )}
+              {card.timing?.limitPrice != null && (
+                <>
+                  <dt className="font-semibold text-gray-500">指値の目安</dt>
+                  <dd className="text-gray-700">
+                    <span className="font-mono font-semibold">{card.timing.limitPrice.toFixed(d)}</span>
+                    <span className="ml-1 text-[10px] text-gray-400">{long ? 'Buy Limit（押し目買い）' : 'Sell Limit（戻り売り）'}</span>
+                  </dd>
+                </>
+              )}
+              {card.timing?.stopEntryPrice != null && (
+                <>
+                  <dt className="font-semibold text-gray-500">逆指値の目安</dt>
+                  <dd className="text-gray-700">
+                    <span className="font-mono font-semibold">{card.timing.stopEntryPrice.toFixed(d)}</span>
+                    <span className="ml-1 text-[10px] text-gray-400">{long ? 'Buy Stop（上抜けで買い）' : 'Sell Stop（下抜けで売り）'}</span>
+                  </dd>
+                </>
+              )}
+              {card.jevProb != null && (
+                <>
+                  <dt className="font-semibold text-gray-500">AI</dt>
+                  <dd className="text-gray-700">
+                    {long ? '上抜け' : '下抜け'}確率 {Math.round(card.jevProb)}%
+                  </dd>
                 </>
               )}
               {adjusted && (
@@ -462,13 +527,13 @@ export default function EdgeAnalysis() {
                 <span className="font-semibold text-gray-800">方向</span>：ダウ理論で、高値・安値の切り上げは買い、切り下げは売り。レンジや転換の兆しは対象外です。
               </p>
               <p>
-                <span className="font-semibold text-gray-800">損切り・目標</span>：損切りはピボット＋ATR、目標は上位足のスイング。抵抗帯に合わせて、損切りは帯の外へ、目標は途中の★2以上の帯の手前に調整します（「帯で調整済み」）。
+                <span className="font-semibold text-gray-800">損切り・目標</span>：TF分析ページと同じです。損切りは構造的なライン（ピボット＋ATR＋上位足・出来高などの重なり）、目標は上位足のスイング。
               </p>
               <p>
-                <span className="font-semibold text-gray-800">好機・準好機</span>：スプレッド込みの RR が 1:2.5以上なら好機、1:2.0〜2.5 なら準好機です。
+                <span className="font-semibold text-gray-800">好機・準好機</span>：TF分析で RR が成立（スプレッド込み 1:2.5以上・AI のその方向の確率・ローソク足パターンが逆向きでない）なら好機、成立しないが 1:2.0以上なら準好機です。
               </p>
               <p>
-                <span className="font-semibold text-gray-800">総合スコア</span>：50を基準に、ダウ理論・上位足の向き・RR・損切りの強さ・帯との位置・ローソク足パターン・プライスアクション・タイミング・RSI/ストキャス・AI（Jev）を加点/減点し、0〜100に換算します。
+                <span className="font-semibold text-gray-800">総合スコア</span>：50を基準に、トレンド（ダウ理論・上位足の向き）・RR と損切りの強さ・入りどき・ローソク足パターン・プライスアクション（SMC）・AI（Jev）を加点/減点し、0〜100に換算します。同じ材料を二重に数えないよう、帯との位置・値幅の中の位置・RSI/ストキャスは「入りどき」にまとめています。
                 <span className="ml-1 inline-flex gap-1 align-middle">
                   <span className="rounded bg-indigo-600 px-1 text-[10px] text-white">70〜 強い</span>
                   <span className="rounded bg-indigo-50 px-1 text-[10px] text-indigo-700">50〜 普通</span>
@@ -476,7 +541,7 @@ export default function EdgeAnalysis() {
                 </span>
               </p>
               <p>
-                <span className="font-semibold text-gray-800">タイミング</span>：🟢押し目/戻り（入りどき）・🟡様子見・⚠反転警戒。移動平均（SMA21/EMA75/EMA200）・ストキャス・ローソク足で判定します。
+                <span className="font-semibold text-gray-800">入りどき</span>：TF分析ページと同じ判定です。🟢入りどき（成行でよい）・🟡押し目待ち/戻り待ち（指値の目安あり）・🔴高値掴み注意/安値売り注意。詳細に指値・逆指値の目安を出します。
               </p>
               <dl className="space-y-1 border-t border-gray-100 pt-2">
                 {PA_GLOSSARY.map(([term, desc]) => (
