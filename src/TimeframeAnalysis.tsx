@@ -15,7 +15,8 @@ import type {
   SlDirection,
   SlTimeframe,
 } from '@/lib/stoploss';
-import { RR_MIN, pipSize } from '@/lib/stoploss';
+import { RR_MIN, averageTrueRange, pipSize } from '@/lib/stoploss';
+import { stopEntryPlan, zoneBreakOdds, type StopEntryPlan, type ZoneBreakOdds } from '@/lib/zoneBreak';
 import { MARKET_SESSIONS, isSessionOpen } from '@/lib/session';
 import { fetchGoldSpot } from '@/lib/goldSpot';
 import { CONFIRMATION_LABEL, priceActionHeadline, type PatternRead, type PriceActionTone } from '@/lib/candleRead';
@@ -259,7 +260,8 @@ function RrRow({ rr, digits, dow }: { rr: RrSetup | null; digits: number; dow?: 
         </span>
       </span>
       <span className="text-[10px] text-gray-400">
-        損切 {rr.stop.toFixed(digits)} / 目標 {rr.target.toFixed(digits)}
+        損切 {rr.stop.toFixed(digits)}<span className="text-gray-300">（逆指値）</span> / 目標 {rr.target.toFixed(digits)}
+        <span className="text-gray-300">（指値）</span>
       </span>
     </div>
     <StopBasis rr={rr} />
@@ -291,6 +293,38 @@ function tfTiming(tf: MtfTf, instrument: string, currentRate: number): { dir: Sl
     ma: tf.ma,
   });
   return t ? { dir, t } : null;
+}
+
+// 各抵抗帯（支持帯）をブレイクする可能性の目安（帯のはしごと同じ並び）。足・帯が無ければ null。
+function zoneBreaks(tf: MtfTf, currentRate: number, pip: number): { res: ZoneBreakOdds[]; sup: ZoneBreakOdds[] } | null {
+  if (!tf.zones || !tf.bars) return null;
+  const atr = averageTrueRange(tf.bars);
+  const odds = (z: SrZone) =>
+    zoneBreakOdds({ zone: z, price: currentRate, atr, pip, dow: tf.dow, breakout: tf.breakout, rsi: tf.rsi, ma: tf.ma });
+  return { res: tf.zones.res.map(odds), sup: tf.zones.sup.map(odds) };
+}
+
+// ブレイクを狙う逆指値の目安（トレンド方向のすぐ前の帯 = 買いなら R1 / 売りなら S1）。
+function tfStopEntry(
+  tf: MtfTf,
+  dir: SlDirection,
+  currentRate: number,
+  pip: number,
+  breaks: { res: ZoneBreakOdds[]; sup: ZoneBreakOdds[] } | null,
+): StopEntryPlan | null {
+  if (!tf.zones || !tf.bars || !breaks) return null;
+  const long = dir === 'long';
+  const zone = (long ? tf.zones.res : tf.zones.sup)[0];
+  const odds = (long ? breaks.res : breaks.sup)[0];
+  if (!zone || !odds) return null;
+  return stopEntryPlan({
+    direction: dir,
+    price: currentRate,
+    atr: averageTrueRange(tf.bars),
+    pip,
+    ahead: { zone, odds, label: `${long ? 'R1（抵抗帯' : 'S1（支持帯'}★${zone.stars}）` },
+    rr: tf.rr && tf.rr.direction === dir ? { stop: tf.rr.stop, target: tf.rr.target, spreadPips: tf.rr.spreadPips } : null,
+  });
 }
 
 const TIMING_STYLE: Record<TimingVerdict, { chip: string; box: string; icon: string }> = {
@@ -331,17 +365,72 @@ function MaLine({ mas, long, digits }: { mas: EntryTiming['mas']; long: boolean;
 }
 
 // 成行で入ってよいか（入りどき / 押し目待ち・戻り待ち / 高値掴み注意・安値売り注意）＋理由＋指値の目安。
+// 注文の種類（成行・指値・逆指値）。英語の注文名も添えて、MT5 などの発注画面と対応が分かるようにする。
+type OrderKind = 'market' | 'limit' | 'stop';
+const ORDER_STYLE: Record<OrderKind, string> = {
+  market: 'bg-gray-800 text-white',
+  limit: 'bg-green-600 text-white',
+  stop: 'bg-purple-600 text-white',
+};
+function orderName(kind: OrderKind, long: boolean): { ja: string; en: string } {
+  if (kind === 'market') return { ja: '成行', en: long ? 'Buy' : 'Sell' };
+  if (kind === 'limit') return { ja: '指値', en: long ? 'Buy Limit' : 'Sell Limit' };
+  return { ja: '逆指値', en: long ? 'Buy Stop' : 'Sell Stop' };
+}
+function OrderOption({
+  kind,
+  long,
+  price,
+  digits,
+  what,
+  sub,
+  rr,
+  recommended,
+}: {
+  kind: OrderKind;
+  long: boolean;
+  price: number | null; // 成行は null（今の価格）
+  digits: number;
+  what: string; // 例「154.20 まで下がったら買う」
+  sub: string; // 根拠・距離
+  rr: number | null;
+  recommended?: boolean;
+}) {
+  const n = orderName(kind, long);
+  return (
+    <div className={`rounded-md border bg-white/85 px-2 py-1.5 ${recommended ? 'border-gray-300' : 'border-white'}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5">
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${ORDER_STYLE[kind]}`}>{n.ja}</span>
+          <span className="text-[10px] font-semibold text-gray-500">{n.en}</span>
+          {recommended && <span className="text-[10px] font-bold text-orange-600">おすすめ</span>}
+        </span>
+        {price != null && <span className="font-mono text-sm font-bold text-gray-900">{price.toFixed(digits)}</span>}
+      </div>
+      <div className="mt-0.5 text-[11px] text-gray-700">{what}</div>
+      <div className="mt-0.5 flex flex-wrap items-center justify-between gap-x-2 text-[10px] text-gray-500">
+        <span>{sub}</span>
+        {rr != null && <span className={rr >= RR_MIN ? 'font-bold text-orange-600' : ''}>RR 1:{rr.toFixed(1)}</span>}
+      </div>
+    </div>
+  );
+}
+
 const REASONS_SHOWN = 3; // 理由は点数の大きい順に3つまで。残りは「ほか N 件」で開く
 function EntryTimingRow({
   dir,
   t,
   digits,
   showMa = false,
+  stopEntry = null,
+  marketRr = null,
 }: {
   dir: SlDirection;
   t: EntryTiming;
   digits: number;
   showMa?: boolean; // 移動平均の値も出す（チャートが無い RR 好機ポップアップ用）
+  stopEntry?: StopEntryPlan | null; // ブレイクを狙う逆指値の目安
+  marketRr?: number | null; // 成行（今の価格）での RR
 }) {
   const [allReasons, setAllReasons] = useState(false);
   const st = TIMING_STYLE[t.verdict];
@@ -380,27 +469,6 @@ function EntryTimingRow({
               <span className="block py-0.5 underline decoration-dotted">{allReasons ? '閉じる' : `ほか ${hidden} 件`}</span>
             </button>
           )}
-          {t.limit ? (
-            <div className="mt-1.5 rounded-md border border-white bg-white/80 px-2 py-1.5">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-semibold text-gray-700">{long ? '押し目' : '戻り'}の指値の目安</span>
-                <span className="font-mono text-sm font-bold text-gray-900">{t.limit.price.toFixed(digits)}</span>
-              </div>
-              <div className="mt-0.5 flex flex-wrap items-center justify-between gap-x-2 text-[10px] text-gray-500">
-                <span>
-                  {t.limit.basis}・現在値から{long ? '−' : '+'}
-                  {t.limit.distancePips.toFixed(1)}pips
-                </span>
-                {t.limit.rr != null && (
-                  <span className={t.limit.rr >= RR_MIN ? 'font-bold text-orange-600' : ''}>その価格なら RR 1:{t.limit.rr.toFixed(1)}</span>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="mt-1 text-[10px] text-gray-500">
-              {long ? '押し目' : '戻り'}の目安が見当たらないため、次の足の確定を待つのが無難です。
-            </div>
-          )}
           <div className="mt-1 text-[10px] text-gray-500">
             {t.verdict === 'avoid'
               ? `いま成行で${long ? '買う' : '売る'}と${long ? '高値掴み' : '安値売り'}になりやすい位置です。`
@@ -408,6 +476,54 @@ function EntryTimingRow({
           </div>
         </>
       )}
+
+      {/* 注文の目安: 成行（入りどきのとき）・指値（押し目/戻りを待つ）・逆指値（帯のブレイクを狙う） */}
+      <div className="mt-1.5 text-[10px] font-bold text-gray-600">注文の目安</div>
+      <div className="mt-0.5 space-y-1">
+        {t.verdict === 'ok' && (
+          <OrderOption
+            kind="market"
+            long={long}
+            price={null}
+            digits={digits}
+            what={`今の価格ですぐ${long ? '買う' : '売る'}`}
+            sub="入りどきの位置"
+            rr={marketRr}
+            recommended
+          />
+        )}
+        {t.verdict !== 'ok' && t.limit && (
+          <OrderOption
+            kind="limit"
+            long={long}
+            price={t.limit.price}
+            digits={digits}
+            what={`${t.limit.price.toFixed(digits)} まで${long ? '下がったら買う（押し目買い）' : '上がったら売る（戻り売り）'}`}
+            sub={`${t.limit.basis}・現在値から${long ? '−' : '+'}${t.limit.distancePips.toFixed(1)}pips`}
+            rr={t.limit.rr}
+            recommended
+          />
+        )}
+        {stopEntry && (
+          <OrderOption
+            kind="stop"
+            long={long}
+            price={stopEntry.price}
+            digits={digits}
+            what={`${stopEntry.zoneLabel}を${long ? '上抜けたら買う' : '下抜けたら売る'}（ブレイク狙い）`}
+            sub={`${long ? '上' : '下'}抜けの可能性 ${stopEntry.breakPct}%・現在値から${long ? '+' : '−'}${stopEntry.distancePips.toFixed(1)}pips`}
+            rr={stopEntry.rr}
+          />
+        )}
+        {t.verdict !== 'ok' && !t.limit && !stopEntry && (
+          <div className="text-[10px] text-gray-500">
+            指値・逆指値の目安が見当たらないため、次の足の確定を待つのが無難です。
+          </div>
+        )}
+      </div>
+      <div className="mt-1 text-[10px] text-gray-400">
+        指値＝今より有利な価格まで待って入る / 逆指値＝帯を抜けて勢いが出たら入る。損切りは逆指値、目標は指値で置きます。
+      </div>
     </div>
   );
 }
@@ -611,6 +727,8 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
   const supDist = Math.abs(currentRate - tf.swingLow) / pip;
   const v = verdict(tf);
   const timing = tfTiming(tf, instrument, currentRate);
+  const breaks = zoneBreaks(tf, currentRate, pip);
+  const stopEntry = timing ? tfStopEntry(tf, timing.dir, currentRate, pip, breaks) : null;
   const stochLabel = !tf.stoch ? null : tf.stoch.k >= 80 ? '買われすぎ' : tf.stoch.k <= 20 ? '売られすぎ' : '中立';
   const stochCls = !tf.stoch
     ? ''
@@ -648,7 +766,15 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
       {/* エントリー判断（いちばん判断に直結するので先頭）: RR ＋ 入りどき（高値掴み・安値売りの回避） */}
       <SectionLabel>エントリー判断</SectionLabel>
       <RrRow rr={tf.rr} digits={digits} dow={tf.dow} />
-      {timing && <EntryTimingRow dir={timing.dir} t={timing.t} digits={digits} />}
+      {timing && (
+        <EntryTimingRow
+          dir={timing.dir}
+          t={timing.t}
+          digits={digits}
+          stopEntry={stopEntry}
+          marketRr={tf.rr && tf.rr.direction === timing.dir ? tf.rr.rr : null}
+        />
+      )}
 
       {/* プライスアクション: ローソク足チャート（パターンの位置・確定/否定ライン・抵抗帯）＋パターンの一覧 */}
       {hasChart && tf.bars && tf.candlePatterns && (
@@ -679,7 +805,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
       {/* 抵抗帯のはしご（新）。無ければ従来のレジ → 現在 → サポ */}
       <SectionLabel note="★が多いほど強い">抵抗帯</SectionLabel>
       {hasZones && tf.zones ? (
-        <ZoneLadder res={tf.zones.res} sup={tf.zones.sup} currentRate={currentRate} digits={digits} />
+        <ZoneLadder res={tf.zones.res} sup={tf.zones.sup} currentRate={currentRate} digits={digits} odds={breaks ?? undefined} />
       ) : (
         <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-3 gap-y-2 border-y border-gray-100 py-2">
           <LevelLine side="res" price={tf.swingHigh} distancePips={resDist} digits={digits} />

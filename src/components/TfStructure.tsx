@@ -6,6 +6,7 @@
 import type { DowAnalysis, DowPhase, SwingLabel } from '@/lib/dow';
 import { dowSummary } from '@/lib/dow';
 import type { SrZone } from '@/lib/srZones';
+import type { ZoneBreakOdds } from '@/lib/zoneBreak';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 
 const TREND_CHIP: Record<DowAnalysis['trend'], string> = {
@@ -162,7 +163,14 @@ function Stars({ n }: { n: 1 | 2 | 3 }) {
   );
 }
 
-function ZoneRow({ z, idx, digits }: { z: SrZone; idx: number; digits: number }) {
+const BREAK_STYLE: Record<ZoneBreakOdds['level'], string> = {
+  high: 'bg-orange-100 text-orange-700',
+  mid: 'bg-gray-100 text-gray-600',
+  low: 'bg-blue-50 text-blue-700',
+};
+const BREAK_WORD: Record<ZoneBreakOdds['level'], string> = { high: '抜けやすい', mid: '五分五分', low: '跳ね返されやすい' };
+
+function ZoneRow({ z, idx, digits, odds }: { z: SrZone; idx: number; digits: number; odds?: ZoneBreakOdds | null }) {
   const res = z.side === 'res';
   return (
     <li style={LIST_ITEM_RESET} className="flex items-center gap-2 py-1">
@@ -181,21 +189,49 @@ function ZoneRow({ z, idx, digits }: { z: SrZone; idx: number; digits: number })
           <Stars n={z.stars} />
         </p>
         <p className="truncate text-[10px] text-gray-400">{z.sources.join('・')}</p>
+        {odds && odds.factors.length > 0 && (
+          <div className="truncate text-[10px] text-gray-500">
+            {odds.factors
+              .slice(0, 2)
+              .map((f) => `${f.points > 0 ? '＋' : '−'}${f.label}`)
+              .join('　')}
+          </div>
+        )}
       </div>
-      <span className="shrink-0 text-right text-[11px] tabular-nums text-gray-500">
+      <span className="flex shrink-0 flex-col items-end gap-0.5 text-right text-[11px] tabular-nums text-gray-500">
         {z.contains ? <span className="font-bold text-amber-600">帯の中</span> : `${res ? '+' : '−'}${z.distancePips.toFixed(1)}pips`}
+        {odds && (
+          <span
+            className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${BREAK_STYLE[odds.level]}`}
+            title={BREAK_WORD[odds.level]}
+          >
+            {res ? '上抜け' : '下抜け'} {odds.pct}%
+          </span>
+        )}
       </span>
     </li>
   );
 }
 
 /** 抵抗帯のはしご: 上の帯（遠い→近い）→ 現在値 → 下の帯（近い→遠い）。 */
-export function ZoneLadder({ res, sup, currentRate, digits }: { res: SrZone[]; sup: SrZone[]; currentRate: number; digits: number }) {
+export function ZoneLadder({
+  res,
+  sup,
+  currentRate,
+  digits,
+  odds,
+}: {
+  res: SrZone[];
+  sup: SrZone[];
+  currentRate: number;
+  digits: number;
+  odds?: { res: (ZoneBreakOdds | null)[]; sup: (ZoneBreakOdds | null)[] }; // 各帯をブレイクする可能性の目安（同じ並び）
+}) {
   return (
     <div className="border-y border-gray-100 py-1">
       <ul style={LIST_RESET}>
         {[...res].reverse().map((z, i) => (
-          <ZoneRow key={`r${i}`} z={z} idx={res.length - 1 - i} digits={digits} />
+          <ZoneRow key={`r${i}`} z={z} idx={res.length - 1 - i} digits={digits} odds={odds?.res[res.length - 1 - i]} />
         ))}
       </ul>
       {res.length === 0 && <p className="py-1 text-[10px] text-gray-400">近くに上の抵抗帯なし</p>}
@@ -206,9 +242,15 @@ export function ZoneLadder({ res, sup, currentRate, digits }: { res: SrZone[]; s
       {sup.length === 0 && <p className="py-1 text-[10px] text-gray-400">近くに下の支持帯なし</p>}
       <ul style={LIST_RESET}>
         {sup.map((z, i) => (
-          <ZoneRow key={`s${i}`} z={z} idx={i} digits={digits} />
+          <ZoneRow key={`s${i}`} z={z} idx={i} digits={digits} odds={odds?.sup[i]} />
         ))}
       </ul>
+      {odds && (res.length > 0 || sup.length > 0) && (
+        <div className="mt-1 text-[10px] leading-relaxed text-gray-400">
+          上抜け/下抜けの% は、その帯をブレイクする可能性の目安（AI のブレイク確率をもとに、トレンドの向き・帯の強さ・距離・勢いで調整）。
+          <span className="text-orange-600">60%以上=抜けやすい</span>・<span className="text-blue-700">40%未満=跳ね返されやすい</span>
+        </div>
+      )}
     </div>
   );
 }
