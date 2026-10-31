@@ -7,7 +7,8 @@
 // ※経験則にもとづく参考値で、過去データでの検証はしていない。投資助言ではない。
 import { dowDirection, type DowAnalysis } from './dow';
 import type { SrZone } from './srZones';
-import type { BreakoutProb, SlDirection } from './stoploss';
+import { averageTrueRange, type BreakoutProb, type SlDirection } from './stoploss';
+import type { OhlcCandle } from './edge';
 import type { MaSet } from './entrySignal';
 
 export type BreakLevel = 'high' | 'mid' | 'low';
@@ -112,4 +113,36 @@ export function stopEntryPlan(i: {
     rr,
     breakPct: odds.pct,
   };
+}
+
+/**
+ * 時間足の分析結果から、ブレイクを狙う逆指値の目安を求める（TF分析の画面と Worker /mtf → 自動売買で共有）。
+ * トレンド方向のすぐ前の帯（買い=R1 / 売り=S1）について zoneBreakOdds → stopEntryPlan。
+ */
+export function stopEntryForAnalysis(i: {
+  direction: SlDirection;
+  price: number;
+  pip: number;
+  bars: OhlcCandle[] | null | undefined;
+  zones: { res: SrZone[]; sup: SrZone[] } | null | undefined;
+  dow: DowAnalysis | null | undefined;
+  breakout: BreakoutProb | null | undefined;
+  rsi: number | null | undefined;
+  ma?: MaSet | null;
+  rr: { stop: number; target: number; spreadPips: number } | null;
+}): StopEntryPlan | null {
+  if (!i.zones || !i.bars) return null;
+  const long = i.direction === 'long';
+  const zone = (long ? i.zones.res : i.zones.sup)[0];
+  if (!zone) return null;
+  const atr = averageTrueRange(i.bars);
+  const odds = zoneBreakOdds({ zone, price: i.price, atr, pip: i.pip, dow: i.dow, breakout: i.breakout, rsi: i.rsi, ma: i.ma });
+  return stopEntryPlan({
+    direction: i.direction,
+    price: i.price,
+    atr,
+    pip: i.pip,
+    ahead: { zone, odds, label: `${long ? 'R1（抵抗帯' : 'S1（支持帯'}★${zone.stars}）` },
+    rr: i.rr,
+  });
 }

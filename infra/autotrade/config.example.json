@@ -7,6 +7,7 @@
   "daily_max_loss_pct": 6.0,
   "max_spread_pips": 3.0,
   "use_limit_orders": true,
+  "use_stop_orders": true,
   "limit_expiry_hours": 4,
   "min_rr": 2.0,
   "cooldown_hours": 4,

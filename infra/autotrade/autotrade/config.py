@@ -24,7 +24,8 @@ class Config:
     daily_max_loss_pct: float = 6.0  # その日（日本時間）の損失がこれを超えたら新規発注を止める
     max_spread_pips: float = 3.0  # スプレッドがこれより広いときは見送る（XAU は pips の単位が違うので個別に調整）
     use_limit_orders: bool = True  # 「押し目待ち/戻り待ち」のとき、指値の目安に指値注文を置く
-    limit_expiry_hours: float = 4.0  # 約定しない指値をこの時間で取り消す
+    use_stop_orders: bool = True  # 高値掴み注意・押し目の目安なしのとき、ブレイク狙いの逆指値（Buy/Sell Stop）を置く
+    limit_expiry_hours: float = 4.0  # 約定しない待機注文（指値・逆指値）をこの時間で取り消す
     min_rr: float = 2.0  # これ未満の RR（指値なら指値での RR）は見送る
     cooldown_hours: float = 4.0  # 同じペア・同じ向きで続けて入らない時間
     poll_seconds: int = 300  # --loop の確認間隔

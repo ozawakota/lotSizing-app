@@ -1,10 +1,10 @@
 """Cloudflare Worker の /mtf から、ペアの売買プランを作る（純関数）。
 
-/mtf の各時間足には rr（方向・損切り・目標・RR）と timing（入りどき）が入っている:
+/mtf の各時間足には rr（方向・損切り・目標・RR）・timing（入りどき）・stopEntry（ブレイク狙いの逆指値の目安）が入っている:
   - timing.verdict == "ok"    → 成行（rr の損切り・目標のまま）
-  - timing.verdict == "wait"  → timing.limit.price に指値（損切り・目標は同じ。RR は指値での値）
-  - timing.verdict == "avoid" → 見送り（高値掴み・安値売りになりやすい）
-rr が無い（レンジ・転換の兆し）・RR 不成立なら見送り。
+  - timing.verdict == "wait"  → timing.limit.price に指値。指値の目安が無ければ stopEntry に逆指値
+  - timing.verdict == "avoid" → stopEntry があれば逆指値（すぐ前の帯を抜けたら入る）、無ければ見送り
+rr が無い（レンジ・転換の兆し）・RR 不成立なら見送り。損切り・目標はどの注文でも同じ。
 """
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ class TradePlan:
     instrument: str
     timeframe: str
     direction: str  # "long" | "short"
-    order: str  # "market" | "limit"
-    entry: float  # 成行は /mtf 時点の現在値、指値は指値の価格（どちらも /mtf の価格基準）
+    order: str  # "market" | "limit" | "stop"
+    entry: float  # 成行は /mtf 時点の現在値、指値・逆指値はその価格（いずれも /mtf の価格基準）
     stop: float
     target: float
     rr: float
@@ -50,7 +50,8 @@ def fetch_mtf(url: str, instrument: str, timeout: float = 60.0) -> dict:
     return body
 
 
-def build_plan(body: dict, instrument: str, timeframe: str, *, use_limit: bool, min_rr: float) -> TradePlan | Skip:
+def build_plan(body: dict, instrument: str, timeframe: str, *, use_limit: bool, min_rr: float,
+               use_stop: bool = False) -> TradePlan | Skip:
     tf = next((t for t in body.get("timeframes", []) if t.get("tf") == timeframe), None)
     if tf is None:
         return Skip(instrument, f"{timeframe} のデータがありません")
@@ -73,8 +74,18 @@ def build_plan(body: dict, instrument: str, timeframe: str, *, use_limit: bool, 
         verdict=verdict,
         reasons=reasons,
     )
+    stop_entry = tf.get("stopEntry")
+
+    def stop_plan(why: str) -> TradePlan | Skip:
+        """ブレイク狙いの逆指値。無い・無効・RR 不足なら見送り（why は見送りの理由の頭）。"""
+        if not use_stop or not stop_entry:
+            return Skip(instrument, why)
+        if stop_entry.get("rr") is None or float(stop_entry["rr"]) < min_rr:
+            return Skip(instrument, f"{why}／逆指値での RR 不足（1:{float(stop_entry.get('rr') or 0):.1f}）")
+        return TradePlan(order="stop", entry=float(stop_entry["price"]), rr=float(stop_entry["rr"]), **base)
+
     if verdict == "avoid":
-        return Skip(instrument, "高値掴み/安値売り注意: " + "・".join(reasons))
+        return stop_plan("高値掴み/安値売り注意: " + "・".join(reasons))
     if verdict == "ok":
         if not rr.get("qualifies") or float(rr["rr"]) < min_rr:
             return Skip(instrument, f"RR 不足（1:{float(rr['rr']):.1f}）")
@@ -82,11 +93,11 @@ def build_plan(body: dict, instrument: str, timeframe: str, *, use_limit: bool, 
     if verdict == "wait":
         limit = timing.get("limit")
         if not use_limit:
-            return Skip(instrument, "押し目/戻り待ち（指値は無効の設定）")
+            return stop_plan("押し目/戻り待ち（指値は無効の設定）")
         if not limit or limit.get("rr") is None:
-            return Skip(instrument, "押し目/戻り待ち（指値の目安なし）")
+            return stop_plan("押し目/戻り待ち（指値の目安なし）")
         if float(limit["rr"]) < min_rr:
-            return Skip(instrument, f"指値での RR 不足（1:{float(limit['rr']):.1f}）")
+            return stop_plan(f"指値での RR 不足（1:{float(limit['rr']):.1f}）")
         return TradePlan(order="limit", entry=float(limit["price"]), rr=float(limit["rr"]), **base)
     return Skip(instrument, f"不明な判定: {verdict}")
 

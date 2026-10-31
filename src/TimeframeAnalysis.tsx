@@ -16,7 +16,7 @@ import type {
   SlTimeframe,
 } from '@/lib/stoploss';
 import { RR_MIN, averageTrueRange, pipSize } from '@/lib/stoploss';
-import { stopEntryPlan, zoneBreakOdds, type StopEntryPlan, type ZoneBreakOdds } from '@/lib/zoneBreak';
+import { stopEntryForAnalysis, zoneBreakOdds, type StopEntryPlan, type ZoneBreakOdds } from '@/lib/zoneBreak';
 import { MARKET_SESSIONS, isSessionOpen } from '@/lib/session';
 import { fetchGoldSpot } from '@/lib/goldSpot';
 import { CONFIRMATION_LABEL, priceActionHeadline, type PatternRead, type PriceActionTone } from '@/lib/candleRead';
@@ -305,25 +305,18 @@ function zoneBreaks(tf: MtfTf, currentRate: number, pip: number): { res: ZoneBre
   return { res: tf.zones.res.map(odds), sup: tf.zones.sup.map(odds) };
 }
 
-// ブレイクを狙う逆指値の目安（トレンド方向のすぐ前の帯 = 買いなら R1 / 売りなら S1）。
-function tfStopEntry(
-  tf: MtfTf,
-  dir: SlDirection,
-  currentRate: number,
-  pip: number,
-  breaks: { res: ZoneBreakOdds[]; sup: ZoneBreakOdds[] } | null,
-): StopEntryPlan | null {
-  if (!tf.zones || !tf.bars || !breaks) return null;
-  const long = dir === 'long';
-  const zone = (long ? tf.zones.res : tf.zones.sup)[0];
-  const odds = (long ? breaks.res : breaks.sup)[0];
-  if (!zone || !odds) return null;
-  return stopEntryPlan({
+// ブレイクを狙う逆指値の目安（トレンド方向のすぐ前の帯 = 買いなら R1 / 売りなら S1）。Worker /mtf（自動売買）と同じ計算。
+function tfStopEntry(tf: MtfTf, dir: SlDirection, currentRate: number, pip: number): StopEntryPlan | null {
+  return stopEntryForAnalysis({
     direction: dir,
     price: currentRate,
-    atr: averageTrueRange(tf.bars),
     pip,
-    ahead: { zone, odds, label: `${long ? 'R1（抵抗帯' : 'S1（支持帯'}★${zone.stars}）` },
+    bars: tf.bars,
+    zones: tf.zones,
+    dow: tf.dow,
+    breakout: tf.breakout,
+    rsi: tf.rsi,
+    ma: tf.ma,
     rr: tf.rr && tf.rr.direction === dir ? { stop: tf.rr.stop, target: tf.rr.target, spreadPips: tf.rr.spreadPips } : null,
   });
 }
@@ -729,7 +722,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
   const v = verdict(tf);
   const timing = tfTiming(tf, instrument, currentRate);
   const breaks = zoneBreaks(tf, currentRate, pip);
-  const stopEntry = timing ? tfStopEntry(tf, timing.dir, currentRate, pip, breaks) : null;
+  const stopEntry = timing ? tfStopEntry(tf, timing.dir, currentRate, pip) : null;
   const stochLabel = !tf.stoch ? null : tf.stoch.k >= 80 ? '買われすぎ' : tf.stoch.k <= 20 ? '売られすぎ' : '中立';
   const stochCls = !tf.stoch
     ? ''

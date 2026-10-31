@@ -14,6 +14,7 @@ from .signal import Skip, TradePlan, build_plan, fetch_mtf, shift_plan
 
 log = logging.getLogger("autotrade")
 JST = timezone(timedelta(hours=9))
+ORDER_JA = {"market": "成行", "limit": "指値", "stop": "逆指値"}
 
 
 def jst_midnight(now: datetime) -> datetime:
@@ -68,11 +69,11 @@ class Bot:
         now = self.now()
         items = self.broker.open_items(cfg.magic)
 
-        # 1) 期限切れの指値を取り消す。
+        # 1) 期限切れの待機注文（指値・逆指値）を取り消す。
         for it in [i for i in items if i.kind == "order"]:
             if now.timestamp() - it.setup_time > cfg.limit_expiry_hours * 3600:
                 r = (self.broker.cancel(it.ticket) if not cfg.dry_run else None)
-                out.append(f"{it.symbol}: 期限切れの指値 #{it.ticket} を取消" + ("（dry-run）" if cfg.dry_run else f" {r.message if r else ''}"))
+                out.append(f"{it.symbol}: 期限切れの待機注文 #{it.ticket} を取消" + ("（dry-run）" if cfg.dry_run else f" {r.message if r else ''}"))
         items = self.broker.open_items(cfg.magic)
 
         # 2) その日の損失の上限（確定損益＋含み損益）。
@@ -103,7 +104,9 @@ class Bot:
         """(結果の1行, 実際に注文を送って受け付けられたか)。"""
         cfg = self.cfg
         body = self.fetch(cfg.mtf_url, pair.instrument)
-        plan = build_plan(body, pair.instrument, pair.timeframe, use_limit=cfg.use_limit_orders, min_rr=cfg.min_rr)
+        plan = build_plan(
+            body, pair.instrument, pair.timeframe, use_limit=cfg.use_limit_orders, min_rr=cfg.min_rr, use_stop=cfg.use_stop_orders
+        )
         if isinstance(plan, Skip):
             return f"{plan.instrument}: 見送り（{plan.reason}）", False
 
@@ -127,11 +130,16 @@ class Bot:
         long = plan.direction == "long"
         if plan.order == "market":
             entry = tick.ask if long else tick.bid
-        else:
+        elif plan.order == "limit":
             entry = plan.entry
             # 指値は現在値より有利な側でなければならない（買い指値 < ask / 売り指値 > bid）。
             if (long and entry >= tick.ask) or (not long and entry <= tick.bid):
                 return f"{pair.instrument}: 見送り（指値 {entry:.5g} が現在値を越えている）", False
+        else:
+            entry = plan.entry
+            # 逆指値は現在値より先（買い逆指値 > ask / 売り逆指値 < bid）。既に抜けていたら追いかけない。
+            if (long and entry <= tick.ask) or (not long and entry >= tick.bid):
+                return f"{pair.instrument}: 見送り（逆指値 {entry:.5g} を既に越えている）", False
         if not stops_ok(plan.direction, entry, plan.stop, plan.target, spec):
             return f"{pair.instrument}: 見送り（損切り/目標の位置が不正または近すぎる）", False
 
@@ -140,7 +148,7 @@ class Bot:
             return f"{pair.instrument}: 見送り（最小ロットでも許容損失 {cfg.risk_pct}% を超える）", False
 
         desc = (
-            f"{pair.instrument} {'買い' if long else '売り'} {'成行' if plan.order == 'market' else '指値'} "
+            f"{pair.instrument} {'買い' if long else '売り'} {ORDER_JA[plan.order]} "
             f"{volume}lot @ {entry:.5g} 損切 {plan.stop:.5g} 目標 {plan.target:.5g} RR 1:{plan.rr:.1f}（{pair.timeframe}・{plan.verdict}）"
         )
         if cfg.dry_run:

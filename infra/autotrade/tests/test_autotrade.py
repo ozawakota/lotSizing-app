@@ -21,7 +21,8 @@ USDJPY = SymbolSpec(tick_size=0.001, tick_value=100.0, volume_min=0.01, volume_m
                     volume_step=0.01, stops_level_points=10, point=0.001)
 
 
-def mtf(verdict="ok", rr=3.0, qualifies=True, limit=None, direction="long", current=150.0, stop=149.5, target=151.5):
+def mtf(verdict="ok", rr=3.0, qualifies=True, limit=None, direction="long", current=150.0, stop=149.5, target=151.5,
+        stop_entry=None):
     return {
         "currentRate": current,
         "timeframes": [
@@ -29,6 +30,7 @@ def mtf(verdict="ok", rr=3.0, qualifies=True, limit=None, direction="long", curr
                 "tf": "1h",
                 "rr": {"direction": direction, "stop": stop, "target": target, "rr": rr, "qualifies": qualifies, "spreadPips": 0.3},
                 "timing": {"verdict": verdict, "reasons": [{"label": "直近の値幅の上の方（90%）", "points": 2}], "limit": limit},
+                "stopEntry": stop_entry,
             }
         ],
     }
@@ -96,6 +98,25 @@ class SignalTest(unittest.TestCase):
         self.assertIsInstance(
             build_plan(mtf("wait", limit={"price": 149.8, "rr": 5.0}), "USD_JPY", "1h", use_limit=False, min_rr=2.0), Skip)
 
+    def test_avoid_uses_stop_entry_when_available(self):
+        se = {"price": 150.2, "rr": 2.4, "breakPct": 62, "zoneLabel": "R1", "distancePips": 20}
+        p = build_plan(mtf("avoid", stop_entry=se), "USD_JPY", "1h", use_limit=True, min_rr=2.0, use_stop=True)
+        self.assertEqual((p.order, p.entry, p.rr, p.stop, p.target), ("stop", 150.2, 2.4, 149.5, 151.5))
+        # 逆指値を使わない設定・RR 不足なら見送り
+        self.assertIsInstance(build_plan(mtf("avoid", stop_entry=se), "USD_JPY", "1h", use_limit=True, min_rr=2.0), Skip)
+        low = {**se, "rr": 1.5}
+        s = build_plan(mtf("avoid", stop_entry=low), "USD_JPY", "1h", use_limit=True, min_rr=2.0, use_stop=True)
+        self.assertIsInstance(s, Skip)
+        self.assertIn("逆指値での RR 不足", s.reason)
+
+    def test_wait_prefers_limit_and_falls_back_to_stop(self):
+        se = {"price": 150.2, "rr": 2.4}
+        p = build_plan(mtf("wait", limit={"price": 149.8, "rr": 5.0}, stop_entry=se), "USD_JPY", "1h",
+                       use_limit=True, min_rr=2.0, use_stop=True)
+        self.assertEqual(p.order, "limit")
+        p2 = build_plan(mtf("wait", limit=None, stop_entry=se), "USD_JPY", "1h", use_limit=True, min_rr=2.0, use_stop=True)
+        self.assertEqual(p2.order, "stop")
+
     def test_shift_moves_all_levels(self):
         p = build_plan(mtf("ok", current=2400.0, stop=2390.0, target=2430.0), "XAU_USD", "1h", use_limit=True, min_rr=2.0)
         s = shift_plan(p, 2390.0)  # 現物は先物より 10 安い
@@ -136,6 +157,21 @@ class BotTest(unittest.TestCase):
         b = FakeBroker()
         make_bot(b, mtf("wait", limit={"price": 149.8, "rr": 5.0})).run_once()
         self.assertEqual((b.sent[0]["order"], b.sent[0]["price"]), ("limit", 149.8))
+
+    def test_stop_order_sent_above_price(self):
+        b = FakeBroker()
+        se = {"price": 150.2, "rr": 2.4}
+        bot = make_bot(b, mtf("avoid", stop_entry=se))
+        bot.run_once()
+        self.assertEqual((b.sent[0]["order"], b.sent[0]["price"]), ("stop", 150.2))
+        # 損切り 149.5 まで 0.7 → 1ロット 7万円の損 → 2万円 / 7万 = 0.28
+        self.assertAlmostEqual(b.sent[0]["volume"], 0.28)
+
+    def test_stop_order_skipped_when_already_broken(self):
+        b = FakeBroker(bid=150.218, ask=150.222)  # 逆指値 150.2 を既に越えている（判定時から 22pips < 損切り幅の半分）
+        out = make_bot(b, mtf("avoid", stop_entry={"price": 150.2, "rr": 2.4})).run_once()
+        self.assertEqual(b.sent, [])
+        self.assertTrue(any("既に越えている" in l for l in out), out)
 
     def test_dry_run_sends_nothing(self):
         b = FakeBroker()

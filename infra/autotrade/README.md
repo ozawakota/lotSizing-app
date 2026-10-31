@@ -12,13 +12,18 @@ OCI（Ubuntu + Wine）上の MT5 端末を、Wine 上の Windows 版 Python と 
 Cloudflare Worker (/mtf)            OCI: Wine 上の Windows 版 Python            MT5 端末（Wine・デモ口座）
  RR（方向・損切り・目標）  ──HTTP──▶  main.py --loop（5分ごと）        ──MetaTrader5──▶  発注・取消
  入りどき（ok/wait/avoid）           判定 → ロット計算 → 安全チェック
+ 逆指値の目安（stopEntry）
 ```
 
 | 入りどき | 動き |
 |---|---|
 | 🟢 入りどき（ok） | 成行。損切り・目標は `/mtf` の RR のまま |
-| 🟡 押し目待ち/戻り待ち（wait） | 指値の目安に指値注文（損切り・目標は同じ）。`limit_expiry_hours` で約定しなければ取消 |
-| 🔴 高値掴み/安値売り注意（avoid） | 見送り |
+| 🟡 押し目待ち/戻り待ち（wait） | 指値（Buy/Sell Limit）を指値の目安に。目安が無ければ、ブレイク狙いの逆指値 |
+| 🔴 高値掴み/安値売り注意（avoid） | ブレイク狙いの逆指値（Buy/Sell Stop）をすぐ前の帯（R1/S1）の外側に。目安が無ければ見送り |
+
+- 損切り・目標はどの注文でも同じ（`/mtf` の RR）。待機注文（指値・逆指値）は `limit_expiry_hours` で約定しなければ取消
+- 逆指値の目安は、すぐ前の帯（1.5 ATR 以内）をブレイクする可能性が 50% 以上で、その価格での RR が `min_rr` 以上のときだけ（TF分析の「注文の目安」と同じ計算）
+- 逆指値の価格を既に越えていたら、追いかけずに見送る
 | RR なし（レンジ・転換の兆し）・RR 不足 | 見送り |
 
 ### 安全装置
@@ -41,7 +46,8 @@ Cloudflare Worker (/mtf)            OCI: Wine 上の Windows 版 Python         
 | `daily_max_loss_pct` | 6.0 | 1日の損失上限（残高の %） |
 | `max_positions` | 3 | 同時に持つポジション＋指値の上限 |
 | `max_spread_pips` | 3.0 | これより広いと見送り（XAU は 1pips=0.1） |
-| `use_limit_orders` / `limit_expiry_hours` | true / 4 | 押し目待ちのときに指値を置くか・何時間で取り消すか |
+| `use_limit_orders` / `limit_expiry_hours` | true / 4 | 押し目待ちのときに指値を置くか・待機注文を何時間で取り消すか |
+| `use_stop_orders` | true | ブレイク狙いの逆指値を置くか（false なら高値掴み注意は見送り） |
 | `min_rr` | 2.0 | これ未満の RR は見送り |
 | `cooldown_hours` | 4 | 同じペア・同じ向きで続けて入らない時間 |
 | `poll_seconds` | 300 | 確認間隔 |
