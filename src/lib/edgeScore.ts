@@ -2,15 +2,16 @@
 //  1) fitSetupToZones: 構造RRの損切り・目標を抵抗帯に合わせる
 //     - 損切りが支持帯（ショートは抵抗帯）の中や縁にあると、帯で反発する前に刈られやすいので帯の外へずらす
 //     - 目標までの途中に★2以上の抵抗帯（ショートは支持帯）があれば、目標をその帯の手前に縮める
-//  2) edgeScore: 総合スコア（0–100）と内訳。50 を基準に、ダウ理論・上位足の向き・RR・損切りの強さ・
-//     エントリー位置（帯との位置関係）・ローソク足パターン・SMC（スイープ・オーダーブロック・FVG・OTE など）・
-//     タイミング・オシレーター・AI（Jev）を加減点する。加減点の合計は tanh で 0–100 に収める
-//     （材料がそろっても 100 に張り付かず、順位の差が残るように）。
+//  2) edgeScore: 総合スコア（0–100）と内訳。50 を基準に、次のグループで加減点する（同じ材料を二重に数えない）:
+//     トレンド（ダウ理論・上位足の向き）／RR・損切りの強さ／入りどき（TF分析と同じ判定。帯との位置・
+//     値幅の中の位置・RSI/ストキャス・移動平均・急な動きをまとめて見ている）／ローソク足パターン／
+//     SMC（スイープ・オーダーブロック・FVG・ディスプレイスメント。値幅の位置は入りどきに含むので数えない）／AI（Jev）。
+//     加減点の合計は tanh で 0–100 に収める（材料がそろっても 100 に張り付かず、順位の差が残るように）。
 // ※投資助言ではない参考情報。
 import { pipSize, type RrSetup, type SlDirection, type SlTimeframe } from './stoploss';
+import type { TimingVerdict } from './entryTiming';
 import type { SrZone } from './srZones';
 import { dowDirection, type DowAnalysis } from './dow';
-import type { EntryKind } from './entrySignal';
 import type { PaTag } from './smc';
 
 /** 準好機の下限 RR（RR_MIN 未満〜これ以上は「準好機」として別枠で表示）。 */
@@ -81,15 +82,10 @@ export interface EdgeInputs {
   stopStrength?: number | null; // 損切りラインの強さ 0–100
   dow: DowAnalysis | null; // setup の時間足のダウ理論
   higherDows: { tf: SlTimeframe; dow: DowAnalysis | null }[]; // 上位足のダウ理論
-  zones: { res: SrZone[]; sup: SrZone[] }; // setup の時間足の抵抗帯（keepAll）
-  atr: number;
-  instrument: string;
+  timing: TimingVerdict | null; // 入りどき（TF分析と同じ判定）。足不足などで判定できなければ null
   pattern: { label: string; dir: 1 | -1 } | null; // 有効なローソク足パターン
-  entryKind: EntryKind | null; // 押し目/戻り・様子見・反転警戒
-  rsi: number | null;
-  stochK: number | null;
   jevProb: number | null; // AI（Jev）のその方向へのブレイク確率（0–100）。取れなければ null
-  paTags?: PaTag[]; // SMC のタグ（smcTags）。points をそのまま加減点する
+  paTags?: PaTag[]; // SMC のタグ（smcTags）。値幅の位置（group='pd'）以外の points を加減点する
 }
 
 const TF_JA: Record<SlTimeframe, string> = { '15m': '15分足', '30m': '30分足', '1h': '1時間足', '4h': '4時間足' };
@@ -109,7 +105,6 @@ export function edgeScore(i: EdgeInputs): { score: number; items: ScoreItem[] } 
   };
   const long = i.direction === 'long';
   const want = long ? 'long' : 'short';
-  const pip = pipSize(i.instrument);
 
   // ダウ理論（setup の時間足）: そろったスイングが多いほど・押し目/戻りからの再開ほど加点。
   if (i.dow) {
@@ -133,13 +128,9 @@ export function edgeScore(i: EdgeInputs): { score: number; items: ScoreItem[] } 
   // 損切りラインの強さ（タッチ回数・上位足との一致など）。
   if (i.stopStrength != null) add(`損切りラインの強さ ${i.stopStrength}`, Math.round(((i.stopStrength - 50) / 50) * 6));
 
-  // エントリー位置: 背後に★2以上の帯があれば加点、すぐ前（0.5 ATR 以内）に帯があれば減点。
-  if (i.atr > 0) {
-    const behind = (long ? i.zones.sup : i.zones.res).find((z) => z.contains || z.distancePips * pip <= i.atr);
-    const front = (long ? i.zones.res : i.zones.sup).find((z) => z.contains || z.distancePips * pip <= i.atr * 0.5);
-    if (behind) add(`${long ? '支持帯' : '抵抗帯'}★${behind.stars}の${long ? '上' : '下'}で入れる`, 6);
-    if (front) add(`すぐ${long ? '上に抵抗帯' : '下に支持帯'}★${front.stars}`, -6);
-  }
+  // 入りどき（帯との位置・値幅の中の位置・RSI/ストキャス・移動平均・急な動きをまとめた TF分析の判定）。
+  if (i.timing === 'ok') add('入りどき（伸び切っていない位置）', 8);
+  if (i.timing === 'avoid') add(long ? '高値掴み注意（伸び切った位置）' : '安値売り注意（伸び切った位置）', -10);
 
   // ローソク足パターン（確定・ライン上・質60以上の有効なもの）。
   if (i.pattern) {
@@ -147,18 +138,9 @@ export function edgeScore(i: EdgeInputs): { score: number; items: ScoreItem[] } 
     add(aligned ? `${i.pattern.label}が裏付け` : `逆向きの${i.pattern.label}`, aligned ? 8 : -12);
   }
 
-  // タイミング（移動平均・ストキャス・パターン）。
-  if (i.entryKind === 'pullback') add(long ? 'タイミング: 押し目' : 'タイミング: 戻り', 6);
-  if (i.entryKind === 'caution') add('タイミング: 反転警戒', -10);
-
-  // オシレーター: 順方向に行き過ぎていれば減点（反転警戒で減点済みなら重ねない）。
-  if (i.entryKind !== 'caution') {
-    const over = long ? (i.rsi ?? 0) >= 70 || (i.stochK ?? 0) >= 85 : (i.rsi ?? 100) <= 30 || (i.stochK ?? 100) <= 15;
-    if (over) add(long ? 'RSI/ストキャスが買われすぎ' : 'RSI/ストキャスが売られすぎ', -6);
-  }
-
-  // SMC（流動性スイープ・オーダーブロック・FVG・プレミアム/ディスカウント・ディスプレイスメント）。
-  for (const t of i.paTags ?? []) add(`PA: ${t.label}`, t.points);
+  // SMC（流動性スイープ・オーダーブロック・FVG・ディスプレイスメント）。値幅の位置（プレミアム/ディスカウント・OTE）は
+  // 入りどきが見ているので数えない（表示はする）。
+  for (const t of i.paTags ?? []) if (t.group !== 'pd') add(`PA: ${t.label}`, t.points);
 
   // AI（Jev）のブレイク確率: 50% を中立に ±15。
   if (i.jevProb != null) add(`AI: ${long ? '上抜け' : '下抜け'}確率 ${Math.round(i.jevProb)}%`, Math.round((i.jevProb - 50) * 0.3));

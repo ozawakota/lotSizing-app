@@ -94,23 +94,18 @@ const inputs = (over: Partial<EdgeInputs> = {}): EdgeInputs => ({
   stopStrength: 50,
   dow: null,
   higherDows: [],
-  zones: { res: [], sup: [] },
-  atr: 0.2,
-  instrument: 'USD_JPY',
+  timing: 'wait',
   pattern: null,
-  entryKind: 'tentative',
-  rsi: 50,
-  stochK: 50,
   jevProb: null,
   ...over,
 });
 
 describe('edgeScore', () => {
-  it('材料が中立なら 50・内訳なし', () => {
+  it('材料が中立なら 50・内訳なし（押し目待ちは加減点なし）', () => {
     expect(edgeScore(inputs())).toEqual({ score: 50, items: [] });
   });
 
-  it('ダウ・上位足・帯・パターン・押し目・AI がそろうと高く、内訳は点数の大きい順', () => {
+  it('ダウ・上位足・RR・入りどき・パターン・AI がそろうと高く、内訳は点数の大きい順', () => {
     const r = edgeScore(
       inputs({
         rr: 4,
@@ -120,56 +115,50 @@ describe('edgeScore', () => {
           { tf: '1h', dow: dow() },
           { tf: '4h', dow: dow({ phase: 'extending' }) },
         ],
-        zones: { res: [], sup: [zone(149.9, 149.95, 'sup', 3)] },
+        timing: 'ok',
         pattern: { label: '下ヒゲピンバー', dir: 1 },
-        entryKind: 'pullback',
         jevProb: 70,
       }),
     );
-    // 6+4 (ダウ) +15 (上位足) +8 (RR) +6 (損切り) +6 (支持帯) +8 (パターン) +6 (押し目) +6 (AI) = +65
-    // → 50 + 50·tanh(65/50) ≈ 93（100 に張り付かない）
-    expect(r.score).toBe(93);
+    // 6+4 (ダウ) +15 (上位足) +8 (RR) +6 (損切り) +8 (入りどき) +8 (パターン) +6 (AI) = +61
+    // → 50 + 50·tanh(61/50) ≈ 92（100 に張り付かない）
+    expect(r.score).toBe(92);
     expect(r.items[0]).toEqual({ label: '上位足も上昇（1時間足・4時間足）', points: 15 });
-    expect(r.items.map((x) => x.label)).toContain('支持帯★3の上で入れる');
+    expect(r.items.map((x) => x.label)).toContain('入りどき（伸び切っていない位置）');
   });
 
-  it('上位足が逆向き・すぐ上に抵抗帯・逆向きパターン・反転警戒は減点', () => {
+  it('上位足が逆向き・高値掴み注意・逆向きパターンは減点', () => {
     const r = edgeScore(
       inputs({
         higherDows: [
           { tf: '1h', dow: dow({ trend: 'down' }) },
           { tf: '4h', dow: dow({ trend: 'range' }) },
         ],
-        zones: { res: [zone(150.05, 150.1, 'res')], sup: [] },
+        timing: 'avoid',
         pattern: { label: '上ヒゲピンバー', dir: -1 },
-        entryKind: 'caution',
-        rsi: 75, // 反転警戒があるので、買われすぎの減点は重ねない
       }),
     );
     expect(r.items).toEqual([
       { label: '逆向きの上ヒゲピンバー', points: -12 },
-      { label: 'タイミング: 反転警戒', points: -10 },
+      { label: '高値掴み注意（伸び切った位置）', points: -10 },
       { label: '上位足が逆向き（1時間足）', points: -8 },
-      { label: 'すぐ上に抵抗帯★2', points: -6 },
     ]);
-    expect(r.score).toBe(19); // −36 → 50 + 50·tanh(−36/50)
+    expect(r.score).toBe(23); // −30 → 50 + 50·tanh(−30/50)
   });
 
-  it('準好機（RR 2.5 未満）は RR で減点、買われすぎも減点', () => {
-    const r = edgeScore(inputs({ rr: 2.1, rsi: 72 }));
-    expect(r.items).toEqual([
-      { label: 'RSI/ストキャスが買われすぎ', points: -6 },
-      { label: 'RR 1:2.1', points: -4 },
-    ]);
-    expect(r.score).toBe(40);
+  it('準好機（RR 2.5 未満）は RR で減点', () => {
+    const r = edgeScore(inputs({ rr: 2.1 }));
+    expect(r.items).toEqual([{ label: 'RR 1:2.1', points: -4 }]);
+    expect(r.score).toBe(46);
   });
 
-  it('SMC のタグはそのまま加減点（PA: を付けて内訳に出す）', () => {
+  it('SMC のタグは加減点するが、値幅の位置（入りどきと重なる）は数えない', () => {
     const r = edgeScore(
       inputs({
         paTags: [
           { label: '安値スイープ（2本前・149.80）', tone: 'with', points: 7 },
-          { label: '値幅の中間（50%）', tone: 'info', points: 0 },
+          { label: 'OTE（61.8〜79%押し・30%）', tone: 'with', points: 6, group: 'pd' },
+          { label: '値幅の中間（50%）', tone: 'info', points: 0, group: 'pd' },
         ],
       }),
     );
@@ -177,9 +166,9 @@ describe('edgeScore', () => {
     expect(r.score).toBe(57);
   });
 
-  it('ショートは売られすぎで減点・抵抗帯の下で入れると加点', () => {
-    const r = edgeScore(inputs({ direction: 'short', stochK: 10, rsi: 45, zones: { res: [zone(150.02, 150.08, 'res')], sup: [] } }));
-    expect(r.items.map((x) => x.label)).toEqual(['抵抗帯★2の下で入れる', 'RSI/ストキャスが売られすぎ']);
-    expect(r.score).toBe(50);
+  it('ショートの安値売り注意は減点', () => {
+    const r = edgeScore(inputs({ direction: 'short', timing: 'avoid' }));
+    expect(r.items).toEqual([{ label: '安値売り注意（伸び切った位置）', points: -10 }]);
+    expect(r.score).toBe(40);
   });
 });

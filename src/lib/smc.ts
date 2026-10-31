@@ -170,6 +170,7 @@ export interface PaTag {
   label: string; // 例「FVG 151.20–151.25」「安値スイープ（3本前）」
   tone: PaTone;
   points: number; // 総合スコアへの加減点
+  group?: 'pd'; // 'pd'=値幅の中の位置（プレミアム/ディスカウント・OTE）。入りどきと重なるので総合スコアには数えない
 }
 
 /** SMC の読みを、カードに出すタグ（加減点つき）にする。 */
@@ -185,12 +186,12 @@ export function smcTags(r: SmcRead, direction: SlDirection, digits: number): PaT
   if (r.oppFvg) tags.push({ label: `すぐ${long ? '上に売り' : '下に買い'}のFVG`, tone: 'against', points: -4 });
   if (r.pd) {
     const pct = Math.round(r.pd.pos * 100);
-    if (r.pd.ote) tags.push({ label: `OTE（${long ? '61.8〜79%押し' : '61.8〜79%戻し'}・${pct}%）`, tone: 'with', points: 6 });
+    if (r.pd.ote) tags.push({ label: `OTE（${long ? '61.8〜79%押し' : '61.8〜79%戻し'}・${pct}%）`, tone: 'with', points: 6, group: 'pd' });
     else if ((long && r.pd.zone === 'discount') || (!long && r.pd.zone === 'premium'))
-      tags.push({ label: `${long ? 'ディスカウント' : 'プレミアム'}（${pct}%）`, tone: 'with', points: 3 });
+      tags.push({ label: `${long ? 'ディスカウント' : 'プレミアム'}（${pct}%）`, tone: 'with', points: 3, group: 'pd' });
     else if ((long && r.pd.zone === 'premium') || (!long && r.pd.zone === 'discount'))
-      tags.push({ label: `${long ? 'プレミアムで買い' : 'ディスカウントで売り'}（${pct}%）`, tone: 'against', points: -5 });
-    else tags.push({ label: `値幅の中間（${pct}%）`, tone: 'info', points: 0 });
+      tags.push({ label: `${long ? 'プレミアムで買い' : 'ディスカウントで売り'}（${pct}%）`, tone: 'against', points: -5, group: 'pd' });
+    else tags.push({ label: `値幅の中間（${pct}%）`, tone: 'info', points: 0, group: 'pd' });
   }
   if (r.displacement !== 0) {
     const withDir = (r.displacement === 1) === long;

@@ -22,6 +22,7 @@ import { fetchGoldSpot } from '@/lib/goldSpot';
 import { CONFIRMATION_LABEL, priceActionHeadline, type PatternRead, type PriceActionTone } from '@/lib/candleRead';
 import type { OhlcCandle } from '@/lib/edge';
 import { PriceActionChart } from '@/components/PriceActionChart';
+import { TradeChart } from '@/components/TradeChart';
 import TfCountdown from '@/components/TfCountdown';
 import { DowHeader, KeyLevelRow, SwingChart, ZoneLadder } from '@/components/TfStructure';
 import { dowDirection, dowSummary, type DowAnalysis } from '@/lib/dow';
@@ -759,6 +760,23 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
       {/* エントリー判断（いちばん判断に直結するので先頭）: RR ＋ 入りどき（高値掴み・安値売りの回避） */}
       <SectionLabel>エントリー判断</SectionLabel>
       <RrRow rr={tf.rr} digits={digits} dow={tf.dow} />
+      {/* ローソク足とエントリー・損切り・目標（指値/逆指値の目安があれば点線） */}
+      {tf.rr && tf.bars && tf.bars.length >= 2 && (
+        <div className="mt-2">
+          <TradeChart
+            bars={tf.bars}
+            forming={tf.forming ?? null}
+            direction={tf.rr.direction}
+            entry={tf.rr.entry}
+            stop={tf.rr.stop}
+            target={tf.rr.target}
+            digits={digits}
+            pip={pip}
+            limitPrice={timing && timing.dir === tf.rr.direction && timing.t.verdict !== 'ok' ? timing.t.limit?.price ?? null : null}
+            stopEntryPrice={stopEntry && timing?.dir === tf.rr.direction ? stopEntry.price : null}
+          />
+        </div>
+      )}
       {timing && (
         <EntryTimingRow
           dir={timing.dir}
