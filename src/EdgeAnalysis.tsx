@@ -2,7 +2,7 @@
 // RR・損切り・目標・入りどきは TF分析ページと同じ（Worker が TF分析の結果からカードを作る。rankingCards.ts）。
 // RR 成立=好機・1:2.0 以上で不成立=準好機（別枠・隠せる）。ペア・方向・時間足で絞り込める。
 // カードは要約（売買・ペア・RR・総合スコア・リスク:リワードの棒・入りどき・有利/不利の数）を常に見せ、
-// タップで詳細（ダウ・損切りの根拠・指値/逆指値の目安・AI・スコアの内訳）を開く。
+// タップで詳細（ローソク足とエントリー/損切り/目標のチャート・ダウ・損切りの根拠・指値/逆指値の目安・AI・スコアの内訳）を開く。
 // 旧キャッシュ（総合スコアが無いカード・タイミングが旧方式のカード）は従来の表示にする。
 // currency-strength worker(/ranking, VITE_RANKING_URL) が算出・KVキャッシュ。整形は src/lib/ranking.ts を共有。
 // ※投資助言ではなく、値動きや利益を保証するものではない参考情報。
@@ -12,6 +12,8 @@ import type { EntryKind } from '@/lib/entrySignal';
 import type { SlTimeframe } from '@/lib/stoploss';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 import type { ScoreItem } from '@/lib/edgeScore';
+import { pipSize } from '@/lib/stoploss';
+import { TradeChart } from '@/components/TradeChart';
 
 const RANKING_URL = import.meta.env.VITE_RANKING_URL as string | undefined;
 
@@ -106,7 +108,8 @@ function OpportunityCard({ card }: { card: RrCard }) {
   const sumCons = cons.reduce((a, it) => a + it.points, 0);
   const adjusted = !!(card.stopNote || card.targetNote); // 旧キャッシュのみ
   const orders = card.timing && (card.timing.limitPrice != null || card.timing.stopEntryPrice != null);
-  const hasDetail = items.length > 0 || !!card.dowLabel || adjusted || pa.length > 0 || !!orders;
+  const hasChart = !!card.bars && card.bars.length >= 2;
+  const hasDetail = items.length > 0 || !!card.dowLabel || adjusted || pa.length > 0 || !!orders || hasChart;
   const body = (
     <>
       {/* 見出し: 売買・ペア・時間足・RR ／ スコア */}
@@ -172,6 +175,21 @@ function OpportunityCard({ card }: { card: RrCard }) {
 
       {open && hasDetail && (
         <div className="space-y-2.5 border-t border-gray-100 px-3 pb-3 pt-2 text-[11px]">
+          {/* ローソク足とエントリー・損切り・目標（指値/逆指値の目安があれば点線） */}
+          {hasChart && card.bars && (
+            <TradeChart
+              bars={card.bars}
+              forming={card.forming}
+              direction={card.direction}
+              entry={card.entry}
+              stop={card.stop}
+              target={card.target}
+              digits={d}
+              pip={pipSize(card.instrument)}
+              limitPrice={card.timing?.limitPrice ?? null}
+              stopEntryPrice={card.timing?.stopEntryPrice ?? null}
+            />
+          )}
           {/* 状態: ダウ理論・帯での調整 */}
           {(card.dowLabel || adjusted || card.stopReasons?.length || orders || card.jevProb != null) && (
             <dl className="grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-0.5">

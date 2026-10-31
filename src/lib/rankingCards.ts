@@ -23,6 +23,7 @@ export interface MtfTfLike {
   dow?: DowAnalysis | null;
   breakout: BreakoutProb | null;
   bars?: OhlcCandle[];
+  forming?: OhlcCandle | null;
   candlePatterns?: PatternRead[];
 }
 
@@ -80,6 +81,8 @@ export function cardsFromMtf(m: MtfLike): RrCard[] {
       patternNote: rr.patternNote,
       paTags,
       jevProb,
+      bars: t.bars,
+      forming: t.forming ?? null,
       timing: verdict
         ? {
             verdict,

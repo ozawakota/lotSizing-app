@@ -9,6 +9,7 @@ import { ENTRY_DELTA, type EntrySignal } from './entrySignal';
 import type { ScoreItem } from './edgeScore';
 import type { PaTag } from './smc';
 import type { TimingVerdict } from './entryTiming';
+import type { OhlcCandle } from './edge';
 
 export const RANKING_TIMEFRAMES: SlTimeframe[] = ['15m', '30m', '1h', '4h'];
 
@@ -61,6 +62,8 @@ export interface RrCard {
   jevProb?: number | null; // AI（Jev）のその方向へのブレイク確率
   stopReasons?: string[]; // 損切りの根拠（構造的損切り）
   patternNote?: string; // ローソク足パターンとの関係
+  bars?: OhlcCandle[]; // その時間足の直近の確定足（チャート用・古い順）
+  forming?: OhlcCandle | null; // 形成中の足
 }
 
 export interface RrBoardSnapshot {

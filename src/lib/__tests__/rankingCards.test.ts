@@ -11,7 +11,7 @@ const mtf = (): MtfLike => ({
   instrument: 'USD_JPY',
   currentRate: 150,
   timeframes: [
-    { tf: '15m', rr: rr(), breakout: { up: 60, down: 20, range: 20 },
+    { tf: '15m', rr: rr(), breakout: { up: 60, down: 20, range: 20 }, bars: [{ open: 150, high: 150.1, low: 149.9, close: 150 }],
       timing: { verdict: 'ok', score: 0, reasons: [], limit: null, mas: [] }, stopEntry: null },
     { tf: '30m', rr: rr({ rr: 2.2, qualifies: false }), breakout: null,
       timing: { verdict: 'avoid', score: 5, reasons: [], limit: { price: 149.8, basis: '押し目50%', distancePips: 20, rr: 4 }, mas: [] },
@@ -26,6 +26,7 @@ describe('cardsFromMtf', () => {
     const cards = cardsFromMtf(mtf());
     expect(cards.map((c) => [c.tf, c.tier])).toEqual([['15m', 'prime'], ['30m', 'near']]);
     expect(cards[0]).toMatchObject({ entry: 150, stop: 149.5, target: 151.5, rr: 3, jevProb: 60, stopReasons: ['押し安値'] });
+    expect(cards[0].bars).toHaveLength(1); // チャート用の足もカードに載せる
   });
 
   it('入りどき・指値/逆指値の目安を TF分析と同じに載せ、スコアに反映する', () => {
