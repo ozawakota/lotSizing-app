@@ -1,2 +1,8 @@
 allowBuilds:
   esbuild: set this to true or false
+
+# @mobiscroll/react は npm:@mobiscroll/react-next-trial のエイリアスで、公開名が
+# 一致しないため pnpm のストア整合チェックに引っかかる。CI/ローカルでの
+# インストール失敗(ERR_PNPM_UNEXPECTED_PKG_CONTENT_IN_STORE)を防ぐため無効化。
+# pnpm 10 以降、この種の設定は .npmrc ではなく pnpm-workspace.yaml に書く。
+strictStorePkgContentCheck: false
