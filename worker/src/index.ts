@@ -42,6 +42,7 @@ import { PATTERN_DIRECTION, type OhlcCandle } from '../../src/lib/edge';
 // エントリーサイン（押し目/戻り/反転警戒）の純粋ロジック。
 import { classifyEntry, computeMaLines, computeMaSet, type MaLines, type MaSet } from '../../src/lib/entrySignal';
 import { assessEntryTiming, type EntryTiming } from '../../src/lib/entryTiming';
+import { stopEntryForAnalysis, type StopEntryPlan } from '../../src/lib/zoneBreak';
 // TF分析カードのローソク足パターン読み（質・場所・確定/否定）。フロントと共有。
 // 4時間足の出来高インジケーター(/volume)。フロントと共有。
 import {
@@ -92,6 +93,7 @@ import {
   RR_MIN,
   RR_MIN_DIRECTION_PROB,
   typicalSpreadPips,
+  pipSize,
   SL_TIMEFRAMES,
   YAHOO_INTERVAL,
   YAHOO_SYMBOL,
@@ -1012,6 +1014,7 @@ interface MtfTf {
   ma: MaSet; // 確定足の終値から求めた 21SMA・75EMA・200EMA（本数不足は null）。入りどき判定に使う
   maLines: MaLines; // チャートに描く移動平均の線（bars と同じ長さ・古い順。本数不足の位置は null）
   timing: EntryTiming | null; // 入りどき（高値掴み・安値売りの回避）。方向が無い（レンジ等）・足不足は null。自動売買（infra/autotrade）が使う
+  stopEntry: StopEntryPlan | null; // ブレイクを狙う逆指値の目安（すぐ前の帯を抜けやすいときだけ）。自動売買が使う
 }
 interface MtfPayload {
   instrument: string;
@@ -1150,6 +1153,7 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       ma,
       maLines: computeMaLines((tfOhlc[i] ?? []).map((b) => b.close), Math.min(CHART_BARS, (tfOhlc[i] ?? []).length)),
       timing: null, // 下の2パス目で算出（RR の損切り・目標が必要なため）
+      stopEntry: null, // 同上
     });
   }
 
@@ -1237,6 +1241,19 @@ const buildMtf = async (env: Env, instrument: string): Promise<MtfPayload> => {
       stochK: t.stoch?.k ?? null,
       rr: t.rr ? { stop: t.rr.stop, target: t.rr.target, spreadPips: t.rr.spreadPips } : null,
       ma: t.ma,
+    });
+    // ブレイクを狙う逆指値の目安（画面の「注文の目安」と同じ計算）。
+    t.stopEntry = stopEntryForAnalysis({
+      direction,
+      price: currentRate,
+      pip: pipSize(instrument),
+      bars: t.bars,
+      zones: t.zones,
+      dow: t.dow,
+      breakout: t.breakout,
+      rsi: t.rsi,
+      ma: t.ma,
+      rr: t.rr ? { stop: t.rr.stop, target: t.rr.target, spreadPips: t.rr.spreadPips } : null,
     });
     if (t.rr?.qualifies && (!rrOpportunity || t.rr.rr > rrOpportunity.rr)) {
       rrOpportunity = { ...t.rr, tf: t.tf };

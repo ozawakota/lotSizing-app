@@ -58,3 +58,18 @@ describe('stopEntryPlan', () => {
     expect(stopEntryPlan({ ...args, rr: { stop: 150.0, target: 150.5, spreadPips: 0.3 }, ahead: { zone: zone({}), odds, label: 'R1' } })).toBeNull();
   });
 });
+
+describe('stopEntryForAnalysis（画面と Worker で共有）', () => {
+  it('トレンド方向のすぐ前の帯（買いなら R1）から逆指値の目安を作る', async () => {
+    const { stopEntryForAnalysis } = await import('../zoneBreak');
+    const bars = Array.from({ length: 30 }, (_, k) => ({ open: 150.2, high: 150.3, low: 150.1, close: 150.2 + (k % 2) * 0.01 }));
+    const p = stopEntryForAnalysis({
+      direction: 'long', price: 150.3, pip: 0.01, bars,
+      zones: { res: [zone({})], sup: [] }, dow: up, breakout: { up: 50, down: 20, range: 30 }, rsi: 60,
+      ma: { sma21: 150.1, ema75: null, ema200: null }, rr: { stop: 150.0, target: 151.2, spreadPips: 0.3 },
+    });
+    expect(p?.zoneLabel).toBe('R1（抵抗帯★1）');
+    expect(p!.price).toBeGreaterThan(150.45);
+    expect(stopEntryForAnalysis({ direction: 'long', price: 150.3, pip: 0.01, bars, zones: { res: [], sup: [] }, dow: up, breakout: null, rsi: null, rr: null })).toBeNull();
+  });
+});

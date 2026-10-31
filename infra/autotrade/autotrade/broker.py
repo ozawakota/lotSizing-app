@@ -123,7 +123,7 @@ class Mt5Broker:
 
     def _filling(self, symbol: str, order: str) -> int:
         mt5 = self.mt5
-        if order == "limit":
+        if order in ("limit", "stop"):
             return mt5.ORDER_FILLING_RETURN
         mode = self._info(symbol).filling_mode  # ビット: 1=FOK, 2=IOC
         if mode & 2:
@@ -140,8 +140,11 @@ class Mt5Broker:
             req_type = mt5.ORDER_TYPE_BUY if direction == "long" else mt5.ORDER_TYPE_SELL
             price = t.ask if direction == "long" else t.bid
             action = mt5.TRADE_ACTION_DEAL
-        else:
+        elif order == "limit":  # 指値: 今より有利な価格まで来たら約定
             req_type = mt5.ORDER_TYPE_BUY_LIMIT if direction == "long" else mt5.ORDER_TYPE_SELL_LIMIT
+            action = mt5.TRADE_ACTION_PENDING
+        else:  # 逆指値: 帯を抜けて価格がそこまで来たら約定（ブレイク狙い）
+            req_type = mt5.ORDER_TYPE_BUY_STOP if direction == "long" else mt5.ORDER_TYPE_SELL_STOP
             action = mt5.TRADE_ACTION_PENDING
         req = {
             "action": action,
