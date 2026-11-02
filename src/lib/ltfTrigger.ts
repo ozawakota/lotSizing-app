@@ -167,3 +167,72 @@ export function assessLtfTrigger(i: LtfInput): LtfResult | null {
     state, checks, swingHigh, swingLow, pattern: pat?.label ?? null, refined, htfRr: htf.rr, note,
   };
 }
+
+// ---------------------------------------------------------------------------
+// 上位足のプランが無いときの参考: 下位足の値幅（直近の戻り高値・押し安値）を抜けた方向について行く場合の入り方。
+//   買い = 直近の高値（スイング）+0.1 ATR に逆指値（もう抜けていれば今の価格で成行）、損切りは直近の安値 −0.2 ATR、
+//   目標は損切り幅の 2 倍（RR 1:2）。
+//   売り = その逆。下位足の流れ（高値・安値の切り上げ/切り下げ）も返し、流れの向きの方を「本命」とする。
+// ---------------------------------------------------------------------------
+export type LtfTrend = 'up' | 'down' | 'range';
+
+export interface LtfBreakoutSide {
+  direction: SlDirection;
+  entryType: 'stop' | 'market'; // まだ抜けていない=逆指値 / もう抜けた=成行（今の価格）
+  entry: number; // 逆指値の価格（抜け済みなら今の価格）
+  stop: number;
+  target: number; // RR 1:2 の目安
+  riskPips: number;
+  basis: string; // 例「直近の高値 150.310 の上抜け」
+}
+
+export interface LtfStructure {
+  trend: LtfTrend;
+  swingHigh: number;
+  swingLow: number;
+  buy: LtfBreakoutSide;
+  sell: LtfBreakoutSide;
+}
+
+export const LTF_BREAKOUT_RR = 2;
+
+export function ltfStructure(bars: OhlcCandle[], instrument: string, price: number, digits = 5): LtfStructure | null {
+  if (bars.length < 20) return null;
+  const atr = averageTrueRange(bars);
+  if (!(atr > 0)) return null;
+  const pip = pipSize(instrument);
+  const hi = pivots(bars, 'high');
+  const lo = pivots(bars, 'low');
+  if (!hi.length || !lo.length) return null;
+  const sh = bars[hi[hi.length - 1]].high;
+  const sl = bars[lo[lo.length - 1]].low;
+  if (!(sh > sl)) return null;
+  // 流れ: 直近2つの高値・安値がそろって切り上げ=上昇 / 切り下げ=下降 / それ以外=レンジ
+  let trend: LtfTrend = 'range';
+  if (hi.length >= 2 && lo.length >= 2) {
+    const hUp = bars[hi[hi.length - 1]].high > bars[hi[hi.length - 2]].high;
+    const lUp = bars[lo[lo.length - 1]].low > bars[lo[lo.length - 2]].low;
+    const hDn = bars[hi[hi.length - 1]].high < bars[hi[hi.length - 2]].high;
+    const lDn = bars[lo[lo.length - 1]].low < bars[lo[lo.length - 2]].low;
+    trend = hUp && lUp ? 'up' : hDn && lDn ? 'down' : 'range';
+  }
+  const side = (direction: SlDirection): LtfBreakoutSide => {
+    const long = direction === 'long';
+    const trigger = long ? sh + atr * 0.1 : sl - atr * 0.1;
+    // もう抜けていれば今の価格（成行）で入る
+    const broken = long ? price >= trigger : price <= trigger;
+    const entry = broken ? price : trigger;
+    const stop = long ? sl - atr * 0.2 : sh + atr * 0.2;
+    const risk = Math.abs(entry - stop);
+    return {
+      direction,
+      entryType: broken ? 'market' : 'stop',
+      entry,
+      stop,
+      target: long ? entry + risk * LTF_BREAKOUT_RR : entry - risk * LTF_BREAKOUT_RR,
+      riskPips: round1(risk / pip),
+      basis: `直近の${long ? '高値' : '安値'} ${(long ? sh : sl).toFixed(digits)} の${long ? '上' : '下'}抜け${broken ? '（抜け済み）' : ''}`,
+    };
+  };
+  return { trend, swingHigh: sh, swingLow: sl, buy: side('long'), sell: side('short') };
+}

@@ -23,7 +23,7 @@ import { CONFIRMATION_LABEL, priceActionHeadline, type PatternRead, type PriceAc
 import type { OhlcCandle } from '@/lib/edge';
 import { PriceActionChart } from '@/components/PriceActionChart';
 import { TradeChart } from '@/components/TradeChart';
-import { LtfEntryPanel } from '@/components/LtfEntryPanel';
+import { LtfEntryCard, type HtfPlan } from '@/components/LtfEntryCard';
 import type { LtfPlanArea } from '@/lib/ltfTrigger';
 import TfCountdown from '@/components/TfCountdown';
 import { DowHeader, KeyLevelRow, SwingChart, ZoneLadder } from '@/components/TfStructure';
@@ -712,6 +712,31 @@ function SectionLabel({ children, note }: { children: ReactNode; note?: ReactNod
   );
 }
 
+// 下位足で詰める上位足のプラン: 入りどき=今の価格（成行）/ 押し目待ち=指値の目安 / それ以外で逆指値の目安があれば逆指値。
+function htfPlanOf(tf: MtfTf, instrument: string, currentRate: number): HtfPlan | null {
+  if (!tf.rr) return null;
+  const timing = tfTiming(tf, instrument, currentRate);
+  if (!timing || timing.dir !== tf.rr.direction) return null;
+  const stopEntry = tfStopEntry(tf, timing.dir, currentRate, pipSize(instrument));
+  const area: LtfPlanArea | null =
+    timing.t.verdict === 'ok'
+      ? { kind: 'market', price: currentRate }
+      : timing.t.verdict === 'wait' && timing.t.limit
+        ? { kind: 'limit', price: timing.t.limit.price }
+        : stopEntry
+          ? { kind: 'stop', price: stopEntry.price }
+          : null;
+  if (!area) return null;
+  return {
+    tfLabel: TF_LABEL[tf.tf],
+    direction: tf.rr.direction,
+    area,
+    htfStop: tf.rr.stop,
+    target: tf.rr.target,
+    spreadPips: tf.rr.spreadPips,
+  };
+}
+
 // 1TFの融合カード:
 //   見出し（時間足・確定カウントダウン・結論チップ）→ エントリー判断（RR・入りどき）
 //   → プライスアクション（ローソク足チャート・移動平均線・パターンの一覧）
@@ -727,17 +752,6 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
   const timing = tfTiming(tf, instrument, currentRate);
   const breaks = zoneBreaks(tf, currentRate, pip);
   const stopEntry = timing ? tfStopEntry(tf, timing.dir, currentRate, pip) : null;
-  // 下位足で確かめる「入る場所」: 入りどき=今の価格 / 押し目待ち=指値の目安 / それ以外で逆指値の目安があれば逆指値。
-  const ltfArea: LtfPlanArea | null =
-    !timing || !tf.rr || timing.dir !== tf.rr.direction
-      ? null
-      : timing.t.verdict === 'ok'
-        ? { kind: 'market', price: currentRate }
-        : timing.t.verdict === 'wait' && timing.t.limit
-          ? { kind: 'limit', price: timing.t.limit.price }
-          : stopEntry
-            ? { kind: 'stop', price: stopEntry.price }
-            : null;
   const stochLabel = !tf.stoch ? null : tf.stoch.k >= 80 ? '買われすぎ' : tf.stoch.k <= 20 ? '売られすぎ' : '中立';
   const stochCls = !tf.stoch
     ? ''
@@ -791,20 +805,6 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
             stopEntryPrice={stopEntry && timing?.dir === tf.rr.direction ? stopEntry.price : null}
           />
         </div>
-      )}
-      {/* 下位足（1分・5分）で入るタイミングを確かめる（上位足のプランがあるときだけ） */}
-      {LTF_URL && tf.rr && ltfArea && (
-        <LtfEntryPanel
-          url={LTF_URL}
-          instrument={instrument}
-          currentRate={currentRate}
-          digits={digits}
-          direction={tf.rr.direction}
-          area={ltfArea}
-          htfStop={tf.rr.stop}
-          target={tf.rr.target}
-          spreadPips={tf.rr.spreadPips}
-        />
       )}
       {timing && (
         <EntryTimingRow
@@ -1130,6 +1130,23 @@ export default function TimeframeAnalysis() {
               instrument={result.instrument}
               currentRate={result.currentRate}
             />
+
+            {/* 下位足（1分・5分）のエントリーポイント: 選んだ時間足のプラン → RR好機の足 → プランのある足の順で詰める */}
+            {LTF_URL && (
+              <LtfEntryCard
+                url={LTF_URL}
+                instrument={result.instrument}
+                currentRate={result.currentRate}
+                digits={digits}
+                plan={
+                  (current && htfPlanOf(current, result.instrument, result.currentRate)) ??
+                  [tfs.find((t) => t.tf === result.rrOpportunity?.tf), ...tfs]
+                    .map((t) => (t ? htfPlanOf(t, result.instrument, result.currentRate) : null))
+                    .find((p) => p != null) ??
+                  null
+                }
+              />
+            )}
 
             {result.comment && <CommentCard comment={result.comment} />}
 
