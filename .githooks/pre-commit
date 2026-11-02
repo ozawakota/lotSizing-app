@@ -1,0 +1,25 @@
+#!/bin/sh
+# ガードレール L5: Claude 以外の経路も含め、シークレットをコミットさせない。
+# 有効化: git config core.hooksPath .githooks
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+
+# 1) 機密ファイルそのものが staged されていたら拒否
+bad=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '(^|/)(\.env(\..*)?|\.dev\.vars|\.npmrc|\.pgpass)$|\.(pem|key|p12|pfx|keystore|secret)$|(^|/)id_(rsa|ed25519)' | grep -vE '(^|/)\.env\.example$' || true)
+if [ -n "$bad" ]; then
+  echo "pre-commit: 機密ファイルはコミットできません:" >&2
+  echo "$bad" | sed 's/^/  /' >&2
+  exit 1
+fi
+
+# 2) 追加行のシークレットスキャン（gitleaks があればそれも使う）
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git --staged --no-banner --redact || exit 1
+fi
+
+if ! git diff --cached -U0 --diff-filter=ACMR | grep -E '^\+[^+]' | sed 's/^+//' | python3 "$root/.githooks/leak_scan.py" >&2; then
+  echo "pre-commit: シークレットらしき値が含まれています。.env に移してください。" >&2
+  echo "  （誤検知なら値の書き方を見直すか、内容を確認のうえ git commit --no-verify）" >&2
+  exit 1
+fi
