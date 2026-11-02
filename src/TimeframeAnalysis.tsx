@@ -23,6 +23,8 @@ import { CONFIRMATION_LABEL, priceActionHeadline, type PatternRead, type PriceAc
 import type { OhlcCandle } from '@/lib/edge';
 import { PriceActionChart } from '@/components/PriceActionChart';
 import { TradeChart } from '@/components/TradeChart';
+import { LtfEntryPanel } from '@/components/LtfEntryPanel';
+import type { LtfPlanArea } from '@/lib/ltfTrigger';
 import TfCountdown from '@/components/TfCountdown';
 import { DowHeader, KeyLevelRow, SwingChart, ZoneLadder } from '@/components/TfStructure';
 import { dowDirection, dowSummary, type DowAnalysis } from '@/lib/dow';
@@ -32,6 +34,8 @@ import { computeMaLines, type MaLines, type MaSet } from '@/lib/entrySignal';
 import { TIMING_LABEL, assessEntryTiming, type EntryTiming, type TimingVerdict } from '@/lib/entryTiming';
 
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
+// 下位足（1分・5分）は同じ Worker の /ltf（/mtf と同じ場所）。
+const LTF_URL = MTF_URL ? MTF_URL.replace(/\/mtf$/, '/ltf') : undefined;
 
 const PAIRS: { label: string; instrument: string }[] = [
   { label: 'USD/JPY', instrument: 'USD_JPY' },
@@ -723,6 +727,17 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
   const timing = tfTiming(tf, instrument, currentRate);
   const breaks = zoneBreaks(tf, currentRate, pip);
   const stopEntry = timing ? tfStopEntry(tf, timing.dir, currentRate, pip) : null;
+  // 下位足で確かめる「入る場所」: 入りどき=今の価格 / 押し目待ち=指値の目安 / それ以外で逆指値の目安があれば逆指値。
+  const ltfArea: LtfPlanArea | null =
+    !timing || !tf.rr || timing.dir !== tf.rr.direction
+      ? null
+      : timing.t.verdict === 'ok'
+        ? { kind: 'market', price: currentRate }
+        : timing.t.verdict === 'wait' && timing.t.limit
+          ? { kind: 'limit', price: timing.t.limit.price }
+          : stopEntry
+            ? { kind: 'stop', price: stopEntry.price }
+            : null;
   const stochLabel = !tf.stoch ? null : tf.stoch.k >= 80 ? '買われすぎ' : tf.stoch.k <= 20 ? '売られすぎ' : '中立';
   const stochCls = !tf.stoch
     ? ''
@@ -776,6 +791,20 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
             stopEntryPrice={stopEntry && timing?.dir === tf.rr.direction ? stopEntry.price : null}
           />
         </div>
+      )}
+      {/* 下位足（1分・5分）で入るタイミングを確かめる（上位足のプランがあるときだけ） */}
+      {LTF_URL && tf.rr && ltfArea && (
+        <LtfEntryPanel
+          url={LTF_URL}
+          instrument={instrument}
+          currentRate={currentRate}
+          digits={digits}
+          direction={tf.rr.direction}
+          area={ltfArea}
+          htfStop={tf.rr.stop}
+          target={tf.rr.target}
+          spreadPips={tf.rr.spreadPips}
+        />
       )}
       {timing && (
         <EntryTimingRow

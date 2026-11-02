@@ -1370,6 +1370,87 @@ const handleMtf = async (env: Env, url: URL): Promise<Response> => {
 };
 
 // ---------------------------------------------------------------------------
+// /ltf: 下位足（1分足・5分足）。TF分析で上位足のプランが出たとき、入るタイミングを下位足で確かめるため（AI なし）。
+// 1分足は古いと意味がないので、キャッシュは 60 秒だけ。判定（ltfTrigger）は画面側の純関数で行う。
+// KV は使わない（無料枠の書き込みは 1日 1,000 回で、パネルを開いている間は毎分書くことになるため）。
+// 代わりに (1) Worker のメモリ（同じインスタンス内で有効。*.workers.dev でも効く）と
+// (2) Cache API（独自ドメイン・ルート経由のときだけ効く。*.workers.dev では何もしない）を使う。どちらも無料・回数制限なし。
+// ---------------------------------------------------------------------------
+const LTF_TTL_MS = 60 * 1000;
+const LTF_BARS = 90; // 返す確定足の本数（1分足=1.5時間・5分足=7.5時間）
+const LTF_DEFS: { tf: '1m' | '5m'; interval: string; range: string }[] = [
+  { tf: '1m', interval: '1m', range: '1d' },
+  { tf: '5m', interval: '5m', range: '5d' },
+];
+
+interface LtfPayload {
+  instrument: string;
+  currentRate: number;
+  tfs: { tf: '1m' | '5m'; bars: OhlcCandle[]; forming: OhlcCandle | null }[];
+  generatedAt: number;
+}
+
+const ltfMemCache = new Map<string, { body: string; generatedAt: number }>();
+// Cache API のキー（実在しない URL でよい。ペアごと）
+const ltfCacheKey = (instrument: string) => new Request(`https://ltf-cache.internal/${encodeURIComponent(instrument)}`);
+
+const ltfCacheGet = async (instrument: string): Promise<{ body: string; generatedAt: number } | null> => {
+  const mem = ltfMemCache.get(instrument);
+  if (mem) return mem;
+  try {
+    const hit = await caches.default.match(ltfCacheKey(instrument));
+    if (!hit) return null;
+    const body = await hit.text();
+    const p = JSON.parse(body) as LtfPayload;
+    return { body, generatedAt: p.generatedAt };
+  } catch {
+    return null;
+  }
+};
+
+const ltfCachePut = async (instrument: string, body: string, generatedAt: number): Promise<void> => {
+  ltfMemCache.set(instrument, { body, generatedAt });
+  try {
+    await caches.default.put(
+      ltfCacheKey(instrument),
+      new Response(body, { headers: { 'Content-Type': 'application/json', 'Cache-Control': `max-age=${LTF_TTL_MS / 1000}` } }),
+    );
+  } catch (e) {
+    console.error('/ltf キャッシュ保存 失敗:', e); // 保存できなくても応答は返す
+  }
+};
+
+const handleLtf = async (url: URL): Promise<Response> => {
+  const instrument = url.searchParams.get('instrument') || 'USD_JPY';
+  const symbol = YAHOO_SYMBOL[instrument];
+  if (!symbol) return new Response(JSON.stringify({ error: '未対応のペアです' }), { headers: CORS_HEADERS });
+  const hit = await ltfCacheGet(instrument);
+  if (hit && Date.now() - hit.generatedAt < LTF_TTL_MS) return new Response(hit.body, { headers: CORS_HEADERS });
+  try {
+    let currentRate = 0;
+    const tfs: LtfPayload['tfs'] = [];
+    for (const d of LTF_DEFS) {
+      const { candles, currentRate: cr } = await fetchYahooCandles(symbol, d.interval, d.range);
+      currentRate = cr;
+      const ohlc: OhlcCandle[] = candles
+        .filter((c) => typeof c.open === 'number')
+        .map((c) => ({ open: c.open as number, high: c.high, low: c.low, close: c.close, t: c.t }));
+      tfs.push({ tf: d.tf, bars: ohlc.slice(0, -1).slice(-LTF_BARS), forming: ohlc.at(-1) ?? null });
+    }
+    const payload: LtfPayload = { instrument, currentRate, tfs, generatedAt: Date.now() };
+    const body = JSON.stringify(payload);
+    await ltfCachePut(instrument, body, payload.generatedAt);
+    return new Response(body, { headers: CORS_HEADERS });
+  } catch (e) {
+    console.error('/ltf 失敗:', e);
+    if (hit) return new Response(hit.body, { headers: CORS_HEADERS }); // 古くても無いよりよい
+    return new Response(JSON.stringify({ error: '下位足を取得できませんでした。少し待って再試行してください' }), {
+      headers: CORS_HEADERS,
+    });
+  }
+};
+
+// ---------------------------------------------------------------------------
 // /ranking: RR好機ボード（cron で KV キャッシュ）
 // ---------------------------------------------------------------------------
 // RR好機ボード（エッジページ）。各ペアの TF分析（/mtf と同じ buildMtf）から、RR が出た時間足を1カードにする
@@ -1558,13 +1639,14 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     // CORS プリフライト。
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
-    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、/mtf=TF分析、/ranking=ランキング、/volume=4h出来高、他=通貨強弱。
+    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、/mtf=TF分析、/ltf=下位足、/ranking=ランキング、/volume=4h出来高、他=通貨強弱。
     const reqUrl = new URL(req.url);
     const pathname = reqUrl.pathname;
     if (pathname === '/flow') return handleFlow(env);
     if (pathname === '/news') return handleNews(env);
     if (pathname === '/stoploss') return handleStopLoss(env, reqUrl);
     if (pathname === '/mtf') return handleMtf(env, reqUrl);
+    if (pathname === '/ltf') return handleLtf(reqUrl);
     if (pathname === '/ranking') return handleRanking(env);
     if (pathname === '/volume') return handleVolume(env);
 
