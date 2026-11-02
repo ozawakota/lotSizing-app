@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assessLtfTrigger, type LtfInput } from '../ltfTrigger';
+import { assessLtfTrigger, ltfStructure, type LtfInput } from '../ltfTrigger';
 import type { OhlcCandle } from '../edge';
 
 // 終値の列から、値幅 0.02 のローソク足（陰陽は前の終値との比較）を作る。
@@ -49,5 +49,35 @@ describe('assessLtfTrigger', () => {
   it('上位足の損切りを越えていたら無効、足が足りなければ null', () => {
     expect(assessLtfTrigger(base({ price: 149.7 }))!.state).toBe('invalid');
     expect(assessLtfTrigger(base({ bars: bars(pullback.slice(0, 10)) }))).toBeNull();
+  });
+});
+
+describe('ltfStructure', () => {
+  it('直近の高値の上に買いの逆指値・安値の下に売りの逆指値を置き、目標は RR 1:2', () => {
+    const s = ltfStructure(bars(pullback), 'USD_JPY', 150.2, 3)!;
+    expect(s.swingHigh).toBeCloseTo(150.31, 5);
+    expect(s.swingLow).toBeCloseTo(150.09, 5);
+    expect(s.buy.entry).toBeGreaterThan(s.swingHigh);
+    expect(s.buy.stop).toBeLessThan(s.swingLow);
+    expect(s.sell.entry).toBeLessThan(s.swingLow);
+    expect(s.sell.stop).toBeGreaterThan(s.swingHigh);
+    expect(s.buy.target - s.buy.entry).toBeCloseTo((s.buy.entry - s.buy.stop) * 2, 8);
+    expect(s.sell.entry - s.sell.target).toBeCloseTo((s.sell.stop - s.sell.entry) * 2, 8);
+    expect(s.buy.entryType).toBe('stop');
+  });
+
+  it('もう高値を抜けていれば、買いは今の価格（成行）で入る', () => {
+    const s = ltfStructure(bars(pullback), 'USD_JPY', 150.4, 3)!;
+    expect(s.buy).toMatchObject({ entryType: 'market', entry: 150.4 });
+    expect(s.buy.basis).toContain('抜け済み');
+  });
+
+  it('高値・安値がそろって切り上がれば上昇、足が足りなければ null', () => {
+    const up = [
+      150.0, 150.1, 150.2, 150.3, 150.2, 150.1, 150.2, 150.3, 150.4, 150.5, 150.4,
+      150.3, 150.4, 150.5, 150.6, 150.7, 150.6, 150.5, 150.6, 150.7, 150.75, 150.8,
+    ];
+    expect(ltfStructure(bars(up), 'USD_JPY', 150.8)!.trend).toBe('up');
+    expect(ltfStructure(bars(pullback.slice(0, 10)), 'USD_JPY', 150.2)).toBeNull();
   });
 });
