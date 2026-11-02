@@ -1370,6 +1370,63 @@ const handleMtf = async (env: Env, url: URL): Promise<Response> => {
 };
 
 // ---------------------------------------------------------------------------
+// /ltf: 下位足（1分足・5分足）。TF分析で上位足のプランが出たとき、入るタイミングを下位足で確かめるため（AI なし）。
+// 1分足は古いと意味がないので、KV キャッシュは 60 秒だけ。判定（ltfTrigger）は画面側の純関数で行う。
+// ---------------------------------------------------------------------------
+const KV_LTF_PREFIX = 'ltf:';
+const LTF_TTL_MS = 60 * 1000;
+const LTF_BARS = 90; // 返す確定足の本数（1分足=1.5時間・5分足=7.5時間）
+const LTF_DEFS: { tf: '1m' | '5m'; interval: string; range: string }[] = [
+  { tf: '1m', interval: '1m', range: '1d' },
+  { tf: '5m', interval: '5m', range: '5d' },
+];
+
+interface LtfPayload {
+  instrument: string;
+  currentRate: number;
+  tfs: { tf: '1m' | '5m'; bars: OhlcCandle[]; forming: OhlcCandle | null }[];
+  generatedAt: number;
+}
+
+const handleLtf = async (env: Env, url: URL): Promise<Response> => {
+  const instrument = url.searchParams.get('instrument') || 'USD_JPY';
+  const symbol = YAHOO_SYMBOL[instrument];
+  if (!symbol) return new Response(JSON.stringify({ error: '未対応のペアです' }), { headers: CORS_HEADERS });
+  const key = `${KV_LTF_PREFIX}${instrument}`;
+  const cached = await env.STRENGTH_KV.get(key);
+  if (cached) {
+    try {
+      const p = JSON.parse(cached) as LtfPayload;
+      if (Date.now() - p.generatedAt < LTF_TTL_MS) return new Response(cached, { headers: CORS_HEADERS });
+    } catch {
+      // 作り直す
+    }
+  }
+  try {
+    let currentRate = 0;
+    const tfs: LtfPayload['tfs'] = [];
+    for (const d of LTF_DEFS) {
+      const { candles, currentRate: cr } = await fetchYahooCandles(symbol, d.interval, d.range);
+      currentRate = cr;
+      const ohlc: OhlcCandle[] = candles
+        .filter((c) => typeof c.open === 'number')
+        .map((c) => ({ open: c.open as number, high: c.high, low: c.low, close: c.close, t: c.t }));
+      tfs.push({ tf: d.tf, bars: ohlc.slice(0, -1).slice(-LTF_BARS), forming: ohlc.at(-1) ?? null });
+    }
+    const payload: LtfPayload = { instrument, currentRate, tfs, generatedAt: Date.now() };
+    const body = JSON.stringify(payload);
+    await env.STRENGTH_KV.put(key, body);
+    return new Response(body, { headers: CORS_HEADERS });
+  } catch (e) {
+    console.error('/ltf 失敗:', e);
+    if (cached) return new Response(cached, { headers: CORS_HEADERS });
+    return new Response(JSON.stringify({ error: '下位足を取得できませんでした。少し待って再試行してください' }), {
+      headers: CORS_HEADERS,
+    });
+  }
+};
+
+// ---------------------------------------------------------------------------
 // /ranking: RR好機ボード（cron で KV キャッシュ）
 // ---------------------------------------------------------------------------
 // RR好機ボード（エッジページ）。各ペアの TF分析（/mtf と同じ buildMtf）から、RR が出た時間足を1カードにする
@@ -1558,13 +1615,14 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     // CORS プリフライト。
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
-    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、/mtf=TF分析、/ranking=ランキング、/volume=4h出来高、他=通貨強弱。
+    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、/mtf=TF分析、/ltf=下位足、/ranking=ランキング、/volume=4h出来高、他=通貨強弱。
     const reqUrl = new URL(req.url);
     const pathname = reqUrl.pathname;
     if (pathname === '/flow') return handleFlow(env);
     if (pathname === '/news') return handleNews(env);
     if (pathname === '/stoploss') return handleStopLoss(env, reqUrl);
     if (pathname === '/mtf') return handleMtf(env, reqUrl);
+    if (pathname === '/ltf') return handleLtf(env, reqUrl);
     if (pathname === '/ranking') return handleRanking(env);
     if (pathname === '/volume') return handleVolume(env);
 
