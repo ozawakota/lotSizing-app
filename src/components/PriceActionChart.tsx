@@ -3,6 +3,8 @@
 // 抵抗帯（R=上の抵抗帯・S=下の支持帯。番号は下の「抵抗帯」のはしごと同じ R1=いちばん近い）は、
 // 帯の上下の境界線つきで、★が多いほど濃く・実線で描き、右端に「R1 価格」のラベルを付ける。
 // いちばん近い R1/S1 がチャートの少し外にあるときは値幅を広げて入れ、遠すぎるときは上下の端に向きと距離を出す。
+// 出来高節目（過去に出来高が膨らんだ価格）は、オレンジの太線をゆっくり点滅させて目立たせる（動きを減らす設定では点滅しない）。
+// 値幅の少し外なら値幅を広げ、遠ければ上下の端に向きと距離を出す。チャートの下にも1行で価格・距離・役割を出す。
 // 下に、番号と対応するパターンの一覧（確定/未確定/否定・形の質・出た場所）を並べる。
 import { useId } from 'react';
 import type { OhlcCandle } from '@/lib/edge';
@@ -26,6 +28,14 @@ const CONFIRM = '#2563eb';
 const INVALIDATE = '#6b7280';
 const RES = '#dc2626';
 const SUP = '#16a34a';
+const VOL = '#d97706'; // 出来高節目（オレンジ）
+
+// 出来高節目の点滅（動きを減らす設定では止めて、少し濃いめで固定）。
+const VOL_BLINK_CSS = `
+@keyframes pa-vol-blink { 0%, 100% { opacity: 0.12; } 50% { opacity: 0.6; } }
+.pa-vol-glow { animation: pa-vol-blink 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .pa-vol-glow { animation: none; opacity: 0.35; } }
+`;
 
 // 帯の濃さ・境界線（★が多いほど濃く、★3 は実線）。
 const ZONE_FILL: Record<1 | 2 | 3, number> = { 1: 0.08, 2: 0.14, 3: 0.22 };
@@ -71,6 +81,9 @@ export function PriceActionChart({
   digits,
   periodLabel,
   maLines,
+  volumeLevel = null,
+  volumeAgoLabel,
+  pip,
 }: {
   bars: OhlcCandle[];
   forming: OhlcCandle | null;
@@ -80,6 +93,9 @@ export function PriceActionChart({
   digits: number;
   periodLabel: string; // 例「直近6時間」
   maLines?: MaLines | null; // 移動平均線（bars と同じ長さ）。無ければ描かない
+  volumeLevel?: number | null; // 出来高節目（過去に出来高が膨らんだ価格）。無ければ描かない
+  volumeAgoLabel?: string; // 例「2日前」
+  pip?: number; // 距離を pips で出すため
 }) {
   const clipId = useId().replace(/:/g, '');
   if (bars.length < 2) return null;
@@ -102,8 +118,12 @@ export function PriceActionChart({
   const span0 = hi0 - lo0 || 1;
   const r1 = zones?.res[0];
   const s1 = zones?.sup[0];
-  const hi = r1 && r1.low > hi0 && r1.low - hi0 <= span0 * ZONE_EXTEND ? Math.max(hi0, Math.min(r1.high, hi0 + span0 * ZONE_EXTEND)) : hi0;
-  const lo = s1 && s1.high < lo0 && lo0 - s1.high <= span0 * ZONE_EXTEND ? Math.min(lo0, Math.max(s1.low, lo0 - span0 * ZONE_EXTEND)) : lo0;
+  const hiZ = r1 && r1.low > hi0 && r1.low - hi0 <= span0 * ZONE_EXTEND ? Math.max(hi0, Math.min(r1.high, hi0 + span0 * ZONE_EXTEND)) : hi0;
+  const loZ = s1 && s1.high < lo0 && lo0 - s1.high <= span0 * ZONE_EXTEND ? Math.min(lo0, Math.max(s1.low, lo0 - span0 * ZONE_EXTEND)) : lo0;
+  // 出来高節目も、値幅の少し外なら値幅を広げて入れる。
+  const vol = volumeLevel;
+  const hi = vol != null && vol > hiZ && vol - hi0 <= span0 * ZONE_EXTEND ? vol : hiZ;
+  const lo = vol != null && vol < loZ && lo0 - vol <= span0 * ZONE_EXTEND ? vol : loZ;
   const span = hi - lo || 1;
   const y = (p: number) => padY + ((hi - p) / span) * (H - padY * 2);
   const slot = (W - padL - padR) / all.length;
@@ -121,6 +141,8 @@ export function PriceActionChart({
   const visibleZones = zoneMarks.filter(({ z }) => z.high >= lo && z.low <= hi);
   const offAbove = zoneMarks.find(({ z, name }) => name.startsWith('R') && z.low > hi);
   const offBelow = zoneMarks.find(({ z, name }) => name.startsWith('S') && z.high < lo);
+  const volIn = vol != null && vol >= lo && vol <= hi;
+  const volPips = vol != null && pip ? Math.abs(vol - currentRate) / pip : null;
   // 帯のラベルは、現在値に近い側の端（抵抗帯=下端・支持帯=上端。値幅の外なら端に寄せる）。
   const zoneEdge = ({ z }: ZoneMark) => (z.side === 'res' ? Math.max(z.low, lo) : Math.min(z.high, hi));
   // 帯の左端の名前（R1 など）の縦位置。帯の中央に置き、近い帯どうしは 8px 以上離す。
@@ -142,6 +164,7 @@ export function PriceActionChart({
       { price: currentRate, kind: 'now' as const },
       ...(trig ? [{ price: trig.confirm, kind: 'confirm' as const }, { price: trig.invalidate, kind: 'invalidate' as const }] : []),
       ...visibleZones.map((m) => ({ price: zoneEdge(m), kind: 'zone' as const, zone: m })),
+      ...(volIn && vol != null ? [{ price: vol, kind: 'volume' as const }] : []),
     ],
     [hi, lo],
     y,
@@ -318,12 +341,57 @@ export function PriceActionChart({
           );
         })}
 
+        {/* 出来高節目: 点滅する太いオレンジの帯 ＋ 実線。値幅の外なら上下の端に向きと距離 */}
+        {vol != null && (
+          <>
+            <style>{VOL_BLINK_CSS}</style>
+            {volIn ? (
+              <>
+                <line className="pa-vol-glow" x1={padL} x2={W - padR} y1={y(vol)} y2={y(vol)} stroke={VOL} strokeWidth="6" strokeLinecap="round" />
+                <line x1={padL} x2={W - padR} y1={y(vol)} y2={y(vol)} stroke={VOL} strokeWidth="1.4" />
+                <text
+                  x={padL + 2}
+                  y={y(vol) - 3}
+                  className="text-[7px] font-bold"
+                  fill={VOL}
+                  stroke="white"
+                  strokeWidth="2"
+                  paintOrder="stroke"
+                >
+                  ◆ 出来高節目
+                </text>
+              </>
+            ) : (
+              <text
+                className="pa-vol-glow text-[7px] font-bold"
+                style={{ opacity: 1 }}
+                x={padL + 2}
+                y={vol > hi ? 7 : H - 2}
+                fill={VOL}
+                stroke="white"
+                strokeWidth="2"
+                paintOrder="stroke"
+              >
+                {vol > hi ? '▲' : '▼'} 出来高節目 {fmt(vol)}
+                {volPips != null ? `（${vol > currentRate ? '+' : '−'}${volPips.toFixed(1)}pips）` : ''}
+              </text>
+            )}
+          </>
+        )}
+
         {/* 現在値 */}
         <line x1={padL} x2={W - padR} y1={y(currentRate)} y2={y(currentRate)} stroke={NOW} strokeWidth="0.8" strokeDasharray="1.5 2" />
 
         {/* 右端の価格ラベル（重ならないように上下にずらす）: 現在値・確定/否定ライン・高値/安値 */}
         {labels.map((l) =>
-          l.kind === 'zone' && l.zone ? (
+          l.kind === 'volume' ? (
+            <g key="vol">
+              <rect x={W - padR + 1} y={l.y - 5} width={padR - 1} height="10" rx="2" fill={VOL} />
+              <text x={W - padR + 3} y={l.y + 2.5} className="text-[7px] font-bold" fill="white">
+                出来高 {fmt(l.price)}
+              </text>
+            </g>
+          ) : l.kind === 'zone' && l.zone ? (
             <g key={`z-${l.zone.name}`}>
               <rect
                 x={W - padR + 1}
@@ -359,29 +427,44 @@ export function PriceActionChart({
         )}
       </svg>
 
-      {/* 凡例 */}
-      <p className="flex flex-wrap gap-x-2 text-[9px] text-gray-400">
-        <span>● 確定</span>
-        <span>○ 確定待ち</span>
-        {trig && (
-          <span>
-            <span style={{ color: CONFIRM }}>‐‐</span> 確定ライン・<span style={{ color: INVALIDATE }}>‐‐</span> 否定ライン（終値で抜けたら）
+      {/* 出来高節目の1行（価格・何日前・現在値からの距離・レジ/サポ） */}
+      {vol != null && (
+        <div className="mt-1 flex flex-wrap items-center gap-x-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px]">
+          <span className="font-bold" style={{ color: VOL }}>
+            ◆ 出来高節目
           </span>
-        )}
-      </p>
-      {zoneMarks.length > 0 && (
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[9px] text-gray-500">
-          <span className="flex items-center gap-1">
-            <span aria-hidden className="inline-block h-2 w-3 rounded-sm border" style={{ backgroundColor: 'rgba(220,38,38,0.18)', borderColor: RES }} />
-            R = 上の抵抗帯
+          <span className="font-bold tabular-nums text-gray-900">{fmt(vol)}</span>
+          {volumeAgoLabel && <span className="text-[10px] text-gray-500">（{volumeAgoLabel}に出来高が膨らんだ価格）</span>}
+          <span className="ml-auto flex items-center gap-1.5 text-[10px]">
+            {volPips != null && (
+              <span className="tabular-nums text-gray-600">
+                {vol >= currentRate ? '+' : '−'}
+                {volPips.toFixed(1)}pips
+              </span>
+            )}
+            <span className={`rounded px-1 font-bold ${vol >= currentRate ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
+              {vol >= currentRate ? '上のレジ' : '下のサポ'}
+            </span>
           </span>
-          <span className="flex items-center gap-1">
-            <span aria-hidden className="inline-block h-2 w-3 rounded-sm border" style={{ backgroundColor: 'rgba(22,163,74,0.18)', borderColor: SUP }} />
-            S = 下の支持帯
-          </span>
-          <span>濃い・実線ほど強い（★）。番号は下の「抵抗帯」と同じ</span>
         </div>
       )}
+      {/* 凡例（1〜2行にまとめる）: パターン・確定/否定ライン・抵抗帯 */}
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[9px] text-gray-500">
+        <span>● 確定 ○ 確定待ち</span>
+        {trig && (
+          <span>
+            <span style={{ color: CONFIRM }}>‐‐</span>確定・<span style={{ color: INVALIDATE }}>‐‐</span>否定ライン
+          </span>
+        )}
+        {zoneMarks.length > 0 && (
+          <span className="flex items-center gap-1">
+            <span aria-hidden className="inline-block h-2 w-2.5 rounded-sm border" style={{ backgroundColor: 'rgba(220,38,38,0.18)', borderColor: RES }} />
+            R抵抗帯
+            <span aria-hidden className="ml-1 inline-block h-2 w-2.5 rounded-sm border" style={{ backgroundColor: 'rgba(22,163,74,0.18)', borderColor: SUP }} />
+            S支持帯（濃いほど強い）
+          </span>
+        )}
+      </div>
       {maDrawn.length > 0 && (
         <div className="mt-0.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[9px] text-gray-500">
           {maDrawn.map((m) => (
@@ -454,7 +537,7 @@ export function PriceActionChart({
   );
 }
 
-type LabelKind = 'now' | 'confirm' | 'invalidate' | 'edge' | 'zone';
+type LabelKind = 'now' | 'confirm' | 'invalidate' | 'edge' | 'zone' | 'volume';
 type PriceLabel = { price: number; kind: LabelKind; y: number; zone?: ZoneMark };
 /**
  * 右端の価格ラベルの縦位置。必須のラベル（現在値・確定/否定・抵抗帯）は 10px 以上離れるよう上下にずらし、
