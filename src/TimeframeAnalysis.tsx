@@ -1131,6 +1131,9 @@ export default function TimeframeAnalysis() {
               currentRate={result.currentRate}
             />
 
+            {/* 総合判断（AI）は結論なので、まとめのすぐ下に */}
+            {result.comment && <CommentCard comment={result.comment} />}
+
             {/* 下位足（1分・5分）のエントリーポイント: 選んだ時間足のプラン → RR好機の足 → プランのある足の順で詰める */}
             {LTF_URL && (
               <LtfEntryCard
@@ -1148,7 +1151,6 @@ export default function TimeframeAnalysis() {
               />
             )}
 
-            {result.comment && <CommentCard comment={result.comment} />}
 
             {/* 時間足のタブ ＋ 選んだ時間足の詳細カード */}
             {current && (

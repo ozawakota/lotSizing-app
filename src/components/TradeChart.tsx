@@ -3,7 +3,9 @@
 //   - 緑の箱 = エントリー → 目標（利益の範囲）、赤の箱 = エントリー → 損切り（損失の範囲）
 //   - 実線 = エントリー（成行=現在値）、破線 = 目標（緑）・損切り（赤）
 //   - 点線 = 指値（Buy/Sell Limit）・逆指値（Buy/Sell Stop）の目安（あれば）
-// 右端に各ラインの価格ラベル（重ならないように上下にずらす）。値幅は目標・損切りまで含めて縦軸を決める。
+// 右端に各ラインの価格ラベル（重ならないように上下にずらす）。
+// 縦軸はローソク足・エントリー・損切りを基準にし、目標が遠すぎる（足が潰れる）ときは目標をチャートの端に寄せ、
+// 「↑ 目標 価格（+pips）」と表示する（利益の箱は端まで・端に波線）。
 import type { OhlcCandle } from '@/lib/edge';
 import type { SlDirection } from '@/lib/stoploss';
 
@@ -59,11 +61,19 @@ export function TradeChart({
   const boxX = padL + candleW;
   const boxW = plotW - candleW;
 
-  const levels = [entry, stop, target, ...(limitPrice != null ? [limitPrice] : []), ...(stopEntryPrice != null ? [stopEntryPrice] : [])];
-  const lo = Math.min(...all.map((b) => b.low), ...levels);
-  const hi = Math.max(...all.map((b) => b.high), ...levels);
+  // 目標以外（足・エントリー・損切り・指値/逆指値）で基準の値幅を決め、目標はその値幅の TARGET_EXT 倍までなら含める。
+  const core = [entry, stop, ...(limitPrice != null ? [limitPrice] : []), ...(stopEntryPrice != null ? [stopEntryPrice] : [])];
+  const coreLo = Math.min(...all.map((b) => b.low), ...core);
+  const coreHi = Math.max(...all.map((b) => b.high), ...core);
+  const coreSpan = coreHi - coreLo || 1;
+  const TARGET_EXT = 0.9;
+  const targetOff = long ? target > coreHi + coreSpan * TARGET_EXT : target < coreLo - coreSpan * TARGET_EXT;
+  const lo = targetOff ? (long ? coreLo : coreLo - coreSpan * TARGET_EXT) : Math.min(coreLo, target);
+  const hi = targetOff ? (long ? coreHi + coreSpan * TARGET_EXT : coreHi) : Math.max(coreHi, target);
   const span = hi - lo || 1;
-  const y = (p: number) => padY + ((hi - p) / span) * (H - padY * 2);
+  const yRaw = (p: number) => padY + ((hi - p) / span) * (H - padY * 2);
+  // 値幅の外（目標が遠いとき）は端に寄せる
+  const y = (p: number) => Math.min(H - padY, Math.max(padY, yRaw(p)));
   const slot = candleW / all.length;
   const cx = (i: number) => padL + slot * (i + 0.5);
   const bodyW = Math.max(1.2, slot * 0.6);
@@ -106,6 +116,20 @@ export function TradeChart({
             </g>
           );
         })}
+        {/* 目標がチャートの外: 利益の箱の端に波線（まだ先がある） */}
+        {targetOff && (
+          <path
+            d={
+              Array.from({ length: 6 }, (_, k) => {
+                const x0 = boxX + (boxW / 6) * k;
+                return `${k === 0 ? 'M' : 'L'} ${x0} ${ty} L ${x0 + boxW / 12} ${ty + (long ? 3 : -3)}`;
+              }).join(' ') + ` L ${boxX + boxW} ${ty}`
+            }
+            fill="none"
+            stroke={UP}
+            strokeWidth="1"
+          />
+        )}
         {/* ライン（左端から右端まで） */}
         {lines.map((l) => (
           <line
@@ -134,6 +158,7 @@ export function TradeChart({
           <g key={l.kind}>
             <rect x={W - padR + 1} y={l.ly - 5.5} width={padR - 1} height="11" rx="2" fill={LINE[l.kind].color} opacity={l.kind === 'entry' ? 1 : 0.9} />
             <text x={W - padR + 3} y={l.ly + 2.6} className="text-[7px] font-bold" fill="white">
+              {l.kind === 'target' && targetOff ? (long ? '↑' : '↓') : ''}
               {LINE[l.kind].label} {fmt(l.price)}
             </text>
           </g>
@@ -143,6 +168,7 @@ export function TradeChart({
         <span className="flex items-center gap-1">
           <span aria-hidden className="inline-block h-2 w-3 rounded-sm bg-green-600/30" />
           利益の範囲 <span className="font-semibold text-green-700">+{pips(target, entry)}pips</span>
+          {targetOff && <span className="text-gray-400">（目標はチャートの{long ? '上' : '下'}の外）</span>}
         </span>
         <span className="flex items-center gap-1">
           <span aria-hidden className="inline-block h-2 w-3 rounded-sm bg-red-600/30" />

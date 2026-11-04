@@ -359,29 +359,23 @@ export function PriceActionChart({
         )}
       </svg>
 
-      {/* 凡例 */}
-      <p className="flex flex-wrap gap-x-2 text-[9px] text-gray-400">
-        <span>● 確定</span>
-        <span>○ 確定待ち</span>
+      {/* 凡例（1〜2行にまとめる）: パターン・確定/否定ライン・抵抗帯 */}
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[9px] text-gray-500">
+        <span>● 確定 ○ 確定待ち</span>
         {trig && (
           <span>
-            <span style={{ color: CONFIRM }}>‐‐</span> 確定ライン・<span style={{ color: INVALIDATE }}>‐‐</span> 否定ライン（終値で抜けたら）
+            <span style={{ color: CONFIRM }}>‐‐</span>確定・<span style={{ color: INVALIDATE }}>‐‐</span>否定ライン
           </span>
         )}
-      </p>
-      {zoneMarks.length > 0 && (
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[9px] text-gray-500">
+        {zoneMarks.length > 0 && (
           <span className="flex items-center gap-1">
-            <span aria-hidden className="inline-block h-2 w-3 rounded-sm border" style={{ backgroundColor: 'rgba(220,38,38,0.18)', borderColor: RES }} />
-            R = 上の抵抗帯
+            <span aria-hidden className="inline-block h-2 w-2.5 rounded-sm border" style={{ backgroundColor: 'rgba(220,38,38,0.18)', borderColor: RES }} />
+            R抵抗帯
+            <span aria-hidden className="ml-1 inline-block h-2 w-2.5 rounded-sm border" style={{ backgroundColor: 'rgba(22,163,74,0.18)', borderColor: SUP }} />
+            S支持帯（濃いほど強い）
           </span>
-          <span className="flex items-center gap-1">
-            <span aria-hidden className="inline-block h-2 w-3 rounded-sm border" style={{ backgroundColor: 'rgba(22,163,74,0.18)', borderColor: SUP }} />
-            S = 下の支持帯
-          </span>
-          <span>濃い・実線ほど強い（★）。番号は下の「抵抗帯」と同じ</span>
-        </div>
-      )}
+        )}
+      </div>
       {maDrawn.length > 0 && (
         <div className="mt-0.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[9px] text-gray-500">
           {maDrawn.map((m) => (

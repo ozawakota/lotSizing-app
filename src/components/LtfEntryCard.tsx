@@ -67,6 +67,7 @@ export function LtfEntryCard({
   plan: HtfPlan | null;
 }) {
   const [tf, setTf] = useState<LtfTf>('5m');
+  const [detailOpen, setDetailOpen] = useState(false); // チャートと根拠（ページを短くするため既定は閉じる）
   const [data, setData] = useState<LtfPayload | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -257,7 +258,22 @@ export function LtfEntryCard({
 
       {/* 選んだ足のチャートと根拠 */}
       {data && !noBars && (
-        <div className="mt-3 border-t border-gray-100 pt-2">
+        <button
+          type="button"
+          onClick={() => setDetailOpen((o) => !o)}
+          aria-expanded={detailOpen}
+          className="mt-2 block w-full rounded-md border border-gray-200 bg-white text-left"
+        >
+          <span className="flex items-center justify-between px-2.5 py-1.5 text-[11px] font-semibold text-gray-600">
+            {detailOpen ? 'チャートと根拠を閉じる' : 'チャートと根拠を見る（1分足・5分足）'}
+            <span className={`text-gray-400 transition-transform ${detailOpen ? 'rotate-180' : ''}`} aria-hidden>
+              ▾
+            </span>
+          </span>
+        </button>
+      )}
+      {data && !noBars && detailOpen && (
+        <div className="mt-2">
           <div className="flex items-center gap-1">
             {LTF_TFS.map((t) => (
               <button
@@ -284,13 +300,10 @@ export function LtfEntryCard({
       )}
 
       <div className="mt-2 text-[10px] leading-relaxed text-gray-400">
-        1分ごとに自動更新。下位足の損切りは狭いぶん、だましで刈られやすくなります。ロットは損切り幅に合わせて計算してください。
         {plan && evals.some((e) => e.trig?.refined && e.trig.refined.rr >= 5) && (
-          <span className="block text-amber-700">
-            RR が大きく見えるのは損切りが狭いためで、目標まで届く確率はそのぶん下がります。途中の抵抗帯で一部利確するなど、出口も考えておきましょう。
-          </span>
+          <span className="block text-amber-700">RR が大きいのは損切りが狭いため（届く確率は下がる）。途中の抵抗帯で一部利確も検討を。</span>
         )}
-        <span className="block">※投資助言ではない参考情報です。</span>
+        1分ごとに自動更新。損切りが狭いぶんだましに注意し、ロットは損切り幅で計算を。※投資助言ではありません。
       </div>
     </div>
   );
