@@ -763,11 +763,13 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
   const hasZones = !!tf.zones && (tf.zones.res.length > 0 || tf.zones.sup.length > 0);
   // ローソク足チャートが描けるときは、パターンはチャートの下に出すので「そのほかの指標」からは外す。
   const hasChart = !!tf.bars && tf.bars.length >= 2 && !!tf.candlePatterns;
+  // 出来高節目はチャートに点滅線で出すので、チャートがあるときは「そのほかの指標」から外す。
+  const volInExtra = tf.volumeLevel != null && !hasChart;
   const extraCount =
     (tf.roleReversal ? 1 : 0) +
     (hasChart ? 0 : tf.candlePatterns ? tf.candlePatterns.length : tf.candlePattern ? 1 : 0) +
     (tf.stoch || tf.rsi != null ? 1 : 0) +
-    (tf.volumeLevel != null ? 1 : 0);
+    (volInExtra ? 1 : 0);
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
@@ -827,6 +829,9 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
           digits={digits}
           periodLabel={`直近${PATTERN_PERIOD_LABEL[tf.tf]}`}
           maLines={tf.maLines ?? computeMaLines(tf.bars.map((b) => b.close), tf.bars.length)}
+          volumeLevel={tf.volumeLevel}
+          volumeAgoLabel={VOLUME_AGO_LABEL[tf.tf]}
+          pip={pip}
         />
       )}
 
@@ -896,7 +901,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
                   </div>
                 )
               )}
-              {(tf.stoch || tf.rsi != null || tf.volumeLevel != null) && (
+              {(tf.stoch || tf.rsi != null || volInExtra) && (
                 <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-gray-500">
                   {tf.stoch && (
                     <span>
@@ -917,7 +922,7 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
                       </span>
                     </span>
                   )}
-                  {tf.volumeLevel != null && (
+                  {volInExtra && tf.volumeLevel != null && (
                     <span>
                       出来高節目（{VOLUME_AGO_LABEL[tf.tf]}）{' '}
                       <span className="font-semibold tabular-nums text-gray-700">{tf.volumeLevel.toFixed(digits)}</span>
