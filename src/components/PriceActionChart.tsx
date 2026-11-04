@@ -1,5 +1,8 @@
 // TF分析カードの「プライスアクション」。直近の確定足をローソク足で描き、
 // ピンバー/包み足の位置（番号つき）・確定待ちのパターンの確定ライン/否定ライン・抵抗帯・移動平均線・現在値を重ねる。
+// 抵抗帯（R=上の抵抗帯・S=下の支持帯。番号は下の「抵抗帯」のはしごと同じ R1=いちばん近い）は、
+// 帯の上下の境界線つきで、★が多いほど濃く・実線で描き、右端に「R1 価格」のラベルを付ける。
+// いちばん近い R1/S1 がチャートの少し外にあるときは値幅を広げて入れ、遠すぎるときは上下の端に向きと距離を出す。
 // 下に、番号と対応するパターンの一覧（確定/未確定/否定・形の質・出た場所）を並べる。
 import { useId } from 'react';
 import type { OhlcCandle } from '@/lib/edge';
@@ -21,6 +24,23 @@ const DOWN = '#dc2626';
 const NOW = '#f97316';
 const CONFIRM = '#2563eb';
 const INVALIDATE = '#6b7280';
+const RES = '#dc2626';
+const SUP = '#16a34a';
+
+// 帯の濃さ・境界線（★が多いほど濃く、★3 は実線）。
+const ZONE_FILL: Record<1 | 2 | 3, number> = { 1: 0.08, 2: 0.14, 3: 0.22 };
+const ZONE_EDGE: Record<1 | 2 | 3, { opacity: number; dash?: string; width: number }> = {
+  1: { opacity: 0.45, dash: '2 2', width: 0.7 },
+  2: { opacity: 0.65, dash: '4 2', width: 0.9 },
+  3: { opacity: 0.9, width: 1.1 },
+};
+// いちばん近い帯が値幅の外でも、この割合（値幅に対して）までなら値幅を広げて描く。
+const ZONE_EXTEND = 0.6;
+
+interface ZoneMark {
+  z: SrZone;
+  name: string; // 「R1」「S2」
+}
 
 // 移動平均線（ローソク足の緑/赤・確定ラインの青と見分けやすい色）。
 const MA_STYLE: { key: keyof MaLines; label: string; color: string; width: number }[] = [
@@ -69,10 +89,21 @@ export function PriceActionChart({
   const W = 320;
   const H = 132;
   const padL = 4;
-  const padR = 46; // 右端の価格ラベル
+  const padR = 56; // 右端の価格ラベル（「R1 151.200」が入る幅）
   const padY = 14; // 上下の番号マーカーが収まる余白
-  const lo = Math.min(...all.map((b) => b.low), currentRate);
-  const hi = Math.max(...all.map((b) => b.high), currentRate);
+  const lo0 = Math.min(...all.map((b) => b.low), currentRate);
+  const hi0 = Math.max(...all.map((b) => b.high), currentRate);
+  // 抵抗帯に番号を付ける（はしごと同じ: 近い順に R1, R2 / S1, S2）。
+  const zoneMarks: ZoneMark[] = [
+    ...(zones?.res ?? []).map((z, i) => ({ z, name: `R${i + 1}` })),
+    ...(zones?.sup ?? []).map((z, i) => ({ z, name: `S${i + 1}` })),
+  ];
+  // いちばん近い R1/S1 の近い端が少しだけ外なら、値幅を広げて見えるようにする。
+  const span0 = hi0 - lo0 || 1;
+  const r1 = zones?.res[0];
+  const s1 = zones?.sup[0];
+  const hi = r1 && r1.low > hi0 && r1.low - hi0 <= span0 * ZONE_EXTEND ? Math.max(hi0, Math.min(r1.high, hi0 + span0 * ZONE_EXTEND)) : hi0;
+  const lo = s1 && s1.high < lo0 && lo0 - s1.high <= span0 * ZONE_EXTEND ? Math.min(lo0, Math.max(s1.low, lo0 - span0 * ZONE_EXTEND)) : lo0;
   const span = hi - lo || 1;
   const y = (p: number) => padY + ((hi - p) / span) * (H - padY * 2);
   const slot = (W - padL - padR) / all.length;
@@ -86,10 +117,31 @@ export function PriceActionChart({
   const pending = marked.find((m) => m.r.confirmation === 'pending');
   const trig = pending ? patternTriggerLevels(bars[pending.i], pending.r.key) : null;
 
+  // 値幅に入る帯（少しでも重なるもの）と、外れた帯（上下の端に向きと距離だけ出す。片側でいちばん近いもの）。
+  const visibleZones = zoneMarks.filter(({ z }) => z.high >= lo && z.low <= hi);
+  const offAbove = zoneMarks.find(({ z, name }) => name.startsWith('R') && z.low > hi);
+  const offBelow = zoneMarks.find(({ z, name }) => name.startsWith('S') && z.high < lo);
+  // 帯のラベルは、現在値に近い側の端（抵抗帯=下端・支持帯=上端。値幅の外なら端に寄せる）。
+  const zoneEdge = ({ z }: ZoneMark) => (z.side === 'res' ? Math.max(z.low, lo) : Math.min(z.high, hi));
+  // 帯の左端の名前（R1 など）の縦位置。帯の中央に置き、近い帯どうしは 8px 以上離す。
+  const nameY = new Map<string, number>();
+  visibleZones
+    .map(({ z, name }) => {
+      const top = y(Math.min(z.high, hi));
+      const bottom = y(Math.max(z.low, lo));
+      return { name, ny: Math.max((top + bottom) / 2 + 2.5, top + 7) };
+    })
+    .sort((a, b) => a.ny - b.ny)
+    .forEach((n, k, arr) => {
+      if (k > 0) n.ny = Math.max(n.ny, arr[k - 1].ny + 8);
+      nameY.set(n.name, Math.min(n.ny, H - 2));
+    });
+
   const labels = priceLabels(
     [
       { price: currentRate, kind: 'now' as const },
       ...(trig ? [{ price: trig.confirm, kind: 'confirm' as const }, { price: trig.invalidate, kind: 'invalidate' as const }] : []),
+      ...visibleZones.map((m) => ({ price: zoneEdge(m), kind: 'zone' as const, zone: m })),
     ],
     [hi, lo],
     y,
@@ -116,7 +168,6 @@ export function PriceActionChart({
     return [{ ...st, segs, last, where }];
   });
 
-  const visibleZones = [...(zones?.res ?? []), ...(zones?.sup ?? [])].filter((z) => z.high >= lo && z.low <= hi);
   const fmt = (p: number) => p.toFixed(digits);
 
   return (
@@ -136,22 +187,67 @@ export function PriceActionChart({
         role="img"
         aria-label={`ローソク足 ${bars.length}本。${head.text}`}
       >
-        {/* 抵抗帯（チャートの値幅に入るものだけ） */}
-        {visibleZones.map((z, k) => {
+        {/* 抵抗帯（チャートの値幅に入るもの）: 塗り（★が多いほど濃い）＋上下の境界線（★3 は実線） */}
+        {visibleZones.map(({ z, name }) => {
           const top = y(Math.min(z.high, hi));
           const bottom = y(Math.max(z.low, lo));
+          const color = z.side === 'res' ? RES : SUP;
+          const edge = ZONE_EDGE[z.stars];
+          const x2 = W - padR;
           return (
-            <rect
-              key={k}
-              x={padL}
-              width={W - padL - padR}
-              y={top}
-              height={Math.max(1, bottom - top)}
-              fill={z.side === 'res' ? DOWN : UP}
-              opacity={z.stars === 3 ? 0.14 : 0.08}
-            />
+            <g key={name}>
+              <rect x={padL} width={x2 - padL} y={top} height={Math.max(1.5, bottom - top)} fill={color} opacity={ZONE_FILL[z.stars]} />
+              {[z.high, z.low]
+                .filter((p) => p <= hi && p >= lo)
+                .map((p) => (
+                  <line
+                    key={p}
+                    x1={padL}
+                    x2={x2}
+                    y1={y(p)}
+                    y2={y(p)}
+                    stroke={color}
+                    strokeWidth={edge.width}
+                    strokeDasharray={edge.dash}
+                    opacity={edge.opacity}
+                  />
+                ))}
+              {/* 帯の左端に名前（R1 など）。ローソク足と重なっても読めるよう白の縁取り */}
+              <text
+                x={padL + 2}
+                y={nameY.get(name) ?? top + 7}
+                className="text-[7px] font-bold"
+                fill={color}
+                stroke="white"
+                strokeWidth="2"
+                paintOrder="stroke"
+              >
+                {name}
+                {z.contains ? '（今ここ）' : ''}
+              </text>
+            </g>
           );
         })}
+
+        {/* 値幅の外にある、いちばん近い帯: 上下の端に向きと距離 */}
+        {[offAbove, offBelow].map((m) =>
+          m ? (
+            <text
+              key={`off-${m.name}`}
+              x={W - padR - 2}
+              y={m.z.side === 'res' ? 7 : H - 2}
+              textAnchor="end"
+              className="text-[7px] font-bold"
+              fill={m.z.side === 'res' ? RES : SUP}
+              stroke="white"
+              strokeWidth="2"
+              paintOrder="stroke"
+            >
+              {m.z.side === 'res' ? '▲' : '▼'} {m.name} {fmt(m.z.side === 'res' ? m.z.low : m.z.high)}（{m.z.side === 'res' ? '+' : '−'}
+              {m.z.distancePips.toFixed(1)}pips）
+            </text>
+          ) : null,
+        )}
 
         {/* パターンの足の背景 */}
         {marked.map(({ r, i }) => (
@@ -227,7 +323,23 @@ export function PriceActionChart({
 
         {/* 右端の価格ラベル（重ならないように上下にずらす）: 現在値・確定/否定ライン・高値/安値 */}
         {labels.map((l) =>
-          l.kind === 'now' ? (
+          l.kind === 'zone' && l.zone ? (
+            <g key={`z-${l.zone.name}`}>
+              <rect
+                x={W - padR + 1}
+                y={l.y - 5}
+                width={padR - 1}
+                height="10"
+                rx="2"
+                fill="white"
+                stroke={l.zone.z.side === 'res' ? RES : SUP}
+                strokeWidth="0.8"
+              />
+              <text x={W - padR + 3} y={l.y + 2.5} className="text-[7px] font-bold" fill={l.zone.z.side === 'res' ? RES : SUP}>
+                {l.zone.name} {fmt(l.price)}
+              </text>
+            </g>
+          ) : l.kind === 'now' ? (
             <g key="now">
               <rect x={W - padR + 1} y={l.y - 5} width={padR - 1} height="10" rx="2" fill={NOW} />
               <text x={W - padR + 3} y={l.y + 2.5} className="text-[7px] font-bold" fill="white">{fmt(l.price)}</text>
@@ -256,8 +368,20 @@ export function PriceActionChart({
             <span style={{ color: CONFIRM }}>‐‐</span> 確定ライン・<span style={{ color: INVALIDATE }}>‐‐</span> 否定ライン（終値で抜けたら）
           </span>
         )}
-        {visibleZones.length > 0 && <span>帯 = 抵抗帯</span>}
       </p>
+      {zoneMarks.length > 0 && (
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[9px] text-gray-500">
+          <span className="flex items-center gap-1">
+            <span aria-hidden className="inline-block h-2 w-3 rounded-sm border" style={{ backgroundColor: 'rgba(220,38,38,0.18)', borderColor: RES }} />
+            R = 上の抵抗帯
+          </span>
+          <span className="flex items-center gap-1">
+            <span aria-hidden className="inline-block h-2 w-3 rounded-sm border" style={{ backgroundColor: 'rgba(22,163,74,0.18)', borderColor: SUP }} />
+            S = 下の支持帯
+          </span>
+          <span>濃い・実線ほど強い（★）。番号は下の「抵抗帯」と同じ</span>
+        </div>
+      )}
       {maDrawn.length > 0 && (
         <div className="mt-0.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[9px] text-gray-500">
           {maDrawn.map((m) => (
@@ -330,19 +454,20 @@ export function PriceActionChart({
   );
 }
 
-type LabelKind = 'now' | 'confirm' | 'invalidate' | 'edge';
+type LabelKind = 'now' | 'confirm' | 'invalidate' | 'edge' | 'zone';
+type PriceLabel = { price: number; kind: LabelKind; y: number; zone?: ZoneMark };
 /**
- * 右端の価格ラベルの縦位置。必須のラベル（現在値・確定/否定）は 9px 以上離れるよう上下にずらし、
+ * 右端の価格ラベルの縦位置。必須のラベル（現在値・確定/否定・抵抗帯）は 10px 以上離れるよう上下にずらし、
  * 高値/安値のラベルは必須のラベルと重なるときだけ省く。
  */
 function priceLabels(
-  must: { price: number; kind: LabelKind }[],
+  must: { price: number; kind: LabelKind; zone?: ZoneMark }[],
   edges: number[],
   y: (p: number) => number,
   H: number,
-): { price: number; kind: LabelKind; y: number }[] {
-  const GAP = 9;
-  const out = must.map((m) => ({ ...m, y: y(m.price) })).sort((a, b) => a.y - b.y);
+): PriceLabel[] {
+  const GAP = 10;
+  const out: PriceLabel[] = must.map((m) => ({ ...m, y: y(m.price) })).sort((a, b) => a.y - b.y);
   for (let i = 1; i < out.length; i++) out[i].y = Math.max(out[i].y, out[i - 1].y + GAP);
   if (out.length) out[out.length - 1].y = Math.min(out[out.length - 1].y, H - 5);
   for (let i = out.length - 2; i >= 0; i--) out[i].y = Math.min(out[i].y, out[i + 1].y - GAP);
