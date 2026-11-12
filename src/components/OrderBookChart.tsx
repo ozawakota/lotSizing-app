@@ -1,5 +1,5 @@
 // 板情報（OANDA のオーダーブック・ポジションブック）をローソク足の横に描くチャート（TF分析のエントリー判断）。
-// 左にローソク足、右に価格帯ごとの横棒（中央の軸から 右=買い（緑）・左=売り（赤））。
+// 価格帯ごとの横棒（中央の軸から 右=買い（緑）・左=売り（赤））を、ローソク足の背景に半透明で重ねる。
 // エントリー・損切り・目標・現在値の線を全幅に引き、厚い価格帯（平均の 1.8 倍以上）は濃く・枠つきで描く。
 // 下に、厚いところの一覧（支え・重し・逆指値の溜まり）と、RR のプランと照らした注意点を出す。
 import { useState } from 'react';
@@ -49,11 +49,9 @@ export function OrderBookChart({
   const padR = 66; // 右端の価格ラベル（「エントリー 151.628」が入る幅）
   const padY = 8;
   const plotW = W - padL - padR;
-  const candleW = plotW * 0.56;
-  const hx0 = padL + candleW + 6; // 横棒の領域
-  const hx1 = W - padR - 2;
-  const axis = (hx0 + hx1) / 2;
-  const half = (hx1 - hx0) / 2;
+  const candleW = plotW; // ローソク足は全幅。横棒はその背景に重ねる
+  const axis = padL + plotW / 2; // 横棒の中央の軸（右=買い・左=売り）
+  const half = (plotW / 2) * 0.96;
 
   // 縦軸: ローソク足・現在値・エントリー・損切り。目標は近ければ含め、遠ければ端に寄せる。
   const core = [currentRate, ...(plan ? [plan.entry, plan.stop] : [])];
@@ -136,9 +134,8 @@ export function OrderBookChart({
         <div className="mt-1 text-[10px] text-gray-500">このペアの{mode === 'orders' ? 'オーダー' : 'ポジション'}ブックはありません。</div>
       ) : (
         <svg viewBox={`0 0 ${W} ${H}`} className="mt-1 h-auto w-full" role="img" aria-label={`ローソク足と板情報（${mode === 'orders' ? '注文' : 'ポジション'}）`}>
-          {/* 横棒の領域の背景と中央の軸 */}
-          <rect x={hx0} y={padY} width={hx1 - hx0} height={H - padY * 2} fill="white" opacity="0.7" />
-          <line x1={axis} x2={axis} y1={padY} y2={H - padY} stroke="#d1d5db" strokeWidth="0.6" />
+          {/* 横棒の中央の軸（ローソク足の背景） */}
+          <line x1={axis} x2={axis} y1={padY} y2={H - padY} stroke="#d1d5db" strokeWidth="0.6" strokeDasharray="2 2" />
           <text x={axis - 2} y={padY - 1.5} textAnchor="end" className="text-[6px]" fill={DOWN}>
             ← 売り
           </text>
@@ -154,8 +151,8 @@ export function OrderBookChart({
             const sThick = thick.has(`s${p}`);
             return (
               <g key={p}>
-                <rect x={axis} y={top + 0.3} width={lw} height={barH} fill={UP} opacity={lThick ? 0.9 : 0.4} stroke={lThick ? UP : 'none'} strokeWidth="0.6" />
-                <rect x={axis - sw} y={top + 0.3} width={sw} height={barH} fill={DOWN} opacity={sThick ? 0.9 : 0.4} stroke={sThick ? DOWN : 'none'} strokeWidth="0.6" />
+                <rect x={axis} y={top + 0.3} width={lw} height={barH} fill={UP} opacity={lThick ? 0.38 : 0.16} stroke={lThick ? UP : 'none'} strokeOpacity="0.6" strokeWidth="0.6" />
+                <rect x={axis - sw} y={top + 0.3} width={sw} height={barH} fill={DOWN} opacity={sThick ? 0.38 : 0.16} stroke={sThick ? DOWN : 'none'} strokeOpacity="0.6" strokeWidth="0.6" />
               </g>
             );
           })}
