@@ -26,6 +26,8 @@ import { TradeChart } from '@/components/TradeChart';
 import { LtfEntryCard, type HtfPlan } from '@/components/LtfEntryCard';
 import { OrderBookChart } from '@/components/OrderBookChart';
 import type { OrderBookPayload } from '@/lib/orderBook';
+import type { FlowSnapshot, PairFlow } from '@/lib/flow';
+import { flowOverlay, flowPairOf } from '@/lib/flowOverlay';
 import type { LtfPlanArea } from '@/lib/ltfTrigger';
 import TfCountdown from '@/components/TfCountdown';
 import { DowHeader, KeyLevelRow, SwingChart, ZoneLadder } from '@/components/TfStructure';
@@ -40,6 +42,9 @@ const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 const LTF_URL = MTF_URL ? MTF_URL.replace(/\/mtf$/, '/ltf') : undefined;
 // 板情報（OANDA のオーダーブック・ポジションブック）も同じ Worker の /orderbook。
 const OB_URL = MTF_URL ? MTF_URL.replace(/\/mtf$/, '/orderbook') : undefined;
+
+// 取引量・センチメント（取引量ページと同じ /flow。1時間ごとに更新）。チャートの背景に重ねる。
+const FLOW_URL = import.meta.env.VITE_FLOW_URL as string | undefined;
 
 /** 板情報の取得結果（ペアを選ぶたびに取り直す。OANDA 側は20分ごとの更新）。 */
 type BookState = { data: OrderBookPayload | null; error: string; loading: boolean };
@@ -756,12 +761,14 @@ function TfCard({
   currentRate,
   digits,
   book,
+  flowPair,
 }: {
   tf: MtfTf;
   instrument: string;
   currentRate: number;
   digits: number;
   book: BookState | null;
+  flowPair: PairFlow | null; // このペアの取引量・センチメント（無ければ null）
 }) {
   const [moreOpen, setMoreOpen] = useState(false);
   const pip = pipSize(instrument);
@@ -866,6 +873,7 @@ function TfCard({
           periodLabel={`直近${PATTERN_PERIOD_LABEL[tf.tf]}`}
           maLines={tf.maLines ?? computeMaLines(tf.bars.map((b) => b.close), tf.bars.length)}
           volumeLevel={tf.volumeLevel}
+          flow={flowPair ? flowOverlay(flowPair, currentRate, pip) : null}
           volumeAgoLabel={VOLUME_AGO_LABEL[tf.tf]}
           pip={pip}
         />
@@ -1082,6 +1090,26 @@ export default function TimeframeAnalysis() {
   const [showRrPopup, setShowRrPopup] = useState(false);
   const [tfSel, setTfSel] = useState<SlTimeframe | null>(null); // 表示する時間足（null=自動: RR好機の足→1時間足→先頭）
   const [book, setBook] = useState<BookState | null>(null); // 板情報（OANDA）
+  const [flowSnap, setFlowSnap] = useState<FlowSnapshot | null>(null); // 取引量・センチメント（全ペア分）
+
+  // 取引量・センチメントは全ペア分が1回で取れるので、最初に1回だけ取得（失敗しても分析の表示は止めない）。
+  useEffect(() => {
+    if (!FLOW_URL) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(FLOW_URL);
+        if (!res.ok) return;
+        const body = (await res.json()) as FlowSnapshot | { error: string };
+        if (!cancelled && !('error' in body)) setFlowSnap(body);
+      } catch {
+        // 取引量が無くてもチャートは描ける
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // 板情報はペアを選ぶたびに取得（Worker 側で5分キャッシュ）。失敗しても分析の表示は止めない。
   useEffect(() => {
@@ -1242,6 +1270,7 @@ export default function TimeframeAnalysis() {
                   currentRate={result.currentRate}
                   digits={digits}
                   book={book}
+                  flowPair={flowSnap?.pairs.find((p) => p.pair === flowPairOf(result.instrument)) ?? null}
                 />
               </div>
             )}

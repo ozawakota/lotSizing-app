@@ -305,6 +305,8 @@ interface MfbOutlookSymbol {
   shortPercentage: number | string;
   longVolume: number | string;
   shortVolume: number | string;
+  avgLongPrice?: number | string; // 買いポジションの平均取得価格
+  avgShortPrice?: number | string; // 売りポジションの平均取得価格
 }
 
 // Myfxbook にログインして session を取得し KV にキャッシュする。
@@ -373,8 +375,21 @@ const updateFlow = async (env: Env): Promise<PairFlow[]> => {
   const byName = new Map(symbols.map((s) => [s.name, s]));
 
   // 現在の建玉と合計取引量を集計。
-  const base: { pair: FlowPair; longPct: number; shortPct: number; longVolume: number; shortVolume: number; total: number }[] =
-    [];
+  const base: {
+    pair: FlowPair;
+    longPct: number;
+    shortPct: number;
+    longVolume: number;
+    shortVolume: number;
+    total: number;
+    avgLongPrice?: number;
+    avgShortPrice?: number;
+  }[] = [];
+  // 平均取得価格（無い・0・数値でないときは使わない）。
+  const avgPrice = (v: number | string | undefined): number | undefined => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
   for (const pair of FLOW_PAIRS) {
     const s = byName.get(MFB_SYMBOL[pair]);
     if (!s) continue;
@@ -383,7 +398,16 @@ const updateFlow = async (env: Env): Promise<PairFlow[]> => {
     const longVolume = Number(s.longVolume);
     const shortVolume = Number(s.shortVolume);
     if ([longPct, shortPct, longVolume, shortVolume].some((n) => Number.isNaN(n))) continue;
-    base.push({ pair, longPct, shortPct, longVolume, shortVolume, total: longVolume + shortVolume });
+    base.push({
+      pair,
+      longPct,
+      shortPct,
+      longVolume,
+      shortVolume,
+      total: longVolume + shortVolume,
+      avgLongPrice: avgPrice(s.avgLongPrice),
+      avgShortPrice: avgPrice(s.avgShortPrice),
+    });
   }
   if (base.length === 0) throw new Error('建玉データが取得できませんでした');
 
@@ -419,6 +443,9 @@ const updateFlow = async (env: Env): Promise<PairFlow[]> => {
 
   const result: PairFlow[] = base.map((b) => ({
     ...toPairFlow(b.pair, b.longPct, b.shortPct, b.longVolume, b.shortVolume),
+    // 個人の買い・売りの平均取得価格（TF分析のチャートの背景に描く）。
+    ...(b.avgLongPrice != null ? { avgLongPrice: b.avgLongPrice } : {}),
+    ...(b.avgShortPrice != null ? { avgShortPrice: b.avgShortPrice } : {}),
     // 上限超過で今回スキップしたペアも、前回ピークがあれば表示する。
     peak: candidateSet.has(b.pair) ? peaks[b.pair] : prevPeaks[b.pair],
     // 前回スナップショット比の合計取引量の動き（初回は undefined）。
