@@ -70,7 +70,8 @@ npx wrangler kv namespace create STRENGTH_KV   # 出力の id を wrangler.toml 
 npx wrangler secret put TWELVE_DATA_API_KEY    # Twelve Data のキーを登録（バンドルには載らない）
 npx wrangler secret put MYFXBOOK_EMAIL         # /flow センチメント用（Myfxbook 無料アカウント）
 npx wrangler secret put MYFXBOOK_PASSWORD      # /flow センチメント用
-npx wrangler secret put OANDA_API_TOKEN        # /orderbook 板情報用（OANDA のデモ口座の API トークンで可）
+npx wrangler secret put TURSO_DATABASE_URL     # /orderbook 推定ポジションブック用（個人の建玉の毎時の記録先。libsql://...）
+npx wrangler secret put TURSO_AUTH_TOKEN       # 同上（turso db tokens create の出力）
 npx wrangler deploy              # デプロイ（Cron も同時に設定される）
 ```
 
@@ -78,15 +79,30 @@ npx wrangler deploy              # デプロイ（Cron も同時に設定され�
 - `VITE_STRENGTH_URL=https://currency-strength.<subdomain>.workers.dev`（通貨強弱）
 - `VITE_FLOW_URL=https://currency-strength.<subdomain>.workers.dev/flow`（取引量・センチメント）
 
-### 板情報（/orderbook）
+### 推定オーダーブック（/orderbook）
 
-TF分析ページの「板情報（OANDA）」は、この Worker の `/orderbook?instrument=USD_JPY` から OANDA v20 の
-オーダーブック（未約定の注文）とポジションブック（保有ポジション）を取得して描く（URL は `VITE_MTF_URL` の `/mtf` を置き換えて使うので、フロントの設定追加は不要）。
+TF分析ページの「推定オーダーブック」は、この Worker の `/orderbook?instrument=USD_JPY` が返す自作の推定（OANDA の API は使わない）。
+URL は `VITE_MTF_URL` の `/mtf` を置き換えて使うので、フロントの設定追加は不要。推定ロジックは `src/lib/estimatedBook.ts`。
 
-- トークン: OANDA の口座ページで発行した API トークンを `npx wrangler secret put OANDA_API_TOKEN` で登録（リポジトリには置かない）。
-  既定はデモ口座の API（api-fxpractice.oanda.com）。本番口座のトークンなら `wrangler.toml` の `[vars]` に `OANDA_ENV = "live"` を足す。
-- OANDA 側の更新は20分ごと。Worker のメモリ＋Cache API に5分キャッシュする（KV は使わない）。
-- 未登録のときは画面に「板情報は未設定です」と出るだけで、ほかの分析は動く。
+- **注文（オーダーブック）**: 1時間足から推定。まだ抜けていないスイング高値の少し上＝買いの逆指値・少し下＝売り指値、
+  まだ割れていないスイング安値の少し下＝売りの逆指値・少し上＝買い指値、キリ番（00・50）＝指値とその外の逆指値。
+  新しいスイングほど重く、個人の建玉（Myfxbook）が売りに偏るほど買いの逆指値（売り方の損切り）を重くする。Turso なしで動く。
+- **ポジション（ポジションブック）**: `/flow` の毎時更新（Cron 毎時15分）のたびに、Myfxbook の建玉（買い/売りの割合・取引量・平均取得価格）を
+  Turso の `flow_snapshots` に1行ずつ記録し（30日分を保持）、直近の記録を新しいほど重く積み上げて価格帯ごとの分布にする。
+  記録が3件たまるまでは表示しない。テーブルは Worker が初回に自動で作る。
+- Turso の準備:
+  ```bash
+  turso db create lotsizing-flow
+  turso db show lotsizing-flow --url        # → TURSO_DATABASE_URL（libsql://...）
+  turso db tokens create lotsizing-flow     # → TURSO_AUTH_TOKEN
+  ```
+  それぞれを `npx wrangler secret put` で登録（リポジトリには置かない）。未登録なら記録はせず、注文の推定だけを返す。
+- **集計の仕方は OANDA の板情報に合わせる**（入力が推定である点だけが違う）:
+  - 20分ごと（:00 / :20 / :40）のスナップショット。Cron（5分ごと）が各スロットの最初の回に全ペア分を作り、
+    Turso の `book_snapshots` に保存（14日分を保持）。`/orderbook` はいちばん新しいスナップショットを返す
+  - `/orderbook?instrument=USD_JPY&time=2026-11-12T21:20:00Z`（または ms）で、その時刻以前のスナップショット（OANDA の `time` と同じ）
+  - 固定幅のバケツ（JPY 0.05・USD 0.0005・XAU 1）ごとの [価格, 買い%, 売り%]。% は板全体の合計に対する割合
+- Turso 未設定のときは保存せず、リクエストのたびにその場で推定する（20分のスロットの間は Worker のメモリ＋Cache API に置く。過去の時刻の指定は不可）。KV は使わない。
 
 ## 動作確認
 

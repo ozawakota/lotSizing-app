@@ -1,4 +1,5 @@
-// OANDA の板情報（オーダーブック＝未約定の注文 / ポジションブック＝保有ポジション）の読み方。TF分析ページで使う純関数。
+// 板情報（オーダーブック＝注文の分布 / ポジションブック＝保有ポジションの分布）の読み方。TF分析ページで使う純関数。
+// 板情報そのものは自作の推定（src/lib/estimatedBook.ts）。OANDA の板情報と同じ形 [価格, 買い%, 売り%] で扱う。
 // オーダーブックのバケツ（価格帯）ごとの「買い%・売り%」は、現在値の上下で意味が変わる:
 //   - 現在値より下: 買い = 買い指値（下がったら買いたい＝支え） / 売り = 売りの逆指値（損切り・ブレイク売り＝割れると加速）
 //   - 現在値より上: 売り = 売り指値（上がったら売りたい＝上値の重し） / 買い = 買いの逆指値（損切り・ブレイク買い＝抜けると加速）
@@ -6,7 +7,7 @@
 import type { SlDirection } from './stoploss';
 
 export interface BookSide {
-  time: number; // OANDA 側のスナップショット時刻（ms）
+  time: number; // 推定した時刻（ms）
   price: number; // その時点の価格
   bucketWidth: number;
   buckets: [number, number, number][]; // [価格, 買い（long）%, 売り（short）%]（価格の昇順）
@@ -17,6 +18,7 @@ export interface OrderBookPayload {
   orderBook: BookSide | null;
   positionBook: BookSide | null;
   generatedAt: number;
+  source?: 'estimate'; // 自作の推定（価格の構造＋個人の建玉の記録）。OANDA の実データではない
 }
 
 export type ClusterKind = 'buy_limit' | 'sell_stop' | 'sell_limit' | 'buy_stop';
@@ -40,7 +42,7 @@ export const THICK_RATIO = 1.8;
 
 /**
  * オーダーブックの厚いところ（種類ごとに現在値に近い順で最大 maxPerKind 個）。
- * price は現在値（OANDA の価格はスポット基準なので、画面の現在値と同じ基準）。
+ * price は現在値（推定オーダーブックは現物の基準なので、画面の現在値と同じ基準）。
  */
 export function bookClusters(book: BookSide, price: number, maxPerKind = 2): BookCluster[] {
   const bs = book.buckets;

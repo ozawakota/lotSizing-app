@@ -85,8 +85,18 @@ import {
   type ForecastAccuracy,
   type ForecastRecord,
 } from '../../src/lib/forecast';
-// 板情報（OANDA オーダーブック）の型はフロントと共有。
-import type { BookSide, OrderBookPayload } from '../../src/lib/orderBook';
+// 推定オーダーブック（自作の板情報）の型・推定ロジックはフロントと共有。
+import type { OrderBookPayload } from '../../src/lib/orderBook';
+import {
+  estimateOrderBook,
+  positionBookFromRecords,
+  snapshotTime,
+  POSITION_HALF_LIFE_H,
+  SNAPSHOT_INTERVAL_MS,
+  type FlowRecord,
+} from '../../src/lib/estimatedBook';
+// 個人の建玉の毎時の記録（推定ポジションブック用）は Turso（libSQL）に置く。
+import { createClient, type Client } from '@libsql/client/web';
 // 損切り提案のロジック/型もフロントと共有。
 import {
   computeStructuralStop,
@@ -141,9 +151,10 @@ interface Env {
   // シグナル算出エンジン切替: 未設定/"workers-ai" で Workers AI、"jev" で Jev(typesafe.ai)。
   SIGNAL_ENGINE?: string;
   TYPESAFE_API_KEY?: string; // Jev 利用時のみ（wrangler secret）
-  // /orderbook（OANDA の板情報: オーダーブック・ポジションブック）用。wrangler secret で登録。
-  OANDA_API_TOKEN?: string;
-  OANDA_ENV?: string; // "live" で本番口座の API（既定はデモ口座 practice）
+  // 個人の建玉（Myfxbook）の毎時の記録先（Turso / libSQL）。/orderbook の推定ポジションブックに使う。wrangler secret で登録。
+  // 未設定なら記録せず、/orderbook は注文の推定（価格の構造から）だけを返す。
+  TURSO_DATABASE_URL?: string;
+  TURSO_AUTH_TOKEN?: string;
 }
 
 const PAIRS: JpyPairCurrency[] = ['USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
@@ -410,6 +421,13 @@ const updateFlow = async (env: Env): Promise<PairFlow[]> => {
     });
   }
   if (base.length === 0) throw new Error('建玉データが取得できませんでした');
+
+  // 推定ポジションブック用に、建玉を Turso に記録（未設定なら何もしない。失敗しても /flow は続ける）。
+  try {
+    await recordFlowSnapshots(env, base);
+  } catch (e) {
+    console.error('/flow 建玉の記録（Turso）失敗:', e);
+  }
 
   // 前回スナップショット(KV_FLOW)を読み、ペアごとの前回合計取引量をマップ化（前回比デルタ用）。
   // 上書き前に読むことで「今回 − 前回」を算出できる。初回は空マップ＝delta無し。
@@ -1500,56 +1518,200 @@ const handleLtf = async (url: URL): Promise<Response> => {
 };
 
 // ---------------------------------------------------------------------------
-// /orderbook: OANDA の板情報（オーダーブック＝未約定の注文 / ポジションブック＝保有ポジション）。
-// OANDA 側の更新は 20 分ごとなので、Worker のメモリ＋Cache API に 5 分だけ置く（KV は使わない＝書き込み枠を消費しない）。
-// 価格の近く（現在値 ± OB_RANGE_BUCKETS 本）のバケツだけを [価格, 買い%, 売り%] の配列に詰めて返す。
-// トークンは wrangler secret の OANDA_API_TOKEN（デモ口座のトークンで可）。未設定なら error を返す。
+// /orderbook: 自作の推定オーダーブック（OANDA の板情報の代わり。推定ロジックは src/lib/estimatedBook.ts）。
+// 集計の仕方は OANDA に合わせる:
+//   - 20 分ごと（:00 / :20 / :40）のスナップショット。Cron（5分ごと）が各スロットの最初の回に全ペア分を作って Turso に保存する
+//   - /orderbook?instrument=USD_JPY → いちばん新しいスナップショット。&time=ISO8601（または ms）→ その時刻以前でいちばん新しいもの
+//   - バケツごとの % は板全体の合計に対する割合
+// 中身は推定（注文 = 1時間足の構造＋個人の建玉の偏り、ポジション = 個人の建玉の毎時の記録の積み上げ）。
+// Turso が未設定なら保存はせず、リクエストのたびにその場で推定する（過去の時刻の指定は不可）。
 // ---------------------------------------------------------------------------
-const OB_TTL_MS = 5 * 60 * 1000;
-const OB_RANGE_BUCKETS = 80;
-
-interface OandaBookRaw {
-  instrument: string;
-  time: string;
-  price: string;
-  bucketWidth: string;
-  buckets: { price: string; longCountPercent: string; shortCountPercent: string }[];
-}
+const FLOW_RECORD_KEEP_DAYS = 30; // 個人の建玉の記録を残す日数
+const BOOK_SNAPSHOT_KEEP_DAYS = 14; // 板のスナップショットを残す日数
+const POSITION_LOOKBACK_H = POSITION_HALF_LIFE_H * 4; // ポジションの推定に使う記録の期間
+const BOOK_INSTRUMENTS = Object.keys(YAHOO_SYMBOL);
 
 const obMemCache = new Map<string, { body: string; generatedAt: number }>();
 const obCacheKey = (instrument: string) => new Request(`https://orderbook-cache.internal/${encodeURIComponent(instrument)}`);
 
-const trimBook = (raw: OandaBookRaw | undefined): BookSide | null => {
-  if (!raw) return null;
-  const price = Number(raw.price);
-  const width = Number(raw.bucketWidth);
-  if (!Number.isFinite(price) || !(width > 0)) return null;
-  const buckets: [number, number, number][] = raw.buckets
-    .map((b) => [Number(b.price), Number(b.longCountPercent), Number(b.shortCountPercent)] as [number, number, number])
-    .filter(([p, l, sh]) => Number.isFinite(p) && Number.isFinite(l) && Number.isFinite(sh) && Math.abs(p - price) <= width * OB_RANGE_BUCKETS)
-    .sort((a, b) => a[0] - b[0]);
-  return { time: Date.parse(raw.time) || Date.now(), price, bucketWidth: width, buckets };
+// Turso: 未設定なら null。テーブルは初回に作る（同じインスタンスでは一度だけ）。
+let bookTablesReady = false;
+const tursoClient = (env: Env): Client | null =>
+  env.TURSO_DATABASE_URL && env.TURSO_AUTH_TOKEN ? createClient({ url: env.TURSO_DATABASE_URL, authToken: env.TURSO_AUTH_TOKEN }) : null;
+const ensureBookTables = async (db: Client) => {
+  if (bookTablesReady) return;
+  await db.batch(
+    [
+      `CREATE TABLE IF NOT EXISTS flow_snapshots (
+        pair TEXT NOT NULL,
+        ts INTEGER NOT NULL,
+        long_pct REAL, short_pct REAL,
+        long_volume REAL, short_volume REAL,
+        avg_long REAL, avg_short REAL,
+        PRIMARY KEY (pair, ts)
+      )`,
+      `CREATE TABLE IF NOT EXISTS book_snapshots (
+        instrument TEXT NOT NULL,
+        ts INTEGER NOT NULL,
+        price REAL NOT NULL,
+        order_book TEXT,
+        position_book TEXT,
+        PRIMARY KEY (instrument, ts)
+      )`,
+    ],
+    'write',
+  );
+  bookTablesReady = true;
 };
 
-const fetchOandaBook = async (env: Env, instrument: string, kind: 'orderBook' | 'positionBook'): Promise<BookSide | null> => {
-  const host = env.OANDA_ENV === 'live' ? 'api-fxtrade.oanda.com' : 'api-fxpractice.oanda.com';
-  const res = await fetch(`https://${host}/v3/instruments/${encodeURIComponent(instrument)}/${kind}`, {
-    headers: { Authorization: `Bearer ${env.OANDA_API_TOKEN}`, 'Accept-Datetime-Format': 'RFC3339' },
+/** Myfxbook の建玉（ペアごと）を Turso に1行ずつ記録し、古い記録を消す。失敗しても /flow は止めない（呼び出し側で握りつぶす）。 */
+const recordFlowSnapshots = async (
+  env: Env,
+  rows: { pair: FlowPair; longPct: number; shortPct: number; longVolume: number; shortVolume: number; avgLongPrice?: number; avgShortPrice?: number }[],
+): Promise<void> => {
+  const db = tursoClient(env);
+  if (!db || rows.length === 0) return;
+  await ensureBookTables(db);
+  const ts = Date.now();
+  await db.batch(
+    [
+      ...rows.map((r) => ({
+        sql: 'INSERT OR REPLACE INTO flow_snapshots (pair, ts, long_pct, short_pct, long_volume, short_volume, avg_long, avg_short) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        args: [r.pair, ts, r.longPct, r.shortPct, r.longVolume, r.shortVolume, r.avgLongPrice ?? null, r.avgShortPrice ?? null],
+      })),
+      { sql: 'DELETE FROM flow_snapshots WHERE ts < ?', args: [ts - FLOW_RECORD_KEEP_DAYS * 86_400_000] },
+    ],
+    'write',
+  );
+};
+
+/** ポジションの推定に使う記録（ペアごと・古い順）。1回の問い合わせで全ペア分を読む。 */
+const loadFlowRecordsByPair = async (db: Client, now: number): Promise<Map<string, FlowRecord[]>> => {
+  const res = await db.execute({
+    sql: 'SELECT pair, ts, avg_long, avg_short, long_volume, short_volume FROM flow_snapshots WHERE ts >= ? ORDER BY ts',
+    args: [now - POSITION_LOOKBACK_H * 3_600_000],
   });
-  if (res.status === 404) return null; // その銘柄は板情報の対象外
-  if (!res.ok) throw new Error(`OANDA ${kind} HTTP ${res.status}`);
-  const body = (await res.json()) as Record<string, OandaBookRaw | undefined>;
-  return trimBook(body[kind]);
+  const num = (v: unknown): number | null => (v == null ? null : Number.isFinite(Number(v)) ? Number(v) : null);
+  const by = new Map<string, FlowRecord[]>();
+  for (const r of res.rows) {
+    const pair = String(r.pair);
+    const list = by.get(pair) ?? [];
+    list.push({ ts: Number(r.ts), avgLong: num(r.avg_long), avgShort: num(r.avg_short), longVolume: num(r.long_volume) ?? 0, shortVolume: num(r.short_volume) ?? 0 });
+    by.set(pair, list);
+  }
+  return by;
+};
+
+/** 1ペアの板（注文・ポジション）を推定する。ts はスナップショットの時刻（:00 / :20 / :40）。 */
+const computeBook = async (
+  instrument: string,
+  ts: number,
+  ctx: { retail: Map<string, { longPct: number; shortPct: number }>; records: Map<string, FlowRecord[]> | null; goldSpot: number | null },
+): Promise<OrderBookPayload | null> => {
+  const pair = instrument.replace('_', '/');
+  // 1時間足。XAU は金先物なので、現物価格との差だけ平行移動する（取れなければ先物のまま）。
+  const h1 = await fetchYahooCandles(YAHOO_SYMBOL[instrument], YAHOO_INTERVAL['1h']);
+  const shift = instrument === 'XAU_USD' && ctx.goldSpot != null ? ctx.goldSpot - h1.currentRate : 0;
+  const bars = h1.candles.slice(0, -1).map((c) => ({ high: c.high + shift, low: c.low + shift, close: c.close + shift }));
+  const price = h1.currentRate + shift;
+  const orderBook = estimateOrderBook(bars, price, instrument, { retail: ctx.retail.get(pair) ?? null, now: ts });
+  const records = ctx.records?.get(pair);
+  const positionBook = records ? positionBookFromRecords(records, price, instrument, ts) : null;
+  if (!orderBook && !positionBook) return null;
+  return { instrument, orderBook, positionBook, generatedAt: ts, source: 'estimate' };
+};
+
+/** /flow の保存データから、ペアごとの個人の建玉の割合（偏り）を読む。 */
+const loadRetailMix = async (env: Env): Promise<Map<string, { longPct: number; shortPct: number }>> => {
+  const out = new Map<string, { longPct: number; shortPct: number }>();
+  try {
+    for (const pf of JSON.parse((await env.STRENGTH_KV.get(KV_FLOW)) ?? '[]') as PairFlow[]) out.set(pf.pair, { longPct: pf.longPct, shortPct: pf.shortPct });
+  } catch {
+    // 偏りなしとして推定
+  }
+  return out;
+};
+
+/**
+ * Cron（5分ごと）から呼ぶ: 20 分スロットの最初の回（:00〜:04 / :20〜:24 / :40〜:44）に、全ペアのスナップショットを作って Turso に保存する。
+ * サブリクエストは Yahoo 8 ＋ 金の現物 1 ＋ KV 1 ＋ Turso 3 程度。Turso 未設定なら何もしない。
+ */
+const storeBookSnapshots = async (env: Env): Promise<void> => {
+  const db = tursoClient(env);
+  if (!db) return;
+  const now = Date.now();
+  if (now - snapshotTime(now) >= 5 * 60 * 1000) return; // このスロットの最初の回だけ
+  const ts = snapshotTime(now);
+  await ensureBookTables(db);
+  const ctx = { retail: await loadRetailMix(env), records: await loadFlowRecordsByPair(db, now), goldSpot: await fetchGoldSpot().catch(() => null) };
+  const books: OrderBookPayload[] = [];
+  for (const instrument of BOOK_INSTRUMENTS) {
+    try {
+      const b = await computeBook(instrument, ts, ctx);
+      if (b) books.push(b);
+    } catch (e) {
+      console.error(`板のスナップショット ${instrument} 失敗:`, e);
+    }
+  }
+  if (!books.length) return;
+  await db.batch(
+    [
+      ...books.map((b) => ({
+        sql: 'INSERT OR IGNORE INTO book_snapshots (instrument, ts, price, order_book, position_book) VALUES (?, ?, ?, ?, ?)',
+        args: [b.instrument, ts, b.orderBook?.price ?? b.positionBook?.price ?? 0, b.orderBook ? JSON.stringify(b.orderBook) : null, b.positionBook ? JSON.stringify(b.positionBook) : null],
+      })),
+      { sql: 'DELETE FROM book_snapshots WHERE ts < ?', args: [ts - BOOK_SNAPSHOT_KEEP_DAYS * 86_400_000] },
+    ],
+    'write',
+  );
+};
+
+/** 保存済みのスナップショット（at 以前でいちばん新しいもの。at 省略でいちばん新しいもの）。無ければ null。 */
+const loadBookSnapshot = async (db: Client, instrument: string, at: number | null): Promise<OrderBookPayload | null> => {
+  await ensureBookTables(db);
+  const res = await db.execute({
+    sql: 'SELECT ts, order_book, position_book FROM book_snapshots WHERE instrument = ? AND ts <= ? ORDER BY ts DESC LIMIT 1',
+    args: [instrument, at ?? Number.MAX_SAFE_INTEGER],
+  });
+  const r = res.rows[0];
+  if (!r) return null;
+  const parse = (v: unknown) => (v == null ? null : (JSON.parse(String(v)) as OrderBookPayload['orderBook']));
+  return { instrument, orderBook: parse(r.order_book), positionBook: parse(r.position_book), generatedAt: Number(r.ts), source: 'estimate' };
 };
 
 const handleOrderBook = async (env: Env, url: URL): Promise<Response> => {
   const instrument = url.searchParams.get('instrument') || 'USD_JPY';
   if (!YAHOO_SYMBOL[instrument]) return new Response(JSON.stringify({ error: '未対応のペアです' }), { headers: CORS_HEADERS });
-  if (!env.OANDA_API_TOKEN) {
-    return new Response(JSON.stringify({ error: '板情報は未設定です（Worker に OANDA_API_TOKEN を登録すると表示されます）' }), {
-      headers: CORS_HEADERS,
-    });
+  const json = (body: unknown) => new Response(JSON.stringify(body), { headers: CORS_HEADERS });
+  const db = tursoClient(env);
+
+  // 過去の時刻を指定（OANDA の time パラメータと同じ）: 保存済みのスナップショットから返す。
+  const timeParam = url.searchParams.get('time');
+  if (timeParam) {
+    const at = /^\d+$/.test(timeParam) ? Number(timeParam) : Date.parse(timeParam);
+    if (!Number.isFinite(at)) return json({ error: 'time は ISO8601 か ms で指定してください' });
+    if (!db) return json({ error: '過去の板は、Turso を設定するとスナップショットが保存されて見られるようになります' });
+    try {
+      const snap = await loadBookSnapshot(db, instrument, at);
+      return snap ? new Response(JSON.stringify(snap), { headers: CORS_HEADERS }) : json({ error: 'その時刻のスナップショットはまだありません' });
+    } catch (e) {
+      console.error('/orderbook 過去のスナップショット 失敗:', e);
+      return json({ error: 'スナップショットを読めませんでした' });
+    }
   }
+
+  // いちばん新しいスナップショット（直近のスロットのもの）があればそれを返す。
+  const now = Date.now();
+  if (db) {
+    try {
+      const snap = await loadBookSnapshot(db, instrument, null);
+      if (snap && snap.generatedAt >= snapshotTime(now) - SNAPSHOT_INTERVAL_MS) return new Response(JSON.stringify(snap), { headers: CORS_HEADERS });
+    } catch (e) {
+      console.error('/orderbook スナップショット 読み込み失敗:', e);
+    }
+  }
+
+  // 無ければ（Turso 未設定・最初のスロット前など）、いまのスロットの時刻でその場で推定する（スロットの間は Worker のメモリ＋Cache API に置く）。
   let hit = obMemCache.get(instrument) ?? null;
   if (!hit) {
     try {
@@ -1559,25 +1721,25 @@ const handleOrderBook = async (env: Env, url: URL): Promise<Response> => {
         hit = { body, generatedAt: (JSON.parse(body) as OrderBookPayload).generatedAt };
       }
     } catch {
-      // キャッシュが読めなければ取り直す
+      // キャッシュが読めなければ作り直す
     }
   }
-  if (hit && Date.now() - hit.generatedAt < OB_TTL_MS) return new Response(hit.body, { headers: CORS_HEADERS });
+  // 同じスロット（20分）の推定はスナップショットと同じく固定（OANDA も 20 分の間は同じ板を返す）。
+  if (hit && hit.generatedAt === snapshotTime(now)) return new Response(hit.body, { headers: CORS_HEADERS });
   try {
-    const [orderBook, positionBook] = await Promise.all([
-      fetchOandaBook(env, instrument, 'orderBook'),
-      fetchOandaBook(env, instrument, 'positionBook'),
-    ]);
-    if (!orderBook && !positionBook) {
-      return new Response(JSON.stringify({ error: 'このペアは OANDA の板情報の対象外です' }), { headers: CORS_HEADERS });
-    }
-    const payload: OrderBookPayload = { instrument, orderBook, positionBook, generatedAt: Date.now() };
+    const ctx = {
+      retail: await loadRetailMix(env),
+      records: db ? await loadFlowRecordsByPair(db, now).catch(() => null) : null,
+      goldSpot: instrument === 'XAU_USD' ? await fetchGoldSpot().catch(() => null) : null,
+    };
+    const payload = await computeBook(instrument, snapshotTime(now), ctx);
+    if (!payload) return json({ error: '推定に必要な足が足りません。少し待って再試行してください' });
     const body = JSON.stringify(payload);
     obMemCache.set(instrument, { body, generatedAt: payload.generatedAt });
     try {
       await caches.default.put(
         obCacheKey(instrument),
-        new Response(body, { headers: { 'Content-Type': 'application/json', 'Cache-Control': `max-age=${OB_TTL_MS / 1000}` } }),
+        new Response(body, { headers: { 'Content-Type': 'application/json', 'Cache-Control': `max-age=${SNAPSHOT_INTERVAL_MS / 1000}` } }),
       );
     } catch (e) {
       console.error('/orderbook キャッシュ保存 失敗:', e);
@@ -1586,8 +1748,7 @@ const handleOrderBook = async (env: Env, url: URL): Promise<Response> => {
   } catch (e) {
     console.error('/orderbook 失敗:', e);
     if (hit) return new Response(hit.body, { headers: CORS_HEADERS }); // 古くても無いよりよい
-    const msg = e instanceof Error && /HTTP 401|HTTP 403/.test(e.message) ? 'OANDA のトークンが無効です（OANDA_API_TOKEN を確認してください）' : '板情報を取得できませんでした。少し待って再試行してください';
-    return new Response(JSON.stringify({ error: msg }), { headers: CORS_HEADERS });
+    return json({ error: '推定オーダーブックを作れませんでした。少し待って再試行してください' });
   }
 };
 
@@ -1762,7 +1923,15 @@ export default {
         };
         break;
       case '*/5 * * * *':
-        job = updateRankingGroup; // RR好機ボード（ペアをローテーション構築・5分ごと）
+        // RR好機ボード（ペアをローテーション構築・5分ごと）。20分スロットの最初の回は、推定オーダーブックのスナップショットも保存。
+        job = async (e: Env) => {
+          await updateRankingGroup(e);
+          try {
+            await storeBookSnapshots(e);
+          } catch (err) {
+            console.error('板のスナップショット保存 失敗:', err);
+          }
+        };
         break;
       default:
         job = updateIntraday; // '0 */2 * * *' 15分足（4時間前/当日）2時間ごと
