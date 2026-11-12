@@ -40,13 +40,13 @@ import { TIMING_LABEL, assessEntryTiming, type EntryTiming, type TimingVerdict }
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 // 下位足（1分・5分）は同じ Worker の /ltf（/mtf と同じ場所）。
 const LTF_URL = MTF_URL ? MTF_URL.replace(/\/mtf$/, '/ltf') : undefined;
-// 板情報（OANDA のオーダーブック・ポジションブック）も同じ Worker の /orderbook。
+// 推定オーダーブック（自作の板情報: 注文・ポジションの分布）も同じ Worker の /orderbook。
 const OB_URL = MTF_URL ? MTF_URL.replace(/\/mtf$/, '/orderbook') : undefined;
 
 // 取引量・センチメント（取引量ページと同じ /flow。1時間ごとに更新）。チャートの背景に重ねる。
 const FLOW_URL = import.meta.env.VITE_FLOW_URL as string | undefined;
 
-/** 板情報の取得結果（ペアを選ぶたびに取り直す。OANDA 側は20分ごとの更新）。 */
+/** 推定オーダーブックの取得結果（ペアを選ぶたびに取り直す。Worker 側で5分キャッシュ）。 */
 type BookState = { data: OrderBookPayload | null; error: string; loading: boolean };
 
 const PAIRS: { label: string; instrument: string }[] = [
@@ -762,6 +762,8 @@ function TfCard({
   digits,
   book,
   flowPair,
+  onBookStep,
+  bookIsLatest,
 }: {
   tf: MtfTf;
   instrument: string;
@@ -769,6 +771,8 @@ function TfCard({
   digits: number;
   book: BookState | null;
   flowPair: PairFlow | null; // このペアの取引量・センチメント（無ければ null）
+  onBookStep?: (dir: -1 | 0 | 1) => void; // 推定オーダーブックのスナップショットを前後へ
+  bookIsLatest?: boolean;
 }) {
   const [moreOpen, setMoreOpen] = useState(false);
   const pip = pipSize(instrument);
@@ -834,7 +838,7 @@ function TfCard({
           />
         </div>
       )}
-      {/* 板情報（OANDA）: 注文・ポジションの分布をローソク足の横に。RR のプランがあれば線を重ね、注意点を出す */}
+      {/* 推定オーダーブック: 注文・ポジションの分布をローソク足の背景に。RR のプランがあれば線を重ね、注意点を出す */}
       {book && tf.bars && tf.bars.length >= 2 && (
         book.data ? (
           <OrderBookChart
@@ -844,10 +848,12 @@ function TfCard({
             currentRate={currentRate}
             digits={digits}
             plan={tf.rr ? { direction: tf.rr.direction, entry: tf.rr.entry, stop: tf.rr.stop, target: tf.rr.target } : null}
+            onStep={onBookStep}
+            isLatest={bookIsLatest}
           />
         ) : (
           <div className="mt-2 rounded-lg bg-gray-50 px-2 py-1.5 text-[10px] text-gray-500">
-            板情報（OANDA）: {book.loading ? '読み込み中…' : book.error}
+            推定オーダーブック: {book.loading ? '読み込み中…' : book.error}
           </div>
         )
       )}
@@ -1089,7 +1095,7 @@ export default function TimeframeAnalysis() {
   const [result, setResult] = useState<MtfResult | null>(null);
   const [showRrPopup, setShowRrPopup] = useState(false);
   const [tfSel, setTfSel] = useState<SlTimeframe | null>(null); // 表示する時間足（null=自動: RR好機の足→1時間足→先頭）
-  const [book, setBook] = useState<BookState | null>(null); // 板情報（OANDA）
+  const [book, setBook] = useState<BookState | null>(null); // 推定オーダーブック
   const [flowSnap, setFlowSnap] = useState<FlowSnapshot | null>(null); // 取引量・センチメント（全ペア分）
 
   // 取引量・センチメントは全ペア分が1回で取れるので、最初に1回だけ取得（失敗しても分析の表示は止めない）。
@@ -1111,26 +1117,41 @@ export default function TimeframeAnalysis() {
     };
   }, []);
 
-  // 板情報はペアを選ぶたびに取得（Worker 側で5分キャッシュ）。失敗しても分析の表示は止めない。
+  // 推定オーダーブックはペアを選ぶたびに取得（20分ごとのスナップショット）。bookAt を指定するとその時刻以前のスナップショット。
+  // 失敗しても分析の表示は止めない。
+  const [bookAt, setBookAt] = useState<number | null>(null); // null = 最新
+  useEffect(() => setBookAt(null), [instrument]);
   useEffect(() => {
     if (!OB_URL) return;
     let cancelled = false;
-    setBook({ data: null, error: '', loading: true });
+    setBook((prev) => ({ data: prev?.data ?? null, error: '', loading: true }));
     (async () => {
       try {
-        const res = await fetch(`${OB_URL}?instrument=${encodeURIComponent(instrument)}`);
+        const res = await fetch(`${OB_URL}?instrument=${encodeURIComponent(instrument)}${bookAt != null ? `&time=${bookAt}` : ''}`);
         if (!res.ok) throw new Error(`取得できませんでした（HTTP ${res.status}）`);
         const body = (await res.json()) as OrderBookPayload | { error: string };
         if ('error' in body) throw new Error(body.error);
         if (!cancelled) setBook({ data: body, error: '', loading: false });
       } catch (e) {
-        if (!cancelled) setBook({ data: null, error: e instanceof Error ? e.message : '取得できませんでした', loading: false });
+        if (cancelled) return;
+        // 過去のスナップショットが無い（保存前の時刻など）ときは最新に戻す
+        if (bookAt != null) setBookAt(null);
+        else setBook({ data: null, error: e instanceof Error ? e.message : '取得できませんでした', loading: false });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [instrument]);
+  }, [instrument, bookAt]);
+  // スナップショットを 20 分ずつ前後へ（最新より先へは行かない）。
+  const BOOK_STEP_MS = 20 * 60 * 1000;
+  const stepBook = (dir: -1 | 0 | 1) => {
+    if (dir === 0) return setBookAt(null);
+    const cur = book?.data?.generatedAt;
+    if (cur == null) return;
+    const next = cur + dir * BOOK_STEP_MS;
+    setBookAt(dir === 1 && next >= Date.now() - BOOK_STEP_MS ? null : next);
+  };
 
   // ペア選択で自動取得（マウント時も既定ペアを取得）。
   useEffect(() => {
@@ -1271,6 +1292,8 @@ export default function TimeframeAnalysis() {
                   digits={digits}
                   book={book}
                   flowPair={flowSnap?.pairs.find((p) => p.pair === flowPairOf(result.instrument)) ?? null}
+                  onBookStep={stepBook}
+                  bookIsLatest={bookAt == null}
                 />
               </div>
             )}

@@ -1,4 +1,5 @@
-// 板情報（OANDA のオーダーブック・ポジションブック）をローソク足の横に描くチャート（TF分析のエントリー判断）。
+// 推定オーダーブック（自作の板情報: 注文の分布・ポジションの分布）を描くチャート（TF分析のエントリー判断）。
+// 注文は1時間足の構造（未到達のスイング高安・キリ番）＋個人の建玉の偏りから、ポジションは個人の建玉の毎時の記録から推定（Worker /orderbook）。
 // 価格帯ごとの横棒（中央の軸から 右=買い（緑）・左=売り（赤））を、ローソク足の背景に半透明で重ねる。
 // エントリー・損切り・目標・現在値の線を全幅に引き、厚い価格帯（平均の 1.8 倍以上）は濃く・枠つきで描く。
 // 下に、厚いところの一覧（支え・重し・逆指値の溜まり）と、RR のプランと照らした注意点を出す。
@@ -29,6 +30,8 @@ export function OrderBookChart({
   currentRate,
   digits,
   plan,
+  onStep,
+  isLatest = true,
 }: {
   bars: OhlcCandle[];
   forming: OhlcCandle | null;
@@ -36,6 +39,9 @@ export function OrderBookChart({
   currentRate: number;
   digits: number;
   plan: PlanLevels | null;
+  /** 20 分ごとのスナップショットを前後に移動（OANDA と同じ。無ければボタンを出さない）。-1=20分前 / 1=20分後 / 0=最新 */
+  onStep?: (dir: -1 | 0 | 1) => void;
+  isLatest?: boolean;
 }) {
   const [mode, setMode] = useState<Mode>('orders');
   const book: BookSide | null = mode === 'orders' ? data.orderBook : data.positionBook;
@@ -106,7 +112,9 @@ export function OrderBookChart({
   return (
     <div className="mt-2 rounded-lg bg-gray-50 px-2 py-1.5">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-semibold text-gray-600">板情報（OANDA）</span>
+        <span className="text-[11px] font-semibold text-gray-600">
+          推定オーダーブック<span className="ml-1 rounded bg-gray-200 px-1 text-[9px] font-normal text-gray-500">自作</span>
+        </span>
         <div className="flex gap-1">
           {(
             [
@@ -131,7 +139,7 @@ export function OrderBookChart({
       </div>
 
       {!book ? (
-        <div className="mt-1 text-[10px] text-gray-500">このペアの{mode === 'orders' ? 'オーダー' : 'ポジション'}ブックはありません。</div>
+        <div className="mt-1 text-[10px] text-gray-500">{mode === 'orders' ? '注文の推定に必要な足が足りません。' : 'ポジションの分布は、個人の建玉の記録（毎時）がたまると表示されます。'}</div>
       ) : (
         <svg viewBox={`0 0 ${W} ${H}`} className="mt-1 h-auto w-full" role="img" aria-label={`ローソク足と板情報（${mode === 'orders' ? '注文' : 'ポジション'}）`}>
           {/* 横棒の中央の軸（ローソク足の背景） */}
@@ -199,7 +207,28 @@ export function OrderBookChart({
             )}
           </span>
         )}
-        {snap && <span className="ml-auto text-gray-400">{snap} 時点（OANDA は20分ごとに更新）</span>}
+        {snap && (
+          <span className="ml-auto flex items-center gap-1 text-gray-400">
+            {onStep && (
+              <button type="button" onClick={() => onStep(-1)} className="rounded border border-gray-200 bg-white text-gray-600" aria-label="20分前のスナップショット">
+                <span className="block px-1">◀</span>
+              </button>
+            )}
+            <span className={isLatest ? '' : 'font-semibold text-amber-700'}>
+              {snap} 時点の推定（20分ごと）{isLatest ? '' : '・過去'}
+            </span>
+            {onStep && !isLatest && (
+              <>
+                <button type="button" onClick={() => onStep(1)} className="rounded border border-gray-200 bg-white text-gray-600" aria-label="20分後のスナップショット">
+                  <span className="block px-1">▶</span>
+                </button>
+                <button type="button" onClick={() => onStep(0)} className="rounded border border-gray-200 bg-white text-gray-600">
+                  <span className="block px-1">最新</span>
+                </button>
+              </>
+            )}
+          </span>
+        )}
       </div>
 
       {/* 厚いところの一覧（注文） */}
@@ -233,7 +262,9 @@ export function OrderBookChart({
           ))}
         </ul>
       )}
-      <div className="mt-1 text-[9px] text-gray-400">OANDA の顧客の注文・ポジションの分布です（市場全体ではありません）。※投資助言ではありません。</div>
+      <div className="mt-1 text-[9px] text-gray-400">
+        実際の注文ではなく推定です。注文＝1時間足のスイング高安（抜けると逆指値が動く）・キリ番＋個人の建玉の偏り、ポジション＝個人（Myfxbook）の平均取得価格の毎時の記録から。※投資助言ではありません。
+      </div>
     </div>
   );
 }
