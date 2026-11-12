@@ -149,6 +149,8 @@ export interface PairFlow {
   peak?: VolumePeak; // 記録開始以降の合計取引量ピーク
   delta?: FlowDelta; // 前回スナップショット比の合計取引量の動き（初回は無し）
   cot?: PairCot; // 投機筋（CFTC COT）のネットポジション（取得できたペアのみ）
+  avgLongPrice?: number; // 個人の買いポジションの平均取得価格（Myfxbook。取得できたときのみ）
+  avgShortPrice?: number; // 個人の売りポジションの平均取得価格（同上）
 }
 
 // Worker が /flow で返すスナップショット。

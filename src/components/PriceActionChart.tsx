@@ -20,6 +20,7 @@ import {
 import type { SrZone } from '@/lib/srZones';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 import type { MaLines } from '@/lib/entrySignal';
+import type { FlowLevelKind, FlowOverlay } from '@/lib/flowOverlay';
 
 const UP = '#16a34a';
 const DOWN = '#dc2626';
@@ -29,6 +30,8 @@ const INVALIDATE = '#6b7280';
 const RES = '#dc2626';
 const SUP = '#16a34a';
 const VOL = '#d97706'; // 出来高節目（オレンジ）
+// 取引量・センチメント（背景に半透明で重ねる）の色。
+const FLOW_COLOR: Record<FlowLevelKind, string> = { avg_long: '#16a34a', avg_short: '#dc2626', peak: '#6366f1' };
 
 // 出来高節目の点滅（動きを減らす設定では止めて、少し濃いめで固定）。
 const VOL_BLINK_CSS = `
@@ -82,6 +85,7 @@ export function PriceActionChart({
   periodLabel,
   maLines,
   volumeLevel = null,
+  flow = null,
   volumeAgoLabel,
   pip,
 }: {
@@ -96,6 +100,7 @@ export function PriceActionChart({
   volumeLevel?: number | null; // 出来高節目（過去に出来高が膨らんだ価格）。無ければ描かない
   volumeAgoLabel?: string; // 例「2日前」
   pip?: number; // 距離を pips で出すため
+  flow?: FlowOverlay | null; // 取引量・センチメント（/flow）。背景に半透明で重ねる
 }) {
   const clipId = useId().replace(/:/g, '');
   if (bars.length < 2) return null;
@@ -122,8 +127,12 @@ export function PriceActionChart({
   const loZ = s1 && s1.high < lo0 && lo0 - s1.high <= span0 * ZONE_EXTEND ? Math.min(lo0, Math.max(s1.low, lo0 - span0 * ZONE_EXTEND)) : lo0;
   // 出来高節目も、値幅の少し外なら値幅を広げて入れる。
   const vol = volumeLevel;
-  const hi = vol != null && vol > hiZ && vol - hi0 <= span0 * ZONE_EXTEND ? vol : hiZ;
-  const lo = vol != null && vol < loZ && lo0 - vol <= span0 * ZONE_EXTEND ? vol : loZ;
+  const hiV = vol != null && vol > hiZ && vol - hi0 <= span0 * ZONE_EXTEND ? vol : hiZ;
+  const loV = vol != null && vol < loZ && lo0 - vol <= span0 * ZONE_EXTEND ? vol : loZ;
+  // 取引量・センチメントの価格（個人の平均取得価格・取引量ピーク）も、値幅の少し外なら値幅を広げて入れる。
+  const flowNear = (flow?.levels ?? []).map((l) => l.price).filter((p) => p <= hi0 + span0 * ZONE_EXTEND && p >= lo0 - span0 * ZONE_EXTEND);
+  const hi = Math.max(hiV, ...flowNear);
+  const lo = Math.min(loV, ...flowNear);
   const span = hi - lo || 1;
   const y = (p: number) => padY + ((hi - p) / span) * (H - padY * 2);
   const slot = (W - padL - padR) / all.length;
@@ -192,6 +201,8 @@ export function PriceActionChart({
   });
 
   const fmt = (p: number) => p.toFixed(digits);
+  // 取引量・センチメントの帯のうち、チャートの値幅に入るもの（外れたものは下の一覧に ▲▼ で出す）。
+  const flowIn = flow ? flow.levels.filter((l) => l.price >= lo && l.price <= hi) : [];
 
   return (
     <div className="mt-2 rounded-lg bg-gray-50 px-2 py-1.5">
@@ -210,6 +221,41 @@ export function PriceActionChart({
         role="img"
         aria-label={`ローソク足 ${bars.length}本。${head.text}`}
       >
+        {/* 取引量・センチメント（ローソク足の背景・半透明）: オーダーブックと同じ横棒で、
+            個人の買い/売りの平均取得価格の高さに、建玉の割合（買い%・売り%）の長さの棒を右端から描く。取引量ピークは全幅の薄い帯 */}
+        {flow &&
+          flowIn.map((l) => {
+            const color = FLOW_COLOR[l.kind];
+            const plotW = W - padL - padR;
+            const pct = l.kind === 'avg_long' ? flow.longPct : l.kind === 'avg_short' ? flow.shortPct : 100;
+            const len = plotW * (pct / 100);
+            const x0 = W - padR - len;
+            const bh = l.kind === 'peak' ? 6 : 12;
+            const yy = y(l.price);
+            // 棒が短いときは、ラベルを右端に寄せて棒の左へはみ出させる（右の価格ラベル欄に食い込まないように）
+            const text =
+              l.kind === 'avg_long' ? `個人の買い ${flow.longPct}%（平均 ${fmt(l.price)}）` : l.kind === 'avg_short' ? `個人の売り ${flow.shortPct}%（平均 ${fmt(l.price)}）` : `取引量ピーク ${fmt(l.price)}`;
+            return (
+              <g key={`flow-${l.kind}`} aria-hidden>
+                <rect x={x0} width={len} y={yy - bh / 2} height={bh} rx="1.5" fill={color} opacity={l.kind === 'peak' ? 0.1 : 0.17} />
+                <line x1={x0} x2={W - padR} y1={yy} y2={yy} stroke={color} strokeWidth="0.6" strokeDasharray="2 2" opacity="0.55" />
+                <text
+                  x={len >= 140 ? x0 + 3 : W - padR - 3}
+                  y={yy + 2.2}
+                  textAnchor={len >= 140 ? 'start' : 'end'}
+                  className="text-[6.5px] font-bold"
+                  fill={color}
+                  opacity="0.75"
+                  stroke="white"
+                  strokeWidth="1.5"
+                  paintOrder="stroke"
+                >
+                  {text}
+                </text>
+              </g>
+            );
+          })}
+
         {/* 抵抗帯（チャートの値幅に入るもの）: 塗り（★が多いほど濃い）＋上下の境界線（★3 は実線） */}
         {visibleZones.map(({ z, name }) => {
           const top = y(Math.min(z.high, hi));
@@ -427,6 +473,41 @@ export function PriceActionChart({
         )}
       </svg>
 
+      {/* 取引量・センチメントのまとめ（背景の帯・ゲージの説明） */}
+      {flow && (
+        <div className="mt-1 rounded-md border border-gray-200 bg-white/70 px-2 py-1 text-[10px] text-gray-600">
+          <div className="flex flex-wrap items-center gap-x-1.5">
+            <span className="font-bold text-gray-700">取引量（個人・大口）</span>
+            <span className="flex h-1.5 w-14 overflow-hidden rounded-full" aria-label={`個人 買い${flow.longPct}% 売り${flow.shortPct}%`}>
+              <span className="h-full bg-green-500/60" style={{ width: `${flow.longPct}%` }} />
+              <span className="h-full bg-red-500/60" style={{ width: `${flow.shortPct}%` }} />
+            </span>
+            <span className="tabular-nums">
+              買い{flow.longPct}% / 売り{flow.shortPct}%
+            </span>
+            <span className="text-[9px] text-gray-400">（ローソク足の背景の横棒＝平均取得価格と建玉の割合）</span>
+          </div>
+          <div className="text-gray-500">{flow.summary}</div>
+          {flow.levels.length > 0 && (
+            <ul className="mt-0.5 space-y-0.5" style={LIST_RESET}>
+              {flow.levels.map((l) => {
+                const off = l.price > hi ? '▲ ' : l.price < lo ? '▼ ' : '';
+                return (
+                  <li key={l.kind} style={LIST_ITEM_RESET} className="flex flex-wrap items-center gap-x-1">
+                    <span aria-hidden className="inline-block h-1.5 w-3 rounded-sm" style={{ backgroundColor: FLOW_COLOR[l.kind], opacity: 0.5 }} />
+                    <span className="font-semibold" style={{ color: FLOW_COLOR[l.kind] }}>
+                      {off}
+                      {l.label}
+                    </span>
+                    <span className="font-semibold tabular-nums text-gray-800">{fmt(l.price)}</span>
+                    <span className="text-gray-500">{l.note}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
       {/* 出来高節目の1行（価格・何日前・現在値からの距離・レジ/サポ） */}
       {vol != null && (
         <div className="mt-1 flex flex-wrap items-center gap-x-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px]">
