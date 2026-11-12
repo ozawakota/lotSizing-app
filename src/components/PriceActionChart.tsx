@@ -127,8 +127,12 @@ export function PriceActionChart({
   const loZ = s1 && s1.high < lo0 && lo0 - s1.high <= span0 * ZONE_EXTEND ? Math.min(lo0, Math.max(s1.low, lo0 - span0 * ZONE_EXTEND)) : lo0;
   // 出来高節目も、値幅の少し外なら値幅を広げて入れる。
   const vol = volumeLevel;
-  const hi = vol != null && vol > hiZ && vol - hi0 <= span0 * ZONE_EXTEND ? vol : hiZ;
-  const lo = vol != null && vol < loZ && lo0 - vol <= span0 * ZONE_EXTEND ? vol : loZ;
+  const hiV = vol != null && vol > hiZ && vol - hi0 <= span0 * ZONE_EXTEND ? vol : hiZ;
+  const loV = vol != null && vol < loZ && lo0 - vol <= span0 * ZONE_EXTEND ? vol : loZ;
+  // 取引量・センチメントの価格（個人の平均取得価格・取引量ピーク）も、値幅の少し外なら値幅を広げて入れる。
+  const flowNear = (flow?.levels ?? []).map((l) => l.price).filter((p) => p <= hi0 + span0 * ZONE_EXTEND && p >= lo0 - span0 * ZONE_EXTEND);
+  const hi = Math.max(hiV, ...flowNear);
+  const lo = Math.min(loV, ...flowNear);
   const span = hi - lo || 1;
   const y = (p: number) => padY + ((hi - p) / span) * (H - padY * 2);
   const slot = (W - padL - padR) / all.length;
@@ -217,40 +221,40 @@ export function PriceActionChart({
         role="img"
         aria-label={`ローソク足 ${bars.length}本。${head.text}`}
       >
-        {/* 取引量・センチメント（背景・半透明）: 個人の買い/売りの平均取得価格・取引量ピークの帯と、右端の建玉比ゲージ */}
-        {flow && (
-          <g aria-hidden>
-            {flowIn.map((l) => (
-              <g key={`flow-${l.kind}`}>
-                <rect x={padL} width={W - padL - padR} y={y(l.price) - 2.5} height="5" fill={FLOW_COLOR[l.kind]} opacity="0.13" />
-                <line x1={padL} x2={W - padR} y1={y(l.price)} y2={y(l.price)} stroke={FLOW_COLOR[l.kind]} strokeWidth="0.7" strokeDasharray="2 3" opacity="0.5" />
+        {/* 取引量・センチメント（ローソク足の背景・半透明）: オーダーブックと同じ横棒で、
+            個人の買い/売りの平均取得価格の高さに、建玉の割合（買い%・売り%）の長さの棒を右端から描く。取引量ピークは全幅の薄い帯 */}
+        {flow &&
+          flowIn.map((l) => {
+            const color = FLOW_COLOR[l.kind];
+            const plotW = W - padL - padR;
+            const pct = l.kind === 'avg_long' ? flow.longPct : l.kind === 'avg_short' ? flow.shortPct : 100;
+            const len = plotW * (pct / 100);
+            const x0 = W - padR - len;
+            const bh = l.kind === 'peak' ? 6 : 12;
+            const yy = y(l.price);
+            // 棒が短いときは、ラベルを右端に寄せて棒の左へはみ出させる（右の価格ラベル欄に食い込まないように）
+            const text =
+              l.kind === 'avg_long' ? `個人の買い ${flow.longPct}%（平均 ${fmt(l.price)}）` : l.kind === 'avg_short' ? `個人の売り ${flow.shortPct}%（平均 ${fmt(l.price)}）` : `取引量ピーク ${fmt(l.price)}`;
+            return (
+              <g key={`flow-${l.kind}`} aria-hidden>
+                <rect x={x0} width={len} y={yy - bh / 2} height={bh} rx="1.5" fill={color} opacity={l.kind === 'peak' ? 0.1 : 0.17} />
+                <line x1={x0} x2={W - padR} y1={yy} y2={yy} stroke={color} strokeWidth="0.6" strokeDasharray="2 2" opacity="0.55" />
                 <text
-                  x={W - padR - 9}
-                  y={y(l.price) - 3.5}
-                  textAnchor="end"
-                  className="text-[6px]"
-                  fill={FLOW_COLOR[l.kind]}
-                  opacity="0.8"
+                  x={len >= 140 ? x0 + 3 : W - padR - 3}
+                  y={yy + 2.2}
+                  textAnchor={len >= 140 ? 'start' : 'end'}
+                  className="text-[6.5px] font-bold"
+                  fill={color}
+                  opacity="0.75"
                   stroke="white"
                   strokeWidth="1.5"
                   paintOrder="stroke"
                 >
-                  {l.label}
+                  {text}
                 </text>
               </g>
-            ))}
-            {/* 個人の建玉比（上=売り・下=買い） */}
-            <rect x={W - padR - 6} width="5" y={padY / 2} height={(H - padY) * (flow.shortPct / 100)} fill={DOWN} opacity="0.22" />
-            <rect
-              x={W - padR - 6}
-              width="5"
-              y={padY / 2 + (H - padY) * (flow.shortPct / 100)}
-              height={(H - padY) * (flow.longPct / 100)}
-              fill={UP}
-              opacity="0.22"
-            />
-          </g>
-        )}
+            );
+          })}
 
         {/* 抵抗帯（チャートの値幅に入るもの）: 塗り（★が多いほど濃い）＋上下の境界線（★3 は実線） */}
         {visibleZones.map(({ z, name }) => {
@@ -481,7 +485,7 @@ export function PriceActionChart({
             <span className="tabular-nums">
               買い{flow.longPct}% / 売り{flow.shortPct}%
             </span>
-            <span className="text-[9px] text-gray-400">（チャート右端の縦の帯＝個人の建玉比）</span>
+            <span className="text-[9px] text-gray-400">（ローソク足の背景の横棒＝平均取得価格と建玉の割合）</span>
           </div>
           <div className="text-gray-500">{flow.summary}</div>
           {flow.levels.length > 0 && (
