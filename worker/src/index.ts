@@ -85,6 +85,8 @@ import {
   type ForecastAccuracy,
   type ForecastRecord,
 } from '../../src/lib/forecast';
+// 板情報（OANDA オーダーブック）の型はフロントと共有。
+import type { BookSide, OrderBookPayload } from '../../src/lib/orderBook';
 // 損切り提案のロジック/型もフロントと共有。
 import {
   computeStructuralStop,
@@ -139,6 +141,9 @@ interface Env {
   // シグナル算出エンジン切替: 未設定/"workers-ai" で Workers AI、"jev" で Jev(typesafe.ai)。
   SIGNAL_ENGINE?: string;
   TYPESAFE_API_KEY?: string; // Jev 利用時のみ（wrangler secret）
+  // /orderbook（OANDA の板情報: オーダーブック・ポジションブック）用。wrangler secret で登録。
+  OANDA_API_TOKEN?: string;
+  OANDA_ENV?: string; // "live" で本番口座の API（既定はデモ口座 practice）
 }
 
 const PAIRS: JpyPairCurrency[] = ['USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
@@ -1451,6 +1456,98 @@ const handleLtf = async (url: URL): Promise<Response> => {
 };
 
 // ---------------------------------------------------------------------------
+// /orderbook: OANDA の板情報（オーダーブック＝未約定の注文 / ポジションブック＝保有ポジション）。
+// OANDA 側の更新は 20 分ごとなので、Worker のメモリ＋Cache API に 5 分だけ置く（KV は使わない＝書き込み枠を消費しない）。
+// 価格の近く（現在値 ± OB_RANGE_BUCKETS 本）のバケツだけを [価格, 買い%, 売り%] の配列に詰めて返す。
+// トークンは wrangler secret の OANDA_API_TOKEN（デモ口座のトークンで可）。未設定なら error を返す。
+// ---------------------------------------------------------------------------
+const OB_TTL_MS = 5 * 60 * 1000;
+const OB_RANGE_BUCKETS = 80;
+
+interface OandaBookRaw {
+  instrument: string;
+  time: string;
+  price: string;
+  bucketWidth: string;
+  buckets: { price: string; longCountPercent: string; shortCountPercent: string }[];
+}
+
+const obMemCache = new Map<string, { body: string; generatedAt: number }>();
+const obCacheKey = (instrument: string) => new Request(`https://orderbook-cache.internal/${encodeURIComponent(instrument)}`);
+
+const trimBook = (raw: OandaBookRaw | undefined): BookSide | null => {
+  if (!raw) return null;
+  const price = Number(raw.price);
+  const width = Number(raw.bucketWidth);
+  if (!Number.isFinite(price) || !(width > 0)) return null;
+  const buckets: [number, number, number][] = raw.buckets
+    .map((b) => [Number(b.price), Number(b.longCountPercent), Number(b.shortCountPercent)] as [number, number, number])
+    .filter(([p, l, sh]) => Number.isFinite(p) && Number.isFinite(l) && Number.isFinite(sh) && Math.abs(p - price) <= width * OB_RANGE_BUCKETS)
+    .sort((a, b) => a[0] - b[0]);
+  return { time: Date.parse(raw.time) || Date.now(), price, bucketWidth: width, buckets };
+};
+
+const fetchOandaBook = async (env: Env, instrument: string, kind: 'orderBook' | 'positionBook'): Promise<BookSide | null> => {
+  const host = env.OANDA_ENV === 'live' ? 'api-fxtrade.oanda.com' : 'api-fxpractice.oanda.com';
+  const res = await fetch(`https://${host}/v3/instruments/${encodeURIComponent(instrument)}/${kind}`, {
+    headers: { Authorization: `Bearer ${env.OANDA_API_TOKEN}`, 'Accept-Datetime-Format': 'RFC3339' },
+  });
+  if (res.status === 404) return null; // その銘柄は板情報の対象外
+  if (!res.ok) throw new Error(`OANDA ${kind} HTTP ${res.status}`);
+  const body = (await res.json()) as Record<string, OandaBookRaw | undefined>;
+  return trimBook(body[kind]);
+};
+
+const handleOrderBook = async (env: Env, url: URL): Promise<Response> => {
+  const instrument = url.searchParams.get('instrument') || 'USD_JPY';
+  if (!YAHOO_SYMBOL[instrument]) return new Response(JSON.stringify({ error: '未対応のペアです' }), { headers: CORS_HEADERS });
+  if (!env.OANDA_API_TOKEN) {
+    return new Response(JSON.stringify({ error: '板情報は未設定です（Worker に OANDA_API_TOKEN を登録すると表示されます）' }), {
+      headers: CORS_HEADERS,
+    });
+  }
+  let hit = obMemCache.get(instrument) ?? null;
+  if (!hit) {
+    try {
+      const c = await caches.default.match(obCacheKey(instrument));
+      if (c) {
+        const body = await c.text();
+        hit = { body, generatedAt: (JSON.parse(body) as OrderBookPayload).generatedAt };
+      }
+    } catch {
+      // キャッシュが読めなければ取り直す
+    }
+  }
+  if (hit && Date.now() - hit.generatedAt < OB_TTL_MS) return new Response(hit.body, { headers: CORS_HEADERS });
+  try {
+    const [orderBook, positionBook] = await Promise.all([
+      fetchOandaBook(env, instrument, 'orderBook'),
+      fetchOandaBook(env, instrument, 'positionBook'),
+    ]);
+    if (!orderBook && !positionBook) {
+      return new Response(JSON.stringify({ error: 'このペアは OANDA の板情報の対象外です' }), { headers: CORS_HEADERS });
+    }
+    const payload: OrderBookPayload = { instrument, orderBook, positionBook, generatedAt: Date.now() };
+    const body = JSON.stringify(payload);
+    obMemCache.set(instrument, { body, generatedAt: payload.generatedAt });
+    try {
+      await caches.default.put(
+        obCacheKey(instrument),
+        new Response(body, { headers: { 'Content-Type': 'application/json', 'Cache-Control': `max-age=${OB_TTL_MS / 1000}` } }),
+      );
+    } catch (e) {
+      console.error('/orderbook キャッシュ保存 失敗:', e);
+    }
+    return new Response(body, { headers: CORS_HEADERS });
+  } catch (e) {
+    console.error('/orderbook 失敗:', e);
+    if (hit) return new Response(hit.body, { headers: CORS_HEADERS }); // 古くても無いよりよい
+    const msg = e instanceof Error && /HTTP 401|HTTP 403/.test(e.message) ? 'OANDA のトークンが無効です（OANDA_API_TOKEN を確認してください）' : '板情報を取得できませんでした。少し待って再試行してください';
+    return new Response(JSON.stringify({ error: msg }), { headers: CORS_HEADERS });
+  }
+};
+
+// ---------------------------------------------------------------------------
 // /ranking: RR好機ボード（cron で KV キャッシュ）
 // ---------------------------------------------------------------------------
 // RR好機ボード（エッジページ）。各ペアの TF分析（/mtf と同じ buildMtf）から、RR が出た時間足を1カードにする
@@ -1647,6 +1744,7 @@ export default {
     if (pathname === '/stoploss') return handleStopLoss(env, reqUrl);
     if (pathname === '/mtf') return handleMtf(env, reqUrl);
     if (pathname === '/ltf') return handleLtf(reqUrl);
+    if (pathname === '/orderbook') return handleOrderBook(env, reqUrl);
     if (pathname === '/ranking') return handleRanking(env);
     if (pathname === '/volume') return handleVolume(env);
 

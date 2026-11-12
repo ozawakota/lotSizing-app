@@ -70,12 +70,23 @@ npx wrangler kv namespace create STRENGTH_KV   # 出力の id を wrangler.toml 
 npx wrangler secret put TWELVE_DATA_API_KEY    # Twelve Data のキーを登録（バンドルには載らない）
 npx wrangler secret put MYFXBOOK_EMAIL         # /flow センチメント用（Myfxbook 無料アカウント）
 npx wrangler secret put MYFXBOOK_PASSWORD      # /flow センチメント用
+npx wrangler secret put OANDA_API_TOKEN        # /orderbook 板情報用（OANDA のデモ口座の API トークンで可）
 npx wrangler deploy              # デプロイ（Cron も同時に設定される）
 ```
 
 デプロイで発行された Worker の URL を、フロントの環境変数に設定する:
 - `VITE_STRENGTH_URL=https://currency-strength.<subdomain>.workers.dev`（通貨強弱）
 - `VITE_FLOW_URL=https://currency-strength.<subdomain>.workers.dev/flow`（取引量・センチメント）
+
+### 板情報（/orderbook）
+
+TF分析ページの「板情報（OANDA）」は、この Worker の `/orderbook?instrument=USD_JPY` から OANDA v20 の
+オーダーブック（未約定の注文）とポジションブック（保有ポジション）を取得して描く（URL は `VITE_MTF_URL` の `/mtf` を置き換えて使うので、フロントの設定追加は不要）。
+
+- トークン: OANDA の口座ページで発行した API トークンを `npx wrangler secret put OANDA_API_TOKEN` で登録（リポジトリには置かない）。
+  既定はデモ口座の API（api-fxpractice.oanda.com）。本番口座のトークンなら `wrangler.toml` の `[vars]` に `OANDA_ENV = "live"` を足す。
+- OANDA 側の更新は20分ごと。Worker のメモリ＋Cache API に5分キャッシュする（KV は使わない）。
+- 未登録のときは画面に「板情報は未設定です」と出るだけで、ほかの分析は動く。
 
 ## 動作確認
 

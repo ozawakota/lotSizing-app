@@ -24,6 +24,8 @@ import type { OhlcCandle } from '@/lib/edge';
 import { PriceActionChart } from '@/components/PriceActionChart';
 import { TradeChart } from '@/components/TradeChart';
 import { LtfEntryCard, type HtfPlan } from '@/components/LtfEntryCard';
+import { OrderBookChart } from '@/components/OrderBookChart';
+import type { OrderBookPayload } from '@/lib/orderBook';
 import type { LtfPlanArea } from '@/lib/ltfTrigger';
 import TfCountdown from '@/components/TfCountdown';
 import { DowHeader, KeyLevelRow, SwingChart, ZoneLadder } from '@/components/TfStructure';
@@ -36,6 +38,11 @@ import { TIMING_LABEL, assessEntryTiming, type EntryTiming, type TimingVerdict }
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 // 下位足（1分・5分）は同じ Worker の /ltf（/mtf と同じ場所）。
 const LTF_URL = MTF_URL ? MTF_URL.replace(/\/mtf$/, '/ltf') : undefined;
+// 板情報（OANDA のオーダーブック・ポジションブック）も同じ Worker の /orderbook。
+const OB_URL = MTF_URL ? MTF_URL.replace(/\/mtf$/, '/orderbook') : undefined;
+
+/** 板情報の取得結果（ペアを選ぶたびに取り直す。OANDA 側は20分ごとの更新）。 */
+type BookState = { data: OrderBookPayload | null; error: string; loading: boolean };
 
 const PAIRS: { label: string; instrument: string }[] = [
   { label: 'USD/JPY', instrument: 'USD_JPY' },
@@ -743,7 +750,19 @@ function htfPlanOf(tf: MtfTf, instrument: string, currentRate: number): HtfPlan 
 //   → トレンドとブレイク確率（ダウ理論のスイング図・押し安値/戻り高値・ブレイク確率）→ 抵抗帯のはしご（★・幅・距離・根拠）
 //   → 「そのほかの指標」（ロールリバーサル・ストキャス・出来高。旧キャッシュではパターンもここ）。
 // 旧キャッシュ（dow/zones が無い）では、従来のトレンドチップとスイング高安の2本線で表示する。
-function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument: string; currentRate: number; digits: number }) {
+function TfCard({
+  tf,
+  instrument,
+  currentRate,
+  digits,
+  book,
+}: {
+  tf: MtfTf;
+  instrument: string;
+  currentRate: number;
+  digits: number;
+  book: BookState | null;
+}) {
   const [moreOpen, setMoreOpen] = useState(false);
   const pip = pipSize(instrument);
   const resDist = Math.abs(tf.swingHigh - currentRate) / pip;
@@ -807,6 +826,23 @@ function TfCard({ tf, instrument, currentRate, digits }: { tf: MtfTf; instrument
             stopEntryPrice={stopEntry && timing?.dir === tf.rr.direction ? stopEntry.price : null}
           />
         </div>
+      )}
+      {/* 板情報（OANDA）: 注文・ポジションの分布をローソク足の横に。RR のプランがあれば線を重ね、注意点を出す */}
+      {book && tf.bars && tf.bars.length >= 2 && (
+        book.data ? (
+          <OrderBookChart
+            bars={tf.bars}
+            forming={tf.forming ?? null}
+            data={book.data}
+            currentRate={currentRate}
+            digits={digits}
+            plan={tf.rr ? { direction: tf.rr.direction, entry: tf.rr.entry, stop: tf.rr.stop, target: tf.rr.target } : null}
+          />
+        ) : (
+          <div className="mt-2 rounded-lg bg-gray-50 px-2 py-1.5 text-[10px] text-gray-500">
+            板情報（OANDA）: {book.loading ? '読み込み中…' : book.error}
+          </div>
+        )
       )}
       {timing && (
         <EntryTimingRow
@@ -1045,6 +1081,28 @@ export default function TimeframeAnalysis() {
   const [result, setResult] = useState<MtfResult | null>(null);
   const [showRrPopup, setShowRrPopup] = useState(false);
   const [tfSel, setTfSel] = useState<SlTimeframe | null>(null); // 表示する時間足（null=自動: RR好機の足→1時間足→先頭）
+  const [book, setBook] = useState<BookState | null>(null); // 板情報（OANDA）
+
+  // 板情報はペアを選ぶたびに取得（Worker 側で5分キャッシュ）。失敗しても分析の表示は止めない。
+  useEffect(() => {
+    if (!OB_URL) return;
+    let cancelled = false;
+    setBook({ data: null, error: '', loading: true });
+    (async () => {
+      try {
+        const res = await fetch(`${OB_URL}?instrument=${encodeURIComponent(instrument)}`);
+        if (!res.ok) throw new Error(`取得できませんでした（HTTP ${res.status}）`);
+        const body = (await res.json()) as OrderBookPayload | { error: string };
+        if ('error' in body) throw new Error(body.error);
+        if (!cancelled) setBook({ data: body, error: '', loading: false });
+      } catch (e) {
+        if (!cancelled) setBook({ data: null, error: e instanceof Error ? e.message : '取得できませんでした', loading: false });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [instrument]);
 
   // ペア選択で自動取得（マウント時も既定ペアを取得）。
   useEffect(() => {
@@ -1177,7 +1235,14 @@ export default function TimeframeAnalysis() {
                     </button>
                   ))}
                 </div>
-                <TfCard key={current.tf} tf={current} instrument={result.instrument} currentRate={result.currentRate} digits={digits} />
+                <TfCard
+                  key={current.tf}
+                  tf={current}
+                  instrument={result.instrument}
+                  currentRate={result.currentRate}
+                  digits={digits}
+                  book={book}
+                />
               </div>
             )}
 
