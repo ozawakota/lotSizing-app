@@ -555,11 +555,28 @@ const refreshCotIfStale = async (env: Env): Promise<void> => {
   }
 };
 
-// /flow のレスポンスを組み立てる。未取得なら初回のみ lazy 取得。投機筋(COT)も併せて返す。
+// 保存済みの建玉に平均取得価格（avgLongPrice / avgShortPrice）が1件も無いとき（＝平均取得価格に対応する前に保存されたデータ）、
+// 毎時の Cron を待たずに取り直す。Myfxbook が平均取得価格を返さない場合に毎回取り直さないよう、間隔は FLOW_AVG_RETRY_MS 以上空ける。
+const FLOW_AVG_RETRY_MS = 10 * 60 * 1000;
+let flowAvgRetryAt = 0;
+const lacksAvgPrices = (raw: string): boolean => {
+  try {
+    return !(JSON.parse(raw) as PairFlow[]).some((p) => p.avgLongPrice != null || p.avgShortPrice != null);
+  } catch {
+    return false;
+  }
+};
+
+// /flow のレスポンスを組み立てる。未取得なら初回のみ lazy 取得（平均取得価格が無い古いデータも取り直す）。投機筋(COT)も併せて返す。
 const handleFlow = async (env: Env): Promise<Response> => {
   let pairsRaw = await env.STRENGTH_KV.get(KV_FLOW);
   try {
-    if (!pairsRaw) pairsRaw = JSON.stringify(await updateFlow(env));
+    if (!pairsRaw) {
+      pairsRaw = JSON.stringify(await updateFlow(env));
+    } else if (lacksAvgPrices(pairsRaw) && Date.now() - flowAvgRetryAt >= FLOW_AVG_RETRY_MS) {
+      flowAvgRetryAt = Date.now();
+      pairsRaw = JSON.stringify(await updateFlow(env));
+    }
   } catch (e) {
     console.error('/flow lazy取得 失敗:', e);
   }
