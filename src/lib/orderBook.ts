@@ -19,6 +19,14 @@ export interface OrderBookPayload {
   positionBook: BookSide | null;
   generatedAt: number;
   source?: 'estimate'; // 自作の推定（価格の構造＋個人の建玉の記録）。OANDA の実データではない
+  positionStatus?: PositionStatus; // ポジションの分布が無いときの理由（画面に出す）
+}
+
+/** ポジションの分布（ポジションブック）が出せないときの理由。 */
+export interface PositionStatus {
+  reason: 'no_db' | 'collecting' | 'error'; // no_db = Turso 未設定 / collecting = 記録を集め中 / error = 読み込み失敗
+  records?: number; // 集まった記録の数（平均取得価格のあるもの）
+  needed?: number; // 表示に必要な記録の数
 }
 
 export type ClusterKind = 'buy_limit' | 'sell_stop' | 'sell_limit' | 'buy_stop';
