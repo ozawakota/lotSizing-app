@@ -127,7 +127,7 @@ export function OrderBookChart({
               type="button"
               onClick={() => setMode(m)}
               aria-pressed={mode === m}
-              disabled={m === 'orders' ? !data.orderBook : !data.positionBook}
+              disabled={m === 'orders' && !data.orderBook}
               className={`rounded-full border text-[10px] font-semibold disabled:opacity-40 ${
                 mode === m ? 'border-gray-800 bg-gray-800 text-white' : 'border-gray-200 bg-white text-gray-600'
               }`}
@@ -139,7 +139,7 @@ export function OrderBookChart({
       </div>
 
       {!book ? (
-        <div className="mt-1 text-[10px] text-gray-500">{mode === 'orders' ? '注文の推定に必要な足が足りません。' : 'ポジションの分布は、個人の建玉の記録（毎時）がたまると表示されます。'}</div>
+        <div className="mt-1 text-[10px] text-gray-500">{mode === 'orders' ? '注文の推定に必要な足が足りません。' : positionReason(data.positionStatus)}</div>
       ) : (
         <svg viewBox={`0 0 ${W} ${H}`} className="mt-1 h-auto w-full" role="img" aria-label={`ローソク足と板情報（${mode === 'orders' ? '注文' : 'ポジション'}）`}>
           {/* 横棒の中央の軸（ローソク足の背景） */}
@@ -267,4 +267,18 @@ export function OrderBookChart({
       </div>
     </div>
   );
+}
+
+/** ポジションの分布が出せない理由（ポジションのボタンを押したときに出す）。 */
+function positionReason(st: OrderBookPayload['positionStatus']): string {
+  if (st?.reason === 'no_db') {
+    return 'ポジションの分布には記録先（Turso）の設定が必要です。Worker に TURSO_DATABASE_URL と TURSO_AUTH_TOKEN を登録すると、個人の建玉の記録が始まります。';
+  }
+  if (st?.reason === 'collecting') {
+    const n = st.records ?? 0;
+    const need = st.needed ?? 3;
+    return `個人の建玉の記録を集めています（${n}/${need} 件。毎時15分に1件ずつ記録）。あと約${Math.max(1, need - n)}時間で表示されます。`;
+  }
+  if (st?.reason === 'error') return '個人の建玉の記録を読み込めませんでした。少し待って再読み込みしてください。';
+  return 'ポジションの分布は、個人の建玉の記録（毎時）がたまると表示されます。';
 }

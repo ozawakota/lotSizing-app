@@ -90,6 +90,7 @@ import type { OrderBookPayload } from '../../src/lib/orderBook';
 import {
   estimateOrderBook,
   positionBookFromRecords,
+  MIN_POSITION_RECORDS,
   snapshotTime,
   POSITION_HALF_LIFE_H,
   SNAPSHOT_INTERVAL_MS,
@@ -1602,11 +1603,22 @@ const loadFlowRecordsByPair = async (db: Client, now: number): Promise<Map<strin
   return by;
 };
 
+/**
+ * ポジションの分布が無いときの理由。records = null は Turso 未設定。
+ * 記録の数は「平均取得価格のある記録」（positionBookFromRecords が使うもの）を数える。
+ */
+const positionStatusOf = (positionBook: OrderBookPayload['positionBook'], records: FlowRecord[] | null): OrderBookPayload['positionStatus'] => {
+  if (positionBook) return undefined;
+  if (records == null) return { reason: 'no_db' };
+  return { reason: 'collecting', records: records.filter((r) => r.avgLong != null || r.avgShort != null).length, needed: MIN_POSITION_RECORDS };
+};
+
 /** 1ペアの板（注文・ポジション）を推定する。ts はスナップショットの時刻（:00 / :20 / :40）。 */
 const computeBook = async (
   instrument: string,
   ts: number,
-  ctx: { retail: Map<string, { longPct: number; shortPct: number }>; records: Map<string, FlowRecord[]> | null; goldSpot: number | null },
+  // records: null = Turso 未設定 / undefined = 読み込み失敗
+  ctx: { retail: Map<string, { longPct: number; shortPct: number }>; records: Map<string, FlowRecord[]> | null | undefined; goldSpot: number | null },
 ): Promise<OrderBookPayload | null> => {
   const pair = instrument.replace('_', '/');
   // 1時間足。XAU は金先物なので、現物価格との差だけ平行移動する（取れなければ先物のまま）。
@@ -1615,10 +1627,12 @@ const computeBook = async (
   const bars = h1.candles.slice(0, -1).map((c) => ({ high: c.high + shift, low: c.low + shift, close: c.close + shift }));
   const price = h1.currentRate + shift;
   const orderBook = estimateOrderBook(bars, price, instrument, { retail: ctx.retail.get(pair) ?? null, now: ts });
-  const records = ctx.records?.get(pair);
-  const positionBook = records ? positionBookFromRecords(records, price, instrument, ts) : null;
+  const records = ctx.records?.get(pair) ?? [];
+  const positionBook = ctx.records ? positionBookFromRecords(records, price, instrument, ts) : null;
   if (!orderBook && !positionBook) return null;
-  return { instrument, orderBook, positionBook, generatedAt: ts, source: 'estimate' };
+  const positionStatus: OrderBookPayload['positionStatus'] =
+    ctx.records === undefined ? { reason: 'error' } : positionStatusOf(positionBook, ctx.records ? records : null);
+  return { instrument, orderBook, positionBook, generatedAt: ts, source: 'estimate', positionStatus };
 };
 
 /** /flow の保存データから、ペアごとの個人の建玉の割合（偏り）を読む。 */
@@ -1676,7 +1690,18 @@ const loadBookSnapshot = async (db: Client, instrument: string, at: number | nul
   const r = res.rows[0];
   if (!r) return null;
   const parse = (v: unknown) => (v == null ? null : (JSON.parse(String(v)) as OrderBookPayload['orderBook']));
-  return { instrument, orderBook: parse(r.order_book), positionBook: parse(r.position_book), generatedAt: Number(r.ts), source: 'estimate' };
+  const positionBook = parse(r.position_book);
+  let positionStatus: OrderBookPayload['positionStatus'];
+  if (!positionBook) {
+    // 保存時にポジションが無かったスナップショット: いまの記録の数を数えて理由に出す
+    try {
+      const pair = instrument.replace('_', '/');
+      positionStatus = positionStatusOf(null, (await loadFlowRecordsByPair(db, Date.now())).get(pair) ?? []);
+    } catch {
+      positionStatus = { reason: 'error' };
+    }
+  }
+  return { instrument, orderBook: parse(r.order_book), positionBook, generatedAt: Number(r.ts), source: 'estimate', positionStatus };
 };
 
 const handleOrderBook = async (env: Env, url: URL): Promise<Response> => {
@@ -1729,7 +1754,7 @@ const handleOrderBook = async (env: Env, url: URL): Promise<Response> => {
   try {
     const ctx = {
       retail: await loadRetailMix(env),
-      records: db ? await loadFlowRecordsByPair(db, now).catch(() => null) : null,
+      records: db ? await loadFlowRecordsByPair(db, now).catch(() => undefined) : null, // undefined = 読み込み失敗
       goldSpot: instrument === 'XAU_USD' ? await fetchGoldSpot().catch(() => null) : null,
     };
     const payload = await computeBook(instrument, snapshotTime(now), ctx);
