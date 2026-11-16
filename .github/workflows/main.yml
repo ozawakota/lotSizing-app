@@ -24,7 +24,7 @@ jobs:
       MOBISCROLL_TOKEN: ${{ secrets.MOBISCROLL_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Check secrets
         run: |
           if [ -z "$MOBISCROLL_TOKEN" ]; then
@@ -33,11 +33,11 @@ jobs:
           fi
       # リポジトリは pnpm（pnpm-lock.yaml）。Mobiscroll の取得には .npmrc の設定を使う。
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22 # Netlify（netlify.toml の NODE_VERSION）と同じ
           cache: pnpm
@@ -70,7 +70,7 @@ jobs:
         env:
           GITHUB_PAGES: true
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: ./dist
 
@@ -85,4 +85,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
