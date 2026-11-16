@@ -99,7 +99,42 @@ export function positionSkew(book: BookSide, price: number, range = Infinity): {
 export type NoteTone = 'good' | 'warn' | 'info';
 export interface BookNote {
   tone: NoteTone;
-  text: string;
+  text: string; // くわしい説明
+  short: string; // 一言（画面のチップ用。例「損切りが狩られやすい → 150.800 の外へ」）
+}
+
+/**
+ * 板の「力関係」を一目で見るための集計（現在値の上下 range 以内）。
+ *   - 加速: 上の買いの逆指値（上抜けで加速） vs 下の売りの逆指値（下抜けで加速）
+ *   - 壁: 下の買い指値（支え） vs 上の売り指値（重し）
+ * それぞれ合計 100 の % で返す。どちらも 0 なら null。
+ */
+export interface BookPressure {
+  accelUpPct: number; // 上へ走りやすさ（上の逆指値の割合）
+  accelDownPct: number;
+  supportPct: number; // 下の支え（買い指値）の割合
+  resistancePct: number; // 上の重し（売り指値）の割合
+}
+export function bookPressure(book: BookSide, price: number, range = Infinity): BookPressure | null {
+  let buyStop = 0;
+  let sellStop = 0;
+  let buyLimit = 0;
+  let sellLimit = 0;
+  for (const [p, l, sh] of book.buckets) {
+    if (Math.abs(p - price) > range) continue;
+    if (p + book.bucketWidth <= price) {
+      buyLimit += l;
+      sellStop += sh;
+    } else if (p >= price) {
+      sellLimit += sh;
+      buyStop += l;
+    }
+  }
+  const pct = (a: number, b: number) => (a + b > 0 ? Math.round((a / (a + b)) * 100) : 50);
+  if (!(buyStop + sellStop + buyLimit + sellLimit > 0)) return null;
+  const up = pct(buyStop, sellStop);
+  const sup = pct(buyLimit, sellLimit);
+  return { accelUpPct: up, accelDownPct: 100 - up, supportPct: sup, resistancePct: 100 - sup };
 }
 
 export interface PlanLevels {
@@ -137,6 +172,7 @@ export function planNotes(
       notes.push({
         tone: 'warn',
         text: `損切り ${fmt(plan.stop)} の近く（${fmt(nearStop.price)}）に${long ? '売り' : '買い'}の逆指値が溜まっています（平均の${nearStop.ratio}倍）。狩られやすいので、${fmt(beyond)} より外に置くのも手です。`,
+        short: `損切りが狩られやすい → ${fmt(beyond)} の外へ`,
       });
     }
     // エントリーと目標の間の反対向きの指値（買い=上の売り指値 / 売り=下の買い指値）
@@ -148,6 +184,7 @@ export function planNotes(
       notes.push({
         tone: 'warn',
         text: `目標までの途中 ${fmt(wall.price)} に${long ? '売り' : '買い'}指値の壁（平均の${wall.ratio}倍）。跳ね返されやすいので、その手前で一部利確を。`,
+        short: `目標の手前 ${fmt(wall.price)} に壁 → 一部利確`,
       });
     }
     // エントリーと損切りの間の順方向の指値（支え）
@@ -157,6 +194,7 @@ export function planNotes(
       notes.push({
         tone: 'good',
         text: `エントリーと損切りの間 ${fmt(sup.price)} に${long ? '買い' : '売り'}指値の${long ? '支え' : '重し'}（平均の${sup.ratio}倍）。そこまでの押し${long ? '' : '（戻り）'}は止まりやすい。`,
+        short: `${fmt(sup.price)} に${long ? '支え' : '重し'}あり`,
       });
     }
   }
@@ -170,6 +208,7 @@ export function planNotes(
         text: `保有ポジションは${crowdedLong ? '買い' : '売り'}が ${crowdedLong ? sk.longPct : sk.shortPct}% と片寄り。${
           same ? '同じ向きの人が多く、投げ（損切り）で逆に振れやすい点に注意。' : '逆張り目線では、このプランの向きに追い風。'
         }`,
+        short: `${crowdedLong ? '買い' : '売り'}${crowdedLong ? sk.longPct : sk.shortPct}%に片寄り → ${same ? '投げに注意' : '追い風'}`,
       });
     }
   }
