@@ -1252,6 +1252,7 @@ export default function TimeframeAnalysis() {
               price={result.currentRate}
               digits={digits}
               bias={tfs.find((t) => t.tf === '1h')?.dow?.trend ?? 'range'}
+              stoch={tfs.find((t) => t.tf === '1h')?.stoch ?? null}
               aiChips={
                 result.sessionOutlook
                   ? (Object.fromEntries(
