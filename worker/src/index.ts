@@ -55,6 +55,8 @@ import {
   type VolumeSnapshot,
 } from '../../src/lib/volume';
 import { fetchGoldSpot } from '../../src/lib/goldSpot';
+// 東京・ロンドン・NY の動きの予想の材料（セッションのくせ・出来高の抵抗線）はフロントと共有。
+import { sessionStats, type HourBar, type SessionsPayload, type VolumeLevel } from '../../src/lib/sessionForecast';
 import {
   PATTERN_WINDOW_BARS,
   applyPatternToRr,
@@ -1778,6 +1780,113 @@ const handleOrderBook = async (env: Env, url: URL): Promise<Response> => {
 };
 
 // ---------------------------------------------------------------------------
+// /sessions: 東京・ロンドン・NY の動きの予想に使う材料（予想そのものは画面側の forecastSessions。src/lib/sessionForecast.ts）。
+//   - セッションのくせ: 現物の1時間足（1か月）から、セッションごとの平均値幅・上げの割合・前のセッションの高安を抜ける割合
+//   - 出来高の抵抗線: 価格帯別出来高（POC・VAH・VAL・山）。先物の出来高があるペアは出来高、無いペア（クロス円）は滞在時間で代用
+//   - セッションごとの出来高の割合（先物の出来高を、時刻で現物の足に合わせる）
+// 価格は現物の基準（XAU は金先物 GC=F を現物価格との差だけ平行移動）。Worker のメモリ＋Cache API に 30 分置く。
+// ---------------------------------------------------------------------------
+const SESSIONS_TTL_MS = 30 * 60 * 1000;
+const sessionsMemCache = new Map<string, { body: string; generatedAt: number }>();
+const sessionsCacheKey = (instrument: string) => new Request(`https://sessions-cache.internal/${encodeURIComponent(instrument)}`);
+
+const buildSessions = async (instrument: string): Promise<SessionsPayload> => {
+  const spotRes = await fetchYahooCandles(YAHOO_SYMBOL[instrument], '60m', '1mo');
+  // XAU は金先物の足なので、現物価格との差だけ平行移動（出来高は先物のものをそのまま使う）
+  let shift = 0;
+  if (instrument === 'XAU_USD') {
+    const spot = await fetchGoldSpot().catch(() => null);
+    if (spot != null) shift = spot - spotRes.currentRate;
+  }
+  const closed = spotRes.candles.slice(0, -1).filter((c) => typeof c.t === 'number' && typeof c.open === 'number');
+  const volumeByT = new Map<number, number>();
+  let levels: VolumeLevel[] = [];
+  let levelSource: SessionsPayload['levelSource'] = 'time';
+  const currentRate = spotRes.currentRate + shift;
+  const fut = VOLUME_SYMBOL[instrument];
+  if (instrument === 'XAU_USD') {
+    for (const c of closed) if (typeof c.volume === 'number' && c.volume > 0) volumeByT.set(c.t as number, c.volume);
+    const raw = computeVolumeProfile(closed);
+    if (raw) {
+      levels = profileToLevels(mapProfile(raw, (x) => x + shift));
+      levelSource = 'volume';
+    }
+  } else if (fut) {
+    try {
+      const f = await fetchYahooCandles(fut.symbol, '60m', '1mo');
+      const fClosed = f.candles.slice(0, -1);
+      for (const c of fClosed) if (typeof c.t === 'number' && typeof c.volume === 'number' && c.volume > 0) volumeByT.set(c.t, c.volume);
+      const raw = computeVolumeProfile(fClosed);
+      if (raw) {
+        levels = profileToLevels(mapProfile(raw, (x) => futuresLevelToSpot(x, f.currentRate, spotRes.currentRate, fut.invert)));
+        levelSource = 'volume';
+      }
+    } catch (e) {
+      console.error(`/sessions ${instrument} 先物の出来高 失敗:`, e);
+    }
+  }
+  if (!levels.length) {
+    // 出来高が無いペア: 各足に同じ重みを付けて「滞在時間」で価格帯別の分布を作る
+    const raw = computeVolumeProfile(closed.map((c) => ({ ...c, volume: 1 })));
+    if (raw) levels = profileToLevels(mapProfile(raw, (x) => x + shift));
+    levelSource = 'time';
+  }
+  const bars: HourBar[] = closed.map((c) => ({
+    t: c.t as number,
+    open: (c.open as number) + shift,
+    high: c.high + shift,
+    low: c.low + shift,
+    close: c.close + shift,
+    volume: volumeByT.get(c.t as number),
+  }));
+  return { instrument, currentRate, stats: sessionStats(bars, pipSize(instrument)), levels, levelSource, generatedAt: Date.now() };
+};
+
+/** ボリュームプロファイル → 抵抗線の一覧（POC・VAH・VAL・山）。 */
+const profileToLevels = (p: VolumeProfile): VolumeLevel[] => [
+  { kind: 'poc', price: p.poc },
+  { kind: 'vah', price: p.vah },
+  { kind: 'val', price: p.val },
+  ...p.hvns.map((price) => ({ kind: 'hvn' as const, price })),
+];
+
+const handleSessions = async (url: URL): Promise<Response> => {
+  const instrument = url.searchParams.get('instrument') || 'USD_JPY';
+  if (!YAHOO_SYMBOL[instrument]) return new Response(JSON.stringify({ error: '未対応のペアです' }), { headers: CORS_HEADERS });
+  let hit = sessionsMemCache.get(instrument) ?? null;
+  if (!hit) {
+    try {
+      const c = await caches.default.match(sessionsCacheKey(instrument));
+      if (c) {
+        const body = await c.text();
+        hit = { body, generatedAt: (JSON.parse(body) as SessionsPayload).generatedAt };
+      }
+    } catch {
+      // 作り直す
+    }
+  }
+  if (hit && Date.now() - hit.generatedAt < SESSIONS_TTL_MS) return new Response(hit.body, { headers: CORS_HEADERS });
+  try {
+    const payload = await buildSessions(instrument);
+    const body = JSON.stringify(payload);
+    sessionsMemCache.set(instrument, { body, generatedAt: payload.generatedAt });
+    try {
+      await caches.default.put(
+        sessionsCacheKey(instrument),
+        new Response(body, { headers: { 'Content-Type': 'application/json', 'Cache-Control': `max-age=${SESSIONS_TTL_MS / 1000}` } }),
+      );
+    } catch (e) {
+      console.error('/sessions キャッシュ保存 失敗:', e);
+    }
+    return new Response(body, { headers: CORS_HEADERS });
+  } catch (e) {
+    console.error('/sessions 失敗:', e);
+    if (hit) return new Response(hit.body, { headers: CORS_HEADERS });
+    return new Response(JSON.stringify({ error: 'セッションの材料を取得できませんでした。少し待って再試行してください' }), { headers: CORS_HEADERS });
+  }
+};
+
+// ---------------------------------------------------------------------------
 // /ranking: RR好機ボード（cron で KV キャッシュ）
 // ---------------------------------------------------------------------------
 // RR好機ボード（エッジページ）。各ペアの TF分析（/mtf と同じ buildMtf）から、RR が出た時間足を1カードにする
@@ -1983,6 +2092,7 @@ export default {
     if (pathname === '/mtf') return handleMtf(env, reqUrl);
     if (pathname === '/ltf') return handleLtf(reqUrl);
     if (pathname === '/orderbook') return handleOrderBook(env, reqUrl);
+    if (pathname === '/sessions') return handleSessions(reqUrl);
     if (pathname === '/ranking') return handleRanking(env);
     if (pathname === '/volume') return handleVolume(env);
 

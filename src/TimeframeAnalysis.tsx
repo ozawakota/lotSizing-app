@@ -10,14 +10,12 @@ import type {
   RoleReversal,
   RrSetup,
   SessionOutlook,
-  SessionPrediction,
   SessionScenario,
   SlDirection,
   SlTimeframe,
 } from '@/lib/stoploss';
 import { RR_MIN, averageTrueRange, pipSize } from '@/lib/stoploss';
 import { stopEntryForAnalysis, zoneBreakOdds, type StopEntryPlan, type ZoneBreakOdds } from '@/lib/zoneBreak';
-import { MARKET_SESSIONS, isSessionOpen } from '@/lib/session';
 import { fetchGoldSpot } from '@/lib/goldSpot';
 import { CONFIRMATION_LABEL, priceActionHeadline, type PatternRead, type PriceActionTone } from '@/lib/candleRead';
 import type { OhlcCandle } from '@/lib/edge';
@@ -25,6 +23,8 @@ import { PriceActionChart } from '@/components/PriceActionChart';
 import { TradeChart } from '@/components/TradeChart';
 import { LtfEntryCard, type HtfPlan } from '@/components/LtfEntryCard';
 import { OrderBookChart } from '@/components/OrderBookChart';
+import { SessionForecastCard } from '@/components/SessionForecastCard';
+import type { SessionKey, SessionsPayload } from '@/lib/sessionForecast';
 import type { OrderBookPayload } from '@/lib/orderBook';
 import type { FlowSnapshot, PairFlow } from '@/lib/flow';
 import { flowOverlay, flowPairOf } from '@/lib/flowOverlay';
@@ -40,6 +40,8 @@ import { TIMING_LABEL, assessEntryTiming, type EntryTiming, type TimingVerdict }
 const MTF_URL = import.meta.env.VITE_MTF_URL as string | undefined;
 // 下位足（1分・5分）は同じ Worker の /ltf（/mtf と同じ場所）。
 const LTF_URL = MTF_URL ? MTF_URL.replace(/\/mtf$/, '/ltf') : undefined;
+// 東京・ロンドン・NY の動きの予想の材料（セッションのくせ・出来高の抵抗線）も同じ Worker の /sessions。
+const SESSIONS_URL = MTF_URL ? MTF_URL.replace(/\/mtf$/, '/sessions') : undefined;
 // 推定オーダーブック（自作の板情報: 注文・ポジションの分布）も同じ Worker の /orderbook。
 const OB_URL = MTF_URL ? MTF_URL.replace(/\/mtf$/, '/orderbook') : undefined;
 
@@ -632,84 +634,6 @@ const SCENARIO_LABEL: Record<SessionScenario, string> = {
   sell_rally: '戻り売り',
   range: 'レンジ',
 };
-const SCENARIO_STYLE: Record<SessionScenario, string> = {
-  reversal: 'bg-amber-100 text-amber-700',
-  breakout: 'bg-blue-100 text-blue-700',
-  buy_dip: 'bg-green-100 text-green-700',
-  sell_rally: 'bg-red-100 text-red-700',
-  range: 'bg-gray-100 text-gray-600',
-};
-const SCENARIO_BAR: Record<SessionScenario, string> = {
-  reversal: 'bg-amber-500',
-  breakout: 'bg-blue-500',
-  buy_dip: 'bg-green-500',
-  sell_rally: 'bg-red-500',
-  range: 'bg-gray-400',
-};
-
-// 現在開いていないセッションのうち、最も早く開場するものの名前（「次」バッジ用）。
-function nextSessionLabel(now: Date): string | null {
-  for (let h = 1; h <= 48; h++) {
-    const t = new Date(now.getTime() + h * 3600_000);
-    for (const s of MARKET_SESSIONS) {
-      if (!isSessionOpen(s, now) && isSessionOpen(s, t)) return s.label;
-    }
-  }
-  return null;
-}
-
-// 東京/ロンドン/NY のシナリオ予測。開催中/次バッジ＋シナリオ＋確率バー。
-function SessionOutlookCard({ outlook }: { outlook: SessionOutlook | null }) {
-  if (!outlook) {
-    return (
-      <div className="rounded-md border border-gray-200 p-3">
-        <p className="text-sm font-bold text-gray-700">セッション別予測</p>
-        <p className="mt-1 text-[10px] text-gray-400">セッション予測: Jev未取得</p>
-      </div>
-    );
-  }
-  const now = new Date();
-  const next = nextSessionLabel(now);
-  const rows: { session: (typeof MARKET_SESSIONS)[number]; pred: SessionPrediction }[] = [
-    { session: MARKET_SESSIONS[0], pred: outlook.tokyo },
-    { session: MARKET_SESSIONS[1], pred: outlook.london },
-    { session: MARKET_SESSIONS[2], pred: outlook.ny },
-  ];
-  return (
-    <div className="rounded-md border border-gray-200 p-3">
-      <p className="mb-1 text-sm font-bold text-gray-700">セッション別予測（Jev）</p>
-      {rows.map(({ session, pred }) => {
-        const open = isSessionOpen(session, now);
-        const badge = open ? '開催中' : session.label === next ? '次' : '';
-        return (
-          <div key={session.label} className="mt-2">
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-sm">
-                <span
-                  aria-hidden
-                  className={`inline-block h-2 w-2 rounded-full ${open ? 'bg-green-500' : 'border border-gray-400'}`}
-                />
-                <span className={open ? 'font-medium text-gray-800' : 'text-gray-500'}>{session.label}</span>
-                {badge && <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500">{badge}</span>}
-              </span>
-              <span className="flex items-center gap-2">
-                <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${SCENARIO_STYLE[pred.scenario]}`}>
-                  {SCENARIO_LABEL[pred.scenario]} {pred.pct}%
-                </span>
-                <span className="text-[10px] text-gray-400">確信{Math.round(pred.confidence * 100)}%</span>
-              </span>
-            </div>
-            <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
-              <div className={SCENARIO_BAR[pred.scenario]} style={{ width: `${pred.pct}%`, height: '100%' }} />
-            </div>
-          </div>
-        );
-      })}
-      <p className="mt-2 text-[10px] text-gray-400">※セッション予測は構造＋AI推定の参考値です。</p>
-    </div>
-  );
-}
-
 // カード内の小見出し。
 // カード内の見出し。上に区切り線、左に小さなアクセントを付けて、セクションの切れ目を分かりやすくする。
 function SectionLabel({ children, note }: { children: ReactNode; note?: ReactNode }) {
@@ -1096,6 +1020,29 @@ export default function TimeframeAnalysis() {
   const [showRrPopup, setShowRrPopup] = useState(false);
   const [tfSel, setTfSel] = useState<SlTimeframe | null>(null); // 表示する時間足（null=自動: RR好機の足→1時間足→先頭）
   const [book, setBook] = useState<BookState | null>(null); // 推定オーダーブック
+  const [sessions, setSessions] = useState<{ data: SessionsPayload | null; error: string }>({ data: null, error: '' });
+
+  // セッション別の動きの予想の材料（ペアを選ぶたびに取得。Worker 側で30分キャッシュ）。失敗しても分析の表示は止めない。
+  useEffect(() => {
+    if (!SESSIONS_URL) return;
+    let cancelled = false;
+    setSessions({ data: null, error: '' });
+    (async () => {
+      try {
+        const res = await fetch(`${SESSIONS_URL}?instrument=${encodeURIComponent(instrument)}`);
+        if (!res.ok) throw new Error(`取得できませんでした（HTTP ${res.status}）`);
+        const body = (await res.json()) as SessionsPayload | { error: string };
+        if ('error' in body) throw new Error(body.error);
+        if (!Array.isArray(body.stats)) throw new Error('材料が古い形式です（Worker の更新待ち）');
+        if (!cancelled) setSessions({ data: body, error: '' });
+      } catch (e) {
+        if (!cancelled) setSessions({ data: null, error: e instanceof Error ? e.message : '取得できませんでした' });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [instrument]);
   const [flowSnap, setFlowSnap] = useState<FlowSnapshot | null>(null); // 取引量・センチメント（全ペア分）
 
   // 取引量・センチメントは全ペア分が1回で取れるので、最初に1回だけ取得（失敗しても分析の表示は止めない）。
@@ -1299,7 +1246,20 @@ export default function TimeframeAnalysis() {
             )}
 
             {/* セッション別シナリオ予測 */}
-            <SessionOutlookCard outlook={result.sessionOutlook} />
+            <SessionForecastCard
+              data={sessions.data}
+              error={sessions.error}
+              price={result.currentRate}
+              digits={digits}
+              bias={tfs.find((t) => t.tf === '1h')?.dow?.trend ?? 'range'}
+              aiChips={
+                result.sessionOutlook
+                  ? (Object.fromEntries(
+                      (['tokyo', 'london', 'ny'] as const).map((k) => [k, `${SCENARIO_LABEL[result.sessionOutlook![k].scenario]} ${result.sessionOutlook![k].pct}%`]),
+                    ) as Record<SessionKey, string>)
+                  : null
+              }
+            />
 
             <p className="text-center text-[10px] leading-relaxed text-gray-400">
               プライスアクション判定: {result.paEngine === 'jev' ? 'Jev' : 'Workers AI'}／
