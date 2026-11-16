@@ -2,11 +2,15 @@
 // 注文は1時間足の構造（未到達のスイング高安・キリ番）＋個人の建玉の偏りから、ポジションは個人の建玉の毎時の記録から推定（Worker /orderbook）。
 // 価格帯ごとの横棒（中央の軸から 右=買い（緑）・左=売り（赤））を、ローソク足の背景に半透明で重ねる。
 // エントリー・損切り・目標・現在値の線を全幅に引き、厚い価格帯（平均の 1.8 倍以上）は濃く・枠つきで描く。
-// 下に、厚いところの一覧（支え・重し・逆指値の溜まり）と、RR のプランと照らした注意点を出す。
+// 文字を減らして一目で判断できるように:
+//   - チャート上の厚い価格帯に ⚡（逆指値の溜まり＝抜けると加速）/ 🛡（指値の壁＝止まりやすい）のアイコン
+//   - 下に2本のゲージ（上下どちらへ走りやすいか / 支えと重しのどちらが厚いか）
+//   - RR のプランと照らした注意点は一言のチップ。くわしい説明・見方は「見方」を開いたときだけ
 import { useState } from 'react';
 import type { OhlcCandle } from '@/lib/edge';
 import {
   bookClusters,
+  bookPressure,
   CLUSTER_LABEL,
   planNotes,
   positionSkew,
@@ -44,6 +48,7 @@ export function OrderBookChart({
   isLatest?: boolean;
 }) {
   const [mode, setMode] = useState<Mode>('orders');
+  const [helpOpen, setHelpOpen] = useState(false);
   const book: BookSide | null = mode === 'orders' ? data.orderBook : data.positionBook;
   const all = forming ? [...bars, forming] : bars;
   if (all.length < 2) return null;
@@ -106,16 +111,38 @@ export function OrderBookChart({
   }
 
   const notes = plan ? planNotes(plan, data.orderBook, data.positionBook, currentRate, fmt) : [];
+  // 一目で見るゲージ（チャートに見えている範囲で集計）
+  const pressure = data.orderBook ? bookPressure(data.orderBook, currentRate, Math.max(hi - currentRate, currentRate - lo)) : null;
   const skew = data.positionBook ? positionSkew(data.positionBook, currentRate) : null;
   const snap = book ? new Date(book.time).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) : null;
 
   return (
     <div className="mt-2 rounded-lg bg-gray-50 px-2 py-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-semibold text-gray-600">
-          推定オーダーブック<span className="ml-1 rounded bg-gray-200 px-1 text-[9px] font-normal text-gray-500">自作</span>
-        </span>
-        <div className="flex gap-1">
+      {/* 見出し: タイトル・時刻（◀▶で20分ずつ）・注文/ポジションの切り替え */}
+      <div className="flex items-center gap-1.5">
+        <span className="text-[11px] font-semibold text-gray-600">板</span>
+        <span className="rounded bg-gray-200 px-1 text-[9px] text-gray-500">推定</span>
+        {snap && (
+          <span className="flex items-center gap-0.5 text-[10px] tabular-nums text-gray-400">
+            {onStep && (
+              <button type="button" onClick={() => onStep(-1)} className="rounded text-gray-500" aria-label="20分前の板">
+                <span className="block px-0.5">◀</span>
+              </button>
+            )}
+            <span className={isLatest ? '' : 'font-bold text-amber-700'}>{snap}</span>
+            {onStep && !isLatest && (
+              <>
+                <button type="button" onClick={() => onStep(1)} className="rounded text-gray-500" aria-label="20分後の板">
+                  <span className="block px-0.5">▶</span>
+                </button>
+                <button type="button" onClick={() => onStep(0)} className="rounded bg-amber-100 text-[9px] font-semibold text-amber-800">
+                  <span className="block px-1">最新へ</span>
+                </button>
+              </>
+            )}
+          </span>
+        )}
+        <div className="ml-auto flex gap-1">
           {(
             [
               ['orders', '注文'],
@@ -190,81 +217,102 @@ export function OrderBookChart({
               </text>
             </g>
           ))}
+          {/* 厚い価格帯のアイコン（棒の先）: ⚡ = 逆指値の溜まり（抜けると加速）/ 🛡 = 指値の壁（止まりやすい） */}
+          {clusters.map((c, k) => {
+            const row = visible.find(([p]) => p === c.price);
+            if (!row) return null;
+            // 同じ側で縦に近すぎる（6px 未満）アイコンは、先に出したもの（現在値に近い）だけにする
+            const side = c.kind.startsWith('buy');
+            const near = clusters
+              .slice(0, k)
+              .some((o) => o.kind.startsWith('buy') === side && Math.abs(yRaw(o.price) - yRaw(c.price)) < 6 && visible.some(([p]) => p === o.price));
+            if (near) return null;
+            const isBuy = c.kind.startsWith('buy');
+            const len = ((isBuy ? row[1] : row[2]) / maxPct) * half;
+            const tipX = isBuy ? Math.min(axis + len + 2, W - padR - 8) : Math.max(axis - len - 2, padL + 8);
+            const cy = yRaw(c.price + width / 2);
+            return (
+              <text
+                key={`ic-${c.kind}-${c.price}`}
+                x={tipX}
+                y={cy + 2.5}
+                textAnchor={isBuy ? 'start' : 'end'}
+                className="text-[7.5px]"
+              >
+                <title>{`${CLUSTER_LABEL[c.kind]} ${fmt(c.price)}`}</title>
+                {c.kind.endsWith('stop') ? '⚡' : '🛡'}
+              </text>
+            );
+          })}
         </svg>
       )}
 
-      {/* 凡例・時刻 */}
-      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[9px] text-gray-500">
-        {mode === 'orders' ? (
-          <span>現在値より下: 緑=買い指値（支え）・赤=売りの逆指値／上: 赤=売り指値（重し）・緑=買いの逆指値。濃い=厚い</span>
-        ) : (
-          <span>
-            緑=買いポジション・赤=売りポジション
-            {skew && (
-              <span className="ml-1 font-semibold text-gray-700">
-                （全体 買い{skew.longPct}% / 売り{skew.shortPct}%）
-              </span>
-            )}
-          </span>
-        )}
-        {snap && (
-          <span className="ml-auto flex items-center gap-1 text-gray-400">
-            {onStep && (
-              <button type="button" onClick={() => onStep(-1)} className="rounded border border-gray-200 bg-white text-gray-600" aria-label="20分前のスナップショット">
-                <span className="block px-1">◀</span>
-              </button>
-            )}
-            <span className={isLatest ? '' : 'font-semibold text-amber-700'}>
-              {snap} 時点の推定（20分ごと）{isLatest ? '' : '・過去'}
-            </span>
-            {onStep && !isLatest && (
-              <>
-                <button type="button" onClick={() => onStep(1)} className="rounded border border-gray-200 bg-white text-gray-600" aria-label="20分後のスナップショット">
-                  <span className="block px-1">▶</span>
-                </button>
-                <button type="button" onClick={() => onStep(0)} className="rounded border border-gray-200 bg-white text-gray-600">
-                  <span className="block px-1">最新</span>
-                </button>
-              </>
-            )}
-          </span>
-        )}
-      </div>
+      {/* 一目で見るゲージ（注文）/ 買い・売りの比率（ポジション） */}
+      {book && mode === 'orders' && pressure && (
+        <div className="mt-1 space-y-1">
+          <Gauge
+            icon="⚡"
+            left={{ label: '↓加速', pct: pressure.accelDownPct, color: DOWN }}
+            right={{ label: '↑加速', pct: pressure.accelUpPct, color: UP }}
+          />
+          <Gauge
+            icon="🛡"
+            left={{ label: '下の支え', pct: pressure.supportPct, color: UP }}
+            right={{ label: '上の重し', pct: pressure.resistancePct, color: DOWN }}
+          />
+        </div>
+      )}
+      {book && mode === 'positions' && skew && (
+        <div className="mt-1">
+          <Gauge icon="👥" left={{ label: '買い', pct: skew.longPct, color: UP }} right={{ label: '売り', pct: skew.shortPct, color: DOWN }} />
+        </div>
+      )}
 
-      {/* 厚いところの一覧（注文） */}
-      {mode === 'orders' && clusters.length > 0 && (
-        <ul className="mt-1 flex flex-wrap gap-1" style={LIST_RESET}>
-          {clusters.map((c) => (
+      {/* RR のプランと照らした注意点（一言のチップ） */}
+      {notes.length > 0 && (
+        <ul className="mt-1.5 flex flex-wrap gap-1" style={LIST_RESET}>
+          {notes.map((n) => (
             <li
-              key={`${c.kind}-${c.price}`}
+              key={n.short}
               style={LIST_ITEM_RESET}
-              className={`rounded border px-1.5 py-0.5 text-[10px] ${
-                c.kind === 'buy_limit' || c.kind === 'buy_stop' ? 'border-green-200 bg-green-50 text-green-800' : 'border-red-200 bg-red-50 text-red-800'
+              title={n.text}
+              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                n.tone === 'warn' ? 'bg-amber-100 text-amber-800' : n.tone === 'good' ? 'bg-green-100 text-green-800' : 'bg-blue-50 text-blue-700'
               }`}
             >
-              {CLUSTER_LABEL[c.kind]} <span className="font-bold tabular-nums">{fmt(c.price)}</span>
-              <span className="text-gray-500">（{c.pct.toFixed(2)}%・平均の{c.ratio}倍）</span>
+              {n.tone === 'warn' ? '⚠ ' : n.tone === 'good' ? '✓ ' : 'ℹ '}
+              {n.short}
             </li>
           ))}
         </ul>
       )}
 
-      {/* RR のプランと照らした注意点 */}
-      {notes.length > 0 && (
-        <ul className="mt-1.5 space-y-0.5" style={LIST_RESET}>
-          {notes.map((n) => (
-            <li key={n.text} style={LIST_ITEM_RESET} className="flex items-start gap-1.5 text-[11px]">
-              <span className={n.tone === 'warn' ? 'text-amber-600' : n.tone === 'good' ? 'text-green-600' : 'text-blue-600'}>
-                {n.tone === 'warn' ? '⚠' : n.tone === 'good' ? '✓' : 'ℹ'}
-              </span>
-              <span className="text-gray-700">{n.text}</span>
-            </li>
-          ))}
-        </ul>
+      {/* 見方（くわしい説明・注意点の全文・推定であることの注記）は開いたときだけ */}
+      <button type="button" onClick={() => setHelpOpen((o) => !o)} aria-expanded={helpOpen} className="mt-1 text-[10px] text-gray-400">
+        <span className="block">{helpOpen ? '見方を閉じる ▴' : '見方 ▾'}</span>
+      </button>
+      {helpOpen && (
+        <div className="mt-0.5 space-y-1 rounded-md bg-white px-2 py-1.5 text-[10px] leading-relaxed text-gray-600">
+          <div>
+            横棒 = 価格帯ごとの注文の量（中央から 右=買い・左=売り。濃い＝厚い）。
+            <br />⚡ = 逆指値の溜まり（そこを抜けると損切り・ブレイクの注文が出て値動きが加速しやすい）
+            <br />🛡 = 指値の壁（そこで止まりやすい・跳ね返されやすい）
+          </div>
+          {notes.length > 0 && (
+            <ul className="space-y-0.5" style={LIST_RESET}>
+              {notes.map((n) => (
+                <li key={`d-${n.short}`} style={LIST_ITEM_RESET}>
+                  {n.tone === 'warn' ? '⚠ ' : n.tone === 'good' ? '✓ ' : 'ℹ '}
+                  {n.text}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="text-gray-400">
+            実際の注文ではなく推定です（注文＝1時間足のスイング高安・キリ番＋個人の建玉の偏り、ポジション＝個人の平均取得価格の記録）。20分ごとに更新。※投資助言ではありません。
+          </div>
+        </div>
       )}
-      <div className="mt-1 text-[9px] text-gray-400">
-        実際の注文ではなく推定です。注文＝1時間足のスイング高安（抜けると逆指値が動く）・キリ番＋個人の建玉の偏り、ポジション＝個人（Myfxbook）の平均取得価格の毎時の記録から。※投資助言ではありません。
-      </div>
     </div>
   );
 }
@@ -281,4 +329,35 @@ function positionReason(st: OrderBookPayload['positionStatus']): string {
   }
   if (st?.reason === 'error') return '個人の建玉の記録を読み込めませんでした。少し待って再読み込みしてください。';
   return 'ポジションの分布は、個人の建玉の記録（毎時）がたまると表示されます。';
+}
+
+/** 左右に割れたゲージ（例: ⚡ 下へ加速 38% ━━━━ 62% 上へ加速）。多い側を太字に。 */
+function Gauge({
+  icon,
+  left,
+  right,
+}: {
+  icon: string;
+  left: { label: string; pct: number; color: string };
+  right: { label: string; pct: number; color: string };
+}) {
+  const leftWins = left.pct > right.pct;
+  const rightWins = right.pct > left.pct;
+  return (
+    <div className="flex items-center gap-1.5 text-[10px]">
+      <span aria-hidden className="w-4 text-center">
+        {icon}
+      </span>
+      <span className={`w-[4.5rem] whitespace-nowrap text-right ${leftWins ? 'font-bold' : 'text-gray-400'}`} style={leftWins ? { color: left.color } : undefined}>
+        {left.label} {left.pct}%
+      </span>
+      <span className="flex h-2 flex-1 overflow-hidden rounded-full bg-gray-100" aria-label={`${left.label} ${left.pct}% / ${right.label} ${right.pct}%`}>
+        <span className="h-full" style={{ width: `${left.pct}%`, backgroundColor: left.color, opacity: leftWins ? 0.85 : 0.35 }} />
+        <span className="h-full" style={{ width: `${right.pct}%`, backgroundColor: right.color, opacity: rightWins ? 0.85 : 0.35 }} />
+      </span>
+      <span className={`w-[4.5rem] whitespace-nowrap ${rightWins ? 'font-bold' : 'text-gray-400'}`} style={rightWins ? { color: right.color } : undefined}>
+        {right.pct}% {right.label}
+      </span>
+    </div>
+  );
 }

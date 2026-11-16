@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bookClusters, planNotes, positionSkew, type BookSide } from '../orderBook';
+import { bookClusters, bookPressure, planNotes, positionSkew, type BookSide } from '../orderBook';
 
 // 149.00〜151.00 を 0.05 刻み。ふだんは 0.5% ずつで、いくつかの価格帯だけ厚くする。
 const book = (thick: Record<string, [number, number]>, price = 150.0): BookSide => {
@@ -57,5 +57,20 @@ describe('planNotes', () => {
     expect(same[0]).toMatchObject({ tone: 'warn' });
     const opp = planNotes({ direction: 'short', entry: 150, stop: 150.3, target: 149.4 }, null, pb, 150.0, fmt);
     expect(opp[0]).toMatchObject({ tone: 'info' });
+  });
+});
+
+describe('bookPressure', () => {
+  it('上の逆指値 vs 下の逆指値（加速）と、下の支え vs 上の重し（壁）を % にする', () => {
+    const p = bookPressure(ob, 150.0)!;
+    expect(p.accelUpPct + p.accelDownPct).toBe(100);
+    expect(p.supportPct + p.resistancePct).toBe(100);
+    // 上の売り指値（2.5）が下の買い指値（2.0）より厚い → 重しの方が多い
+    expect(p.resistancePct).toBeGreaterThan(p.supportPct);
+  });
+
+  it('planNotes の注意点には一言（short）が付く', () => {
+    const notes = planNotes({ direction: 'long', entry: 150.0, stop: 149.52, target: 150.8 }, ob, null, 150.0, fmt);
+    expect(notes.every((n) => n.short.length > 0 && n.short.length <= 30)).toBe(true);
   });
 });
