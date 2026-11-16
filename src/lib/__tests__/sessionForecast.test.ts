@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { forecastSessions, sessionStats, type HourBar, type SessionStat } from '../sessionForecast';
+import { forecastSessions, priceRefs, sessionStats, type HourBar, type SessionStat } from '../sessionForecast';
 
 // 2026-11-02(月)〜11-13(金) の平日の1時間足。ロンドン時間（UTC 8〜16時）は値幅を大きく、出来高も多くする。
 const bars: HourBar[] = [];
@@ -66,5 +66,33 @@ describe('forecastSessions', () => {
   it('流れが無く上下に抵抗線があれば往復', () => {
     const f = forecastSessions({ price: 150.0, pip: 0.01, digits: 3, stats, levels, bias: 'range', now });
     expect(f.find((x) => x.key === 'london')!.scenario).toBe('range');
+  });
+
+  it('ストキャスが買われすぎなら、上抜けを「試して止まる」に弱め、理由のタグを付ける', () => {
+    const f = forecastSessions({ price: 150.0, pip: 0.01, digits: 3, stats, levels, bias: 'up', stoch: { k: 88, d: 80 }, now });
+    const london = f.find((x) => x.key === 'london')!;
+    expect(london.scenario).toBe('stall_up');
+    expect(london.reasons.some((r) => r.includes('買われすぎ'))).toBe(true);
+  });
+
+  it('出来高の線と高値・安値が重なる強い線は、抜けにくい（試して止まる）', () => {
+    const withRef = [...levels, { kind: 'pdh' as const, price: 150.31 }];
+    const f = forecastSessions({ price: 150.0, pip: 0.01, digits: 3, stats, levels: withRef, bias: 'up', now });
+    const london = f.find((x) => x.key === 'london')!;
+    expect(london.scenario).toBe('stall_up'); // 抜ける割合 70% < 75% なので強い線で止まる
+    expect(london.reasons.some((r) => r.includes('前日高値') && r.includes('重なる'))).toBe(true);
+  });
+});
+
+describe('priceRefs', () => {
+  it('前日・今日の高値/安値と、直前に終わったセッションの高値/安値を返す', () => {
+    const now = new Date(Date.UTC(2026, 10, 13, 3)); // 金曜 12:00 JST
+    const refs = priceRefs(bars.filter((b) => b.t * 1000 < now.getTime()), now);
+    const kinds = refs.map((r) => r.kind);
+    expect(kinds).toEqual(expect.arrayContaining(['pdh', 'pdl', 'tdh', 'tdl', 'ssh', 'ssl']));
+    const pdh = refs.find((r) => r.kind === 'pdh')!;
+    const pdl = refs.find((r) => r.kind === 'pdl')!;
+    expect(pdh.price).toBeGreaterThan(pdl.price);
+    expect(refs.find((r) => r.kind === 'ssh')!.label).toMatch(/高値$/);
   });
 });

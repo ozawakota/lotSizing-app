@@ -4,8 +4,13 @@
 //      先物の出来高があるペアは出来高で、無いペア（クロス円）は滞在時間（各価格帯にいた時間）で代用する
 //   ② セッションのくせ（直近1か月の1時間足）: 平均値幅・上げで終わる割合・前のセッションの高安を抜ける割合・出来高の割合
 //   ③ いまの流れ（1時間足のダウ理論の向き）
-// 予想: 各セッションで動きそうな範囲（平均値幅を流れの向きに寄せる）に、どの抵抗線が入るかで
-//   「試して止まる」「抜けて次の抵抗線へ」「抵抗線の間で往復」などのシナリオと一言を出す。※投資助言ではない参考情報。
+//   ④ 高値・安値: 前日の高値/安値・今日の高値/安値・直前に終わったセッションの高値/安値（例「東京高値」）
+//   ⑤ ストキャスティクス（1時間足）: 買われすぎ/売られすぎ・%K と %D の交差
+// 予想: 各セッションで動きそうな範囲（平均値幅を流れの向きに寄せる）に、どの線が入るかで
+//   「試して止まる」「抜けて次の線へ」「線の間で往復」などのシナリオと一言を出す。
+//   出来高の線と高値・安値が近く重なる線は「強い線」とみなし、抜けにくくする。
+//   流れの向きにストキャスが行き過ぎ（上昇で 80 以上・下降で 20 以下）なら、抜けるシナリオを「止まる」に弱める。
+//   理由は短いタグ（reasons）で返す。※投資助言ではない参考情報。
 import { isSessionOpen, MARKET_SESSIONS, type MarketSession } from './session';
 
 export type SessionKey = 'tokyo' | 'london' | 'ny';
@@ -35,12 +40,27 @@ export interface SessionStat {
   volumeShare: number | null; // 3セッション合計に対する出来高の割合 %（出来高が無ければ null）
 }
 
-export type VolumeLevelKind = 'poc' | 'vah' | 'val' | 'hvn';
+// 線の種類: 出来高（POC・VAH・VAL・山）と、高値・安値（前日・今日・直前のセッション）
+export type VolumeLevelKind = 'poc' | 'vah' | 'val' | 'hvn' | 'pdh' | 'pdl' | 'tdh' | 'tdl' | 'ssh' | 'ssl';
 export interface VolumeLevel {
   kind: VolumeLevelKind;
   price: number;
+  label?: string; // 表示名の上書き（例「東京高値」）
 }
-export const LEVEL_LABEL: Record<VolumeLevelKind, string> = { poc: 'POC', vah: 'VAH', val: 'VAL', hvn: '山' };
+export const LEVEL_LABEL: Record<VolumeLevelKind, string> = {
+  poc: 'POC',
+  vah: 'VAH',
+  val: 'VAL',
+  hvn: '山',
+  pdh: '前日高値',
+  pdl: '前日安値',
+  tdh: '今日高値',
+  tdl: '今日安値',
+  ssh: '直前高値',
+  ssl: '直前安値',
+};
+export const isVolumeKind = (k: VolumeLevelKind) => k === 'poc' || k === 'vah' || k === 'val' || k === 'hvn';
+export const levelName = (l: VolumeLevel) => l.label ?? LEVEL_LABEL[l.kind];
 
 /** /sessions の応答。 */
 export interface SessionsPayload {
@@ -49,7 +69,45 @@ export interface SessionsPayload {
   stats: SessionStat[];
   levels: VolumeLevel[];
   levelSource: 'volume' | 'time'; // volume = 先物の出来高 / time = 滞在時間（出来高が無いペア）
+  refs?: VolumeLevel[]; // 高値・安値（前日・今日・直前のセッション）。古い Worker では無い
   generatedAt: number;
+}
+
+/**
+ * ④ 高値・安値の線。FX の1日は NY 17時で切り替わるので、NY 時間を 7 時間進めた日付で日を分ける。
+ *   前日の高値/安値・今日の高値/安値（ここまで）・直前に終わったセッションの高値/安値。
+ */
+export function priceRefs(bars: HourBar[], now: Date = new Date()): VolumeLevel[] {
+  if (!bars.length) return [];
+  const fxDay = (t: number) =>
+    new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(t * 1000 + 7 * 3_600_000));
+  const days = new Map<string, { high: number; low: number }>();
+  for (const b of bars) {
+    const k = fxDay(b.t);
+    const d = days.get(k);
+    if (!d) days.set(k, { high: b.high, low: b.low });
+    else {
+      d.high = Math.max(d.high, b.high);
+      d.low = Math.min(d.low, b.low);
+    }
+  }
+  const keys = [...days.keys()].sort();
+  const today = fxDay(now.getTime() / 1000);
+  const out: VolumeLevel[] = [];
+  const cur = days.get(today);
+  const prevKey = [...keys].reverse().find((k) => k < today);
+  const prev = prevKey ? days.get(prevKey) : undefined;
+  if (prev) out.push({ kind: 'pdh', price: prev.high }, { kind: 'pdl', price: prev.low });
+  if (cur) out.push({ kind: 'tdh', price: cur.high }, { kind: 'tdl', price: cur.low });
+  // 直前に終わったセッション（いま開いていないもののうち、いちばん新しいまとまり）
+  const nowSec = now.getTime() / 1000;
+  const blocks = sessionBlocks(bars).filter((b) => !isSessionOpen(SESSION_DEF[b.key], now) || b.start < nowSec - 12 * 3600);
+  const last = blocks[blocks.length - 1];
+  if (last) {
+    const label = SESSION_DEF[last.key].label;
+    out.push({ kind: 'ssh', price: last.high, label: `${label}高値` }, { kind: 'ssl', price: last.low, label: `${label}安値` });
+  }
+  return out;
 }
 
 /** 足がどのセッションに入るか（DST は Intl が処理。ロンドンと NY の重なりは両方に入る）。 */
@@ -143,6 +201,7 @@ export interface SessionForecast {
   scenario: SessionScenarioKind;
   headline: string; // 一言（例「VAH 151.400 を試す → 抜ければ 151.650」）
   target: VolumeLevel | null; // 向かう先の抵抗線
+  reasons: string[]; // 判断の理由の短いタグ（例「前日高値と重なる」「ストキャス 85 買われすぎ」）
   stat: SessionStat;
 }
 
@@ -165,13 +224,22 @@ export function forecastSessions(i: {
   pip: number;
   digits: number;
   stats: SessionStat[];
-  levels: VolumeLevel[];
+  levels: VolumeLevel[]; // 出来高の線と高値・安値の線（refs）をまとめて渡す
   bias: TrendBias;
+  stoch?: { k: number; d: number } | null; // 1時間足のストキャス（無ければ考慮しない）
   now?: Date;
 }): SessionForecast[] {
   const now = i.now ?? new Date();
   const fmt = (p: number) => p.toFixed(i.digits);
-  const name = (l: VolumeLevel) => `${LEVEL_LABEL[l.kind]} ${fmt(l.price)}`;
+  const name = (l: VolumeLevel) => `${levelName(l)} ${fmt(l.price)}`;
+  // ⑤ ストキャス: 流れの向きに行き過ぎていれば、その向きへの抜けは弱める。%K と %D の交差は向きの変わり目のサイン。
+  const k = i.stoch?.k ?? null;
+  const d = i.stoch?.d ?? null;
+  const overbought = k != null && k >= 80;
+  const oversold = k != null && k <= 20;
+  const crossDown = k != null && d != null && k < d && k >= 60; // 高い位置で下向きに交差
+  const crossUp = k != null && d != null && k > d && k <= 40; // 低い位置で上向きに交差
+  const stochTag = overbought ? `ストキャス ${Math.round(k!)} 買われすぎ` : oversold ? `ストキャス ${Math.round(k!)} 売られすぎ` : null;
   const order = i.stats
     .map((st) => ({ st, h: hoursUntilOpen(st.key, now) }))
     .sort((a, b) => a.h - b.h);
@@ -187,12 +255,27 @@ export function forecastSessions(i: {
     const below = i.levels.filter((l) => l.price < i.price).sort((a, b) => b.price - a.price);
     const upIn = above.find((l) => l.price <= high) ?? null;
     const downIn = below.find((l) => l.price >= low) ?? null;
-    const breaks = st.breakPrevPct >= 60; // 前のセッションの高安を抜けやすいセッション
+    // 強い線: 出来高の線と高値・安値が、平均値幅の 15% 以内で重なっているもの
+    const near = reach * 0.15;
+    const overlapWith = (l: VolumeLevel): VolumeLevel | null =>
+      i.levels.find((o) => o !== l && isVolumeKind(o.kind) !== isVolumeKind(l.kind) && Math.abs(o.price - l.price) <= near) ?? null;
+    const reasons: string[] = [];
+    const strongNote = (l: VolumeLevel | null) => {
+      const o = l ? overlapWith(l) : null;
+      if (l && o) reasons.push(`${isVolumeKind(l.kind) ? levelName(o) : levelName(l)}と${isVolumeKind(l.kind) ? levelName(l) : levelName(o)}が重なる`);
+      return !!o;
+    };
+    const breaksBase = st.breakPrevPct >= 60; // 前のセッションの高安を抜けやすいセッション
     let scenario: SessionScenarioKind;
     let headline: string;
     let target: VolumeLevel | null = null;
     if (i.bias !== 'down' && upIn && (i.bias === 'up' || !downIn)) {
       const nextUp = above.find((l) => l.price > upIn.price) ?? null;
+      const strong = strongNote(upIn);
+      const stochAgainst = overbought || crossDown;
+      if (stochAgainst && stochTag) reasons.push(`${stochTag} → 上は伸びにくい`);
+      else if (crossDown) reasons.push('ストキャスが下向きに交差');
+      const breaks = breaksBase && !stochAgainst && (!strong || st.breakPrevPct >= 75);
       if (breaks && i.bias === 'up') {
         scenario = 'break_up';
         target = nextUp ?? upIn;
@@ -204,6 +287,11 @@ export function forecastSessions(i: {
       }
     } else if (i.bias !== 'up' && downIn && (i.bias === 'down' || !upIn)) {
       const nextDown = below.find((l) => l.price < downIn.price) ?? null;
+      const strong = strongNote(downIn);
+      const stochAgainst = oversold || crossUp;
+      if (stochAgainst && stochTag) reasons.push(`${stochTag} → 下は伸びにくい`);
+      else if (crossUp) reasons.push('ストキャスが上向きに交差');
+      const breaks = breaksBase && !stochAgainst && (!strong || st.breakPrevPct >= 75);
       if (breaks && i.bias === 'down') {
         scenario = 'break_down';
         target = nextDown ?? downIn;
@@ -216,7 +304,11 @@ export function forecastSessions(i: {
     } else if (upIn && downIn) {
       scenario = 'range';
       headline = `${fmt(downIn.price)}〜${fmt(upIn.price)} を往復`;
+      strongNote(upIn);
+      strongNote(downIn);
+      if (stochTag) reasons.push(stochTag);
     } else {
+      if (stochTag) reasons.push(stochTag);
       scenario = i.bias === 'down' ? 'drift_down' : i.bias === 'up' ? 'drift_up' : 'range';
       headline =
         scenario === 'range'
@@ -233,6 +325,7 @@ export function forecastSessions(i: {
       scenario,
       headline,
       target,
+      reasons: reasons.slice(0, 2),
       stat: st,
     };
   });

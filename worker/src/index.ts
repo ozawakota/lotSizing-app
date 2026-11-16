@@ -56,7 +56,7 @@ import {
 } from '../../src/lib/volume';
 import { fetchGoldSpot } from '../../src/lib/goldSpot';
 // 東京・ロンドン・NY の動きの予想の材料（セッションのくせ・出来高の抵抗線）はフロントと共有。
-import { sessionStats, type HourBar, type SessionsPayload, type VolumeLevel } from '../../src/lib/sessionForecast';
+import { priceRefs, sessionStats, type HourBar, type SessionsPayload, type VolumeLevel } from '../../src/lib/sessionForecast';
 import {
   PATTERN_WINDOW_BARS,
   applyPatternToRr,
@@ -1839,7 +1839,15 @@ const buildSessions = async (instrument: string): Promise<SessionsPayload> => {
     close: c.close + shift,
     volume: volumeByT.get(c.t as number),
   }));
-  return { instrument, currentRate, stats: sessionStats(bars, pipSize(instrument)), levels, levelSource, generatedAt: Date.now() };
+  return {
+    instrument,
+    currentRate,
+    stats: sessionStats(bars, pipSize(instrument)),
+    levels,
+    levelSource,
+    refs: priceRefs(bars), // 前日・今日・直前のセッションの高値/安値
+    generatedAt: Date.now(),
+  };
 };
 
 /** ボリュームプロファイル → 抵抗線の一覧（POC・VAH・VAL・山）。 */

@@ -7,7 +7,8 @@
 import { useState } from 'react';
 import {
   forecastSessions,
-  LEVEL_LABEL,
+  isVolumeKind,
+  levelName,
   type SessionForecast,
   type SessionKey,
   type SessionScenarioKind,
@@ -42,11 +43,18 @@ const SCENARIO_ICON: Record<SessionScenarioKind, string> = {
   stall_down: '⤓',
   range: '⇅',
 };
+const HILO = '#0369a1'; // 高値・安値の線（青）
 const LEVEL_STYLE: Record<VolumeLevel['kind'], { color: string; width: number; dash?: string }> = {
   poc: { color: '#ea580c', width: 1.6 },
   vah: { color: '#7c3aed', width: 1, dash: '4 2' },
   val: { color: '#7c3aed', width: 1, dash: '4 2' },
   hvn: { color: '#9ca3af', width: 0.8, dash: '2 2' },
+  pdh: { color: HILO, width: 1.1 },
+  pdl: { color: HILO, width: 1.1 },
+  tdh: { color: HILO, width: 0.8, dash: '1 1.5' },
+  tdl: { color: HILO, width: 0.8, dash: '1 1.5' },
+  ssh: { color: '#0891b2', width: 0.8, dash: '3 1.5' },
+  ssl: { color: '#0891b2', width: 0.8, dash: '3 1.5' },
 };
 
 export function SessionForecastCard({
@@ -55,6 +63,7 @@ export function SessionForecastCard({
   price,
   digits,
   bias,
+  stoch,
   aiChips,
 }: {
   data: SessionsPayload | null;
@@ -62,6 +71,7 @@ export function SessionForecastCard({
   price: number;
   digits: number;
   bias: TrendBias;
+  stoch?: { k: number; d: number } | null; // 1時間足のストキャス
   aiChips?: Partial<Record<SessionKey, string>> | null; // AI（Jev）のシナリオがあれば小さく添える
 }) {
   const [helpOpen, setHelpOpen] = useState(false);
@@ -74,7 +84,9 @@ export function SessionForecastCard({
     );
   }
   const pip = pipSize(data.instrument);
-  const rows = forecastSessions({ price, pip, digits, stats: data.stats, levels: data.levels, bias });
+  // 出来高の線＋高値・安値の線（古い Worker では高値・安値は無い）
+  const allLevels = [...data.levels, ...(data.refs ?? [])];
+  const rows = forecastSessions({ price, pip, digits, stats: data.stats, levels: allLevels, bias, stoch });
   if (!rows.length) return null;
   const fmt = (p: number) => p.toFixed(digits);
 
@@ -87,10 +99,15 @@ export function SessionForecastCard({
         </span>
         <span className="text-[10px] text-gray-400">
           流れ {bias === 'up' ? '↑上昇' : bias === 'down' ? '↓下降' : '→レンジ'}
+          {stoch && (
+            <span className={stoch.k >= 80 ? 'ml-1 font-semibold text-red-600' : stoch.k <= 20 ? 'ml-1 font-semibold text-green-600' : 'ml-1'}>
+              ・ストキャス {Math.round(stoch.k)}
+            </span>
+          )}
         </span>
       </div>
 
-      <ForecastChart rows={rows} levels={data.levels} price={price} fmt={fmt} />
+      <ForecastChart rows={rows} levels={allLevels} price={price} fmt={fmt} />
 
       {/* 1行ずつ: セッション・状態・一言・出来高の割合 */}
       <ul className="mt-1.5 space-y-1" style={LIST_RESET}>
@@ -113,6 +130,15 @@ export function SessionForecastCard({
               <span className="block truncate font-semibold" style={{ color: SCENARIO_COLOR[r.scenario] }}>
                 {r.headline}
               </span>
+              {r.reasons.length > 0 && (
+                <span className="mt-0.5 flex flex-wrap gap-0.5">
+                  {r.reasons.map((t) => (
+                    <span key={t} className="rounded bg-gray-100 px-1 text-[9px] text-gray-600">
+                      {t}
+                    </span>
+                  ))}
+                </span>
+              )}
               {aiChips?.[r.key] && <span className="block text-[9px] text-gray-400">AI: {aiChips[r.key]}</span>}
             </span>
             <VolumeShare r={r} />
@@ -130,7 +156,9 @@ export function SessionForecastCard({
             <span className="font-semibold text-orange-600"> POC</span>＝最も多い／
             <span className="font-semibold text-violet-600">VAH・VAL</span>＝70%が集まる範囲の上限・下限／
             <span className="font-semibold text-gray-500">山</span>＝ほかの山。
+            <span className="font-semibold text-sky-700">青い線</span>＝前日・今日・直前のセッションの高値/安値。出来高の線と重なる線は抜けにくい「強い線」。
           </div>
+          <div>ストキャス（1時間足）が流れの向きに行き過ぎ（上昇で 80 以上・下降で 20 以下）なら、抜けるシナリオを「止まる」に弱めます。</div>
           <div>
             箱＝そのセッションで動きそうな範囲（直近1か月の平均値幅を、1時間足の流れの向きに寄せたもの）。矢印＝予想の動き。
             {SCENARIO_ICON.break_up}抜けて次へ／{SCENARIO_ICON.stall_up}試して止まる／{SCENARIO_ICON.range}往復／{SCENARIO_ICON.drift_up}抵抗線なしで流れの向きへ。
@@ -167,7 +195,7 @@ function ForecastChart({ rows, levels, price, fmt }: { rows: SessionForecast[]; 
   const W = 320;
   const H = 150;
   const padL = 10;
-  const padR = 62;
+  const padR = 74; // 「前日高値 151.850」が入る幅
   const padTop = 14;
   const padBottom = 6;
   const colW = (W - padL - padR) / rows.length;
@@ -267,8 +295,8 @@ function ForecastChart({ rows, levels, price, fmt }: { rows: SessionForecast[]; 
       {labels.map(({ l, ly }, k) => (
         <g key={`lb-${k}`}>
           <rect x={W - padR + 2} y={ly - 4.5} width={padR - 2} height="9" rx="2" fill="white" stroke={LEVEL_STYLE[l.kind].color} strokeWidth="0.7" />
-          <text x={W - padR + 4} y={ly + 2.3} className="text-[6.5px] font-bold" fill={LEVEL_STYLE[l.kind].color}>
-            {LEVEL_LABEL[l.kind]} {fmt(l.price)}
+          <text x={W - padR + 4} y={ly + 2.3} className={`text-[6.5px] ${isVolumeKind(l.kind) ? 'font-bold' : 'font-semibold'}`} fill={LEVEL_STYLE[l.kind].color}>
+            {levelName(l)} {fmt(l.price)}
           </text>
         </g>
       ))}
