@@ -100,6 +100,18 @@ import {
 } from '../../src/lib/estimatedBook';
 // 個人の建玉の毎時の記録（推定ポジションブック用）は Turso（libSQL）に置く。
 import { createClient, type Client } from '@libsql/client/web';
+// システムエラーの通知（ヘッダーの ⚠ → モーダル）。判定・整形はフロントと共有。
+import {
+  activeIssues,
+  classifyJevError,
+  clearKinds,
+  ISSUE_META,
+  JEV_KINDS,
+  upsertIssue,
+  type IssueKind,
+  type SystemIssue,
+  type SystemStatusPayload,
+} from '../../src/lib/systemStatus';
 // 損切り提案のロジック/型もフロントと共有。
 import {
   computeStructuralStop,
@@ -737,6 +749,84 @@ const computeSignalsWorkersAI = async (
 // 買い%=Choice{buy,sell} の buy 確率、反転継続=Choice{continuation,reversal,neutral}。
 const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 
+// ---- システムエラーの記録（/system-status で画面に通知）----
+// KV の書き込みを抑えるため、同じ種類は10分に1回だけ保存（upsertIssue）。読み込みは isolate のメモリに1分キャッシュ。
+const KV_SYSTEM_ISSUES = 'system_issues';
+let systemIssuesMem: { at: number; list: SystemIssue[] } | null = null;
+const loadIssues = async (env: Env): Promise<SystemIssue[]> => {
+  if (systemIssuesMem && Date.now() - systemIssuesMem.at < 60_000) return systemIssuesMem.list;
+  let list: SystemIssue[] = [];
+  try {
+    const raw = await env.STRENGTH_KV.get(KV_SYSTEM_ISSUES);
+    if (raw) list = JSON.parse(raw) as SystemIssue[];
+  } catch (e) {
+    console.error('system_issues 読み込み失敗:', e);
+  }
+  systemIssuesMem = { at: Date.now(), list };
+  return list;
+};
+const saveIssues = async (env: Env, list: SystemIssue[]): Promise<void> => {
+  systemIssuesMem = { at: Date.now(), list };
+  await env.STRENGTH_KV.put(KV_SYSTEM_ISSUES, JSON.stringify(list));
+};
+// 記録の失敗で本来の処理を止めない。
+const reportIssue = async (env: Env, kind: IssueKind, detail: string): Promise<void> => {
+  try {
+    const r = upsertIssue(await loadIssues(env), kind, detail, Date.now());
+    if (r.changed) await saveIssues(env, r.list);
+  } catch (e) {
+    console.error('system_issues 記録失敗:', e);
+  }
+};
+const resolveIssues = async (env: Env, kinds: IssueKind[], match?: (i: SystemIssue) => boolean): Promise<void> => {
+  try {
+    const list = await loadIssues(env);
+    const targets = list.filter((i) => kinds.includes(i.kind) && (!match || match(i))).map((i) => i.kind);
+    if (!targets.length) return;
+    const r = clearKinds(list, targets);
+    if (r.changed) await saveIssues(env, r.list);
+  } catch (e) {
+    console.error('system_issues 解消の記録失敗:', e);
+  }
+};
+
+// Jev 呼び出しの共通部分。失敗は種類（課金・キー・上限・障害）を記録して投げ、成功したら Jev の記録を消す。
+type JevAnswers = Record<string, { choice?: string; probabilities?: Record<string, number>; confidence?: number }>;
+const callJev = async (env: Env, body: unknown): Promise<JevAnswers | undefined> => {
+  if (!env.TYPESAFE_API_KEY) throw new Error('TYPESAFE_API_KEY 未設定');
+  let res: Response;
+  try {
+    res = await fetch(JEV_ENDPOINT, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.TYPESAFE_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    await reportIssue(env, 'jev_down', `通信エラー: ${String(e)}`);
+    throw e;
+  }
+  if (!res.ok) {
+    const text = (await res.text()).slice(0, 200);
+    await reportIssue(env, classifyJevError(res.status, text), `HTTP ${res.status}: ${text}`);
+    throw new Error(`Jev HTTP ${res.status}: ${text}`);
+  }
+  const data = (await res.json()) as { answers?: JevAnswers };
+  await resolveIssues(env, JEV_KINDS);
+  return data.answers;
+};
+
+// /system-status: 記録されたエラー（24時間以内）＋設定の不足（キー・Turso 未設定）を返す。
+const handleSystemStatus = async (env: Env): Promise<Response> => {
+  const now = Date.now();
+  const issues = activeIssues(await loadIssues(env), now);
+  // 設定の不足は記録ではなく毎回その場で判定（時刻は 0 = 設定の問題）
+  const configIssue = (kind: IssueKind, detail: string): SystemIssue => ({ kind, ...ISSUE_META[kind], detail, firstAt: 0, lastAt: 0 });
+  if (!env.TYPESAFE_API_KEY) issues.push(configIssue('jev_key_missing', 'TYPESAFE_API_KEY が登録されていません'));
+  if (!env.TURSO_DATABASE_URL || !env.TURSO_AUTH_TOKEN) issues.push(configIssue('turso_missing', 'TURSO_DATABASE_URL / TURSO_AUTH_TOKEN が登録されていません'));
+  const body: SystemStatusPayload = { issues, checkedAt: now };
+  return new Response(JSON.stringify(body), { headers: { ...CORS_HEADERS, 'Cache-Control': 'no-store' } });
+};
+
 const computeSignalsJev = async (
   env: Env,
   items: NewsItem[],
@@ -746,17 +836,7 @@ const computeSignalsJev = async (
 ): Promise<PairSignal[]> => {
   if (!env.TYPESAFE_API_KEY) throw new Error('SIGNAL_ENGINE=jev ですが TYPESAFE_API_KEY が未設定です');
   const body = { model: 'jev-latest', ...buildJevRequest(items, trends, undefined, econEvents, anomalies) };
-  const res = await fetch(JEV_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.TYPESAFE_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`Jev HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const data = (await res.json()) as { answers?: Record<string, { choice?: string; probabilities?: Record<string, number>; confidence?: number }> };
-  return parseJevAnswers(data.answers);
+  return parseJevAnswers(await callJev(env, body));
 };
 
 // エンジン切替。SIGNAL_ENGINE=jev のときは Jev を使い、失敗時は Workers AI にフォールバック。
@@ -945,15 +1025,9 @@ const classifyPa = async (
   try {
     if (!env.TYPESAFE_API_KEY) throw new Error('TYPESAFE_API_KEY 未設定');
     const body = { model: 'jev-latest', ...buildPaJevRequest(structure, recentCloses, ctx) };
-    const res = await fetch(JEV_ENDPOINT, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${env.TYPESAFE_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`Jev HTTP ${res.status}: ${(await res.text()).slice(0, 150)}`);
-    const data = (await res.json()) as { answers?: Record<string, { choice?: string; probabilities?: Record<string, number>; confidence?: number }> };
+    const answers = await callJev(env, body);
     // ブレイク確率は Jev のみ（失敗時は null＝判定不可）。
-    return { pa: parsePaJev(data.answers), breakout: parseBreakoutJev(data.answers), paEngine: 'jev' };
+    return { pa: parsePaJev(answers), breakout: parseBreakoutJev(answers), paEngine: 'jev' };
   } catch (e) {
     console.error('プライスアクション Jev 失敗 → Workers AI:', e);
     const r = await env.AI.run(SIGNAL_MODEL, {
@@ -1388,16 +1462,7 @@ const buildSessionOutlook = async (env: Env, state: SessionState): Promise<Sessi
   try {
     if (!env.TYPESAFE_API_KEY) return null;
     const body = { model: 'jev-latest', ...buildSessionJevRequest(state) };
-    const res = await fetch(JEV_ENDPOINT, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${env.TYPESAFE_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`Jev HTTP ${res.status}: ${(await res.text()).slice(0, 150)}`);
-    const data = (await res.json()) as {
-      answers?: Record<string, { choice?: string; probabilities?: Record<string, number>; confidence?: number }>;
-    };
-    return parseSessionJev(data.answers);
+    return parseSessionJev(await callJev(env, body));
   } catch (e) {
     console.error('/mtf セッション予測 Jev 失敗:', e);
     return null;
@@ -2078,10 +2143,16 @@ export default {
       default:
         job = updateIntraday; // '0 */2 * * *' 15分足（4時間前/当日）2時間ごと
     }
+    // 失敗は「データの定期取得の失敗」として通知に記録。同じ cron が次に成功したら消す。
+    const tag = `[${event.cron}]`;
     ctx.waitUntil(
-      job(env).catch((e) => {
-        console.error(`Cron 失敗（前回値を保持）[${event.cron}]:`, e);
-      }),
+      job(env).then(
+        () => resolveIssues(env, ['data_fetch'], (i) => i.detail.startsWith(tag)),
+        (e) => {
+          console.error(`Cron 失敗（前回値を保持）${tag}:`, e);
+          return reportIssue(env, 'data_fetch', `${tag} ${String(e)}`);
+        },
+      ),
     );
   },
 
@@ -2091,7 +2162,7 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     // CORS プリフライト。
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
-    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、/mtf=TF分析、/ltf=下位足、/ranking=ランキング、/volume=4h出来高、他=通貨強弱。
+    // ルーティング: /flow=取引量、/news=ニュース、/stoploss=損切り提案、/mtf=TF分析、/ltf=下位足、/ranking=ランキング、/volume=4h出来高、/system-status=エラー通知、他=通貨強弱。
     const reqUrl = new URL(req.url);
     const pathname = reqUrl.pathname;
     if (pathname === '/flow') return handleFlow(env);
@@ -2103,6 +2174,7 @@ export default {
     if (pathname === '/sessions') return handleSessions(reqUrl);
     if (pathname === '/ranking') return handleRanking(env);
     if (pathname === '/volume') return handleVolume(env);
+    if (pathname === '/system-status') return handleSystemStatus(env);
 
     let intradayRaw = await env.STRENGTH_KV.get(KV_INTRADAY);
     let dailyRaw = await env.STRENGTH_KV.get(KV_DAILY);

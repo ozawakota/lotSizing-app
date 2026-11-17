@@ -5,6 +5,7 @@ import { FC, useState, useEffect } from 'react';
 import HelpModal from './HelpModal'; // 前提：別ファイルに作成済み
 import DstInfoModal from './DstInfoModal'; // 夏時間/冬時間の説明モーダル
 import ProverbModal from './ProverbModal'; // 今日の相場格言モーダル
+import SystemAlertModal, { SystemAlertButton, useSystemStatus } from './SystemAlertModal'; // システムエラーの通知モーダル
 import { Quote } from 'lucide-react';
 import CurrencyStrengthMeter from './CurrencyStrengthMeter';
 import AlertBell from './AlertBell'; // ヘッダーの相場変動通知ベル
@@ -101,6 +102,8 @@ const App: FC = () => {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false); // モーダルの表示状態
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false); // ヘルプモーダルの表示状態
   const [isProverbOpen, setIsProverbOpen] = useState<boolean>(false); // 今日の相場格言モーダルの表示状態
+  const [isSystemAlertOpen, setIsSystemAlertOpen] = useState<boolean>(false); // システムの通知モーダルの表示状態
+  const systemStatus = useSystemStatus(); // Worker の /system-status（5分ごと）。ヘッダーの ⚠ とモーダルで共有
   const [isDstModalOpen, setIsDstModalOpen] = useState<boolean>(false); // 夏時間/冬時間モーダルの表示状態
   const [currencyPrice, setCurrencyPrice] = useState<string>('-'); // 選択された通貨の価格
   const [lastUpdated, setLastUpdated] = useState<string>(''); // 価格更新日時
@@ -748,18 +751,21 @@ const App: FC = () => {
       <AlertToast />
       <div className='lg:w-150 lg:mx-auto min-h-screen bg-gray-50'>
 
-      {/* 共通ヘッダー（タイトル + 通知ベル。計算ページのみヘルプ/夏時間を表示） */}
+      {/* 共通ヘッダー（タイトル + 格言・システムの通知 + 通知ベル。計算ページのみヘルプ/夏時間を表示） */}
       <AppHeader
         title={VIEW_TITLES[view]}
         left={
-          <button
-            type="button"
-            aria-label="今日の相場格言"
-            className="text-amber-500 rounded-full h-8 w-8 flex items-center justify-center border border-amber-500"
-            onClick={() => setIsProverbOpen(true)}
-          >
-            <Quote className="h-4 w-4" aria-hidden="true" />
-          </button>
+          <>
+            <button
+              type="button"
+              aria-label="今日の相場格言"
+              className="text-amber-500 rounded-full h-8 w-8 flex items-center justify-center border border-amber-500"
+              onClick={() => setIsProverbOpen(true)}
+            >
+              <Quote className="h-4 w-4" aria-hidden="true" />
+            </button>
+            <SystemAlertButton status={systemStatus} onClick={() => setIsSystemAlertOpen(true)} />
+          </>
         }
       >
         <AlertRrToggle />
@@ -1089,6 +1095,7 @@ const App: FC = () => {
 
       {/* 今日の相場格言（ヘッダー左のボタンはどのページにもあるので、モーダルもページの外に置く） */}
       <ProverbModal isOpen={isProverbOpen} onClose={() => setIsProverbOpen(false)} />
+      <SystemAlertModal isOpen={isSystemAlertOpen} onClose={() => setIsSystemAlertOpen(false)} status={systemStatus} />
       </div>
     </Page>
   );
