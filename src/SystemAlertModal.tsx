@@ -52,7 +52,10 @@ export function useSystemStatus(): SystemStatusState {
     try {
       const res = await fetch(STATUS_URL, { cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData((await res.json()) as SystemStatusPayload);
+      const body = (await res.json()) as Partial<SystemStatusPayload>;
+      // 古い Worker（/system-status が無い）は別の JSON を返すので、形を確かめる
+      if (!Array.isArray(body.issues)) throw new Error('通知の取得に未対応の Worker です');
+      setData({ issues: body.issues, checkedAt: typeof body.checkedAt === 'number' ? body.checkedAt : Date.now() });
       setError(null);
       setErrorAt(0);
     } catch (e) {
