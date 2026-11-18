@@ -20,5 +20,31 @@
       "type": "image/png",
       "purpose": "any"
     }
+  ],
+  "shortcuts": [
+    {
+      "name": "タイムフレーム分析",
+      "short_name": "TF分析",
+      "url": "./?view=mtf",
+      "icons": [{ "src": "icons/shortcuts/mtf.png", "sizes": "96x96", "type": "image/png" }]
+    },
+    {
+      "name": "RR好機ボード",
+      "short_name": "エッジ",
+      "url": "./?view=edge",
+      "icons": [{ "src": "icons/shortcuts/edge.png", "sizes": "96x96", "type": "image/png" }]
+    },
+    {
+      "name": "ロット計算",
+      "short_name": "計算",
+      "url": "./?view=calculator",
+      "icons": [{ "src": "icons/shortcuts/calculator.png", "sizes": "96x96", "type": "image/png" }]
+    },
+    {
+      "name": "為替ニュース",
+      "short_name": "ニュース",
+      "url": "./?view=news",
+      "icons": [{ "src": "icons/shortcuts/news.png", "sizes": "96x96", "type": "image/png" }]
+    }
   ]
 }
