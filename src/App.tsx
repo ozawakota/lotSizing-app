@@ -29,8 +29,18 @@ const VIEW_TITLES: Record<AppView, string> = {
   edge: 'RR好機ボード',
 };
 // リロードしても現在のページを保持する（localStorage）。不正値はロット計算にフォールバック。
+// ホーム画面アイコンの長押しショートカット（manifest の shortcuts）は ?view=mtf などで開く。URL の指定を優先し、
+// 読んだら URL から消す（リロードで同じページに戻されないように）。
 const VIEW_STORAGE_KEY = 'app_view';
 const loadView = (): AppView => {
+  const params = new URLSearchParams(window.location.search);
+  const fromUrl = params.get('view');
+  if (fromUrl !== null) {
+    params.delete('view');
+    const q = params.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${q ? `?${q}` : ''}${window.location.hash}`);
+    if (fromUrl in VIEW_TITLES) return fromUrl as AppView;
+  }
   const v = localStorage.getItem(VIEW_STORAGE_KEY);
   // 旧「レジサポ(sr)」は TF分析 に統合済み。保存値が 'sr' の人は 'mtf' に移行。
   if (v === 'sr') return 'mtf';
