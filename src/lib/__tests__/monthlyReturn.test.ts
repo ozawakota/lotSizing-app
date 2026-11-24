@@ -20,12 +20,15 @@ describe('monthlyReturns', () => {
     expect(m[1].ratePct).toBeCloseTo(-5);
   });
 
-  it('入出金は月初の残高に入れるが、その月の月利の分子には入れない', () => {
-    const cf: Cashflow[] = [{ id: 'c', date: '2026-09-20', type: 'deposit', amount: 100_000 }];
+  it('入金・出金は月利に影響しない（月初の残高にも含めない）', () => {
+    const cf: Cashflow[] = [
+      { id: 'c', date: '2026-09-20', type: 'deposit', amount: 100_000 },
+      { id: 'd', date: '2026-10-01', type: 'withdrawal', amount: 50_000 },
+    ];
     const m = monthlyReturns(settings, [t('a', '2026-09-03', 2_000), t('b', '2026-10-05', 4_080)], cf);
-    expect(m[0].ratePct).toBeCloseTo(2); // 9月: 入金は分子に入らない
-    expect(m[1].startBalance).toBe(202_000); // 10月の月初は入金と9月の損益を含む
-    expect(m[1].ratePct).toBeCloseTo(2.02, 2);
+    expect(m[0].ratePct).toBeCloseTo(2); // 9月: 2,000 ÷ 100,000
+    expect(m[1].startBalance).toBe(102_000); // 10月の月初は初期残高＋9月の損益だけ
+    expect(m[1].ratePct).toBeCloseTo(4); // 4,080 ÷ 102,000
   });
 
   it('記録の無い月も until まで 0 で並べ、タグで絞った損益で月利を出す', () => {
