@@ -319,3 +319,51 @@ export function sortFlowPairs(order: FlowPair[], byPair: Map<FlowPair, PairFlow>
     .sort((a, b) => b.s - a.s || a.i - b.i)
     .map(({ p }) => p);
 }
+
+// ---------------------------------------------------------------------------
+// 逆張りのエントリー候補（取引量・センチメント ページ）
+// 個人投資家の建玉が片側に大きく偏ったペアで、その逆向きを候補にする。大口（CFTC 投機筋）で確からしさを付ける:
+//   A = 大口が候補の向き（個人と逆）… 個人と大口の考えが割れていて、大口の側につく形
+//   B = 大口は中立・データなし
+//   C = 大口も個人と同じ向き … 逆張りの根拠が弱い（注意として残す）
+// 大口のネットが前週から候補の向きに動いていれば「大口が積み増し中」を添える。
+// ※エントリーの合図ではなく、TF分析で流れ・抵抗線・入りどきを確かめる前の絞り込み。
+// ---------------------------------------------------------------------------
+
+export type ContrarianGrade = 'A' | 'B' | 'C';
+
+export interface ContrarianCandidate {
+  pair: FlowPair;
+  direction: 'buy' | 'sell'; // 候補の向き（個人の多い側の逆）
+  grade: ContrarianGrade;
+  retailPct: number; // 個人の多い側の割合 %
+  reasons: string[]; // 短い理由（例「個人の売り 72%」「大口は買い越し」）
+}
+
+const GRADE_ORDER: Record<ContrarianGrade, number> = { A: 0, B: 1, C: 2 };
+
+export function contrarianCandidates(pairs: PairFlow[]): ContrarianCandidate[] {
+  const out: ContrarianCandidate[] = [];
+  for (const p of pairs) {
+    const skew = retailSkew(p);
+    if (!skew.crowded || skew.side === 'neutral') continue;
+    const direction: 'buy' | 'sell' = skew.side === 'buy' ? 'sell' : 'buy';
+    const reasons = [`個人の${skew.side === 'buy' ? '買い' : '売り'} ${Math.round(skew.pct)}%`];
+    const spec = p.cot?.lean ?? 'neutral';
+    let grade: ContrarianGrade;
+    if (spec === direction) {
+      grade = 'A';
+      reasons.push(`大口は${direction === 'buy' ? '買い越し' : '売り越し'}`);
+    } else if (spec === 'neutral') {
+      grade = 'B';
+      reasons.push(p.cot ? '大口は中立' : '大口のデータなし');
+    } else {
+      grade = 'C';
+      reasons.push(`大口も${spec === 'buy' ? '買い越し' : '売り越し'}（根拠弱め）`);
+    }
+    const d = p.cot?.deltaNet;
+    if (d != null && Math.abs(d) >= 0.01 && (d > 0 ? 'buy' : 'sell') === direction) reasons.push('大口が積み増し中');
+    out.push({ pair: p.pair, direction, grade, retailPct: skew.pct, reasons });
+  }
+  return out.sort((a, b) => GRADE_ORDER[a.grade] - GRADE_ORDER[b.grade] || b.retailPct - a.retailPct);
+}

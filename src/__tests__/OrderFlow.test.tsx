@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent, within } from '@testing-library/react';
 import OrderFlow from '../OrderFlow';
 import { FLOW_ORDER_STORAGE_KEY, type FlowSnapshot } from '../lib/flow';
 
@@ -48,23 +48,26 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+// ペアのカードの一覧（上の「逆張りのエントリー候補」にも同じペア名が出るので、一覧の中だけを探す）
+const pairList = () => within(screen.getByRole('list', { name: 'ペアの一覧' }));
+
 describe('OrderFlow', () => {
   it('マウント時に取得し全ペア（JPY7本＋EUR/USD＋XAU/USD）を一覧表示する', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
     render(<OrderFlow />);
 
-    await waitFor(() => expect(screen.getByText('USD/JPY')).toBeTruthy());
+    await waitFor(() => expect(pairList().getByText('USD/JPY')).toBeTruthy());
     expect(String(fetchSpy.mock.calls[0][0])).toBe(WORKER_URL);
     for (const p of [
       'USD/JPY', 'EUR/JPY', 'GBP/JPY', 'AUD/JPY', 'NZD/JPY', 'CAD/JPY', 'CHF/JPY',
       'EUR/USD', 'GBP/USD', 'AUD/USD', 'XAU/USD',
     ]) {
-      expect(screen.getByText(p)).toBeTruthy();
+      expect(pairList().getByText(p)).toBeTruthy();
     }
   });
 
   // ペアのカード（li）。詳細（取引量・前回比・最大など）はカードを開くと出る。
-  const cardOf = (pair: string) => screen.getByText(pair).closest('li') as HTMLElement;
+  const cardOf = (pair: string) => pairList().getByText(pair).closest('li') as HTMLElement;
   const openCard = async (pair: string) => {
     fireEvent.click(screen.getByRole('button', { name: `${pair} の詳細を開く` }));
     await waitFor(() => expect(screen.getByRole('button', { name: `${pair} の詳細を閉じる` })).toBeTruthy());
@@ -74,7 +77,7 @@ describe('OrderFlow', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
     render(<OrderFlow />);
 
-    await waitFor(() => expect(screen.getByText('USD/JPY')).toBeTruthy());
+    await waitFor(() => expect(pairList().getByText('USD/JPY')).toBeTruthy());
     expect(cardOf('USD/JPY').textContent).toContain('個人買い 60%');
     expect(cardOf('EUR/JPY').textContent).toContain('個人売り 70%');
     expect(cardOf('USD/JPY').textContent).not.toContain('1,200');
@@ -87,7 +90,7 @@ describe('OrderFlow', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
     render(<OrderFlow />);
 
-    await waitFor(() => expect(screen.getByText('USD/JPY')).toBeTruthy());
+    await waitFor(() => expect(pairList().getByText('USD/JPY')).toBeTruthy());
     // 増=積み増し（新規優勢）、減=巻き戻し（決済優勢）
     expect(cardOf('USD/JPY').textContent).toContain('前回から建玉 増');
     expect(cardOf('EUR/JPY').textContent).toContain('前回から建玉 減');
@@ -101,7 +104,7 @@ describe('OrderFlow', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
     render(<OrderFlow />);
 
-    await waitFor(() => expect(screen.getByText('USD/JPY')).toBeTruthy());
+    await waitFor(() => expect(pairList().getByText('USD/JPY')).toBeTruthy());
     // USD/JPY: cot net=-0.5(sell/中), deltaNet=-0.2 → 売り越しが強まる。個人=買い → 逆行
     expect(cardOf('USD/JPY').textContent).toContain('大口売り越し・中強まる');
     expect(cardOf('USD/JPY').textContent).toContain('個人と大口が逆');
@@ -117,7 +120,7 @@ describe('OrderFlow', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
     render(<OrderFlow />);
 
-    await waitFor(() => expect(screen.getByText('USD/JPY')).toBeTruthy());
+    await waitFor(() => expect(pairList().getByText('USD/JPY')).toBeTruthy());
     const infoBtn = screen.getByRole('button', { name: '見方' });
     expect(infoBtn).toBeTruthy();
     fireEvent.click(infoBtn);
@@ -128,7 +131,7 @@ describe('OrderFlow', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
     render(<OrderFlow />);
 
-    await waitFor(() => expect(screen.getByText('USD/JPY')).toBeTruthy());
+    await waitFor(() => expect(pairList().getByText('USD/JPY')).toBeTruthy());
     expect(cardOf('USD/JPY').textContent).not.toContain('157.84');
     await openCard('USD/JPY');
     expect(cardOf('USD/JPY').textContent).toContain('記録上の最大2,500');
@@ -140,9 +143,25 @@ describe('OrderFlow', () => {
     render(<OrderFlow />);
 
     // GBP/JPY などは欠損
-    await waitFor(() => expect(screen.getByText('GBP/JPY')).toBeTruthy());
+    await waitFor(() => expect(pairList().getByText('GBP/JPY')).toBeTruthy());
     expect(cardOf('GBP/JPY').textContent).toContain('データを取得できませんでした');
     expect(screen.getAllByText('データを取得できませんでした').length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('逆張りのエントリー候補: 個人の偏りが大きいペアの逆向きを出し、TF分析へ飛べる', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
+    const onOpenTf = vi.fn();
+    render(<OrderFlow onOpenTf={onOpenTf} />);
+
+    const section = await screen.findByRole('region', { name: '逆張りのエントリー候補' });
+    // EUR/JPY: 個人の売り 70%・大口は買い越し → 買い候補（★★★）。USD/JPY は 60% なので候補にしない
+    expect(section.textContent).toContain('EUR/JPY');
+    expect(section.textContent).toContain('買い候補');
+    expect(section.textContent).toContain('★★★');
+    expect(section.textContent).toContain('個人の売り 70%');
+    expect(section.textContent).not.toContain('USD/JPY');
+    fireEvent.click(within(section).getByRole('button', { name: 'TF分析で確認' }));
+    expect(onOpenTf).toHaveBeenCalledWith('EUR_JPY');
   });
 
   it('取得失敗時はエラーを表示する', async () => {
@@ -164,7 +183,7 @@ describe('OrderFlow', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse(body));
     render(<OrderFlow />);
 
-    await waitFor(() => expect(screen.getByText('USD/JPY')).toBeTruthy());
+    await waitFor(() => expect(pairList().getByText('USD/JPY')).toBeTruthy());
     // 並び替えハンドルの aria-label 順＝描画順。保存した2ペアが先頭、残りは既定順で続く。
     const handles = screen.getAllByRole('button', { name: /を並び替え/ });
     const names = handles.map((h) => h.getAttribute('aria-label'));
