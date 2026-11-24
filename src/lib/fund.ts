@@ -342,14 +342,14 @@ export function dualGrowthPoints(params: GrowthParams, riskPercent: number): Dua
 }
 
 // ── 月利（記録タブ） ─────────────────────────────────────────────
-// 月利 = その月の損益 ÷ 月初の残高。月初の残高 = 初期残高 ＋ その月より前の損益・入出金。
-// 月の途中の入出金は分母に含めない（損益だけで測る）。月初の残高が 0 以下なら計算できない（null）。
+// 月利 = その月の損益 ÷ 月初の残高。月初の残高 = 初期残高 ＋ その月より前の損益（入出金は含めない）。
+// 入金・出金で月利が変わらないよう、トレードの成績だけで測る。月初の残高が 0 以下なら計算できない（null）。
 // タグで絞り込むときは、損益は絞り込んだ記録、月初の残高は全記録で求める（pnlTrades）。
 
 export interface MonthlyReturn {
   month: string; // "YYYY-MM"
   pnl: number; // その月の損益
-  startBalance: number; // 月初の残高
+  startBalance: number; // 月初の残高（初期残高＋それまでの損益。入出金は含めない）
   ratePct: number | null; // 月利 %（計算できなければ null）
   tradeCount: number; // その月の記録の件数
 }
@@ -371,10 +371,9 @@ export function monthlyReturns(
   const months = [...trades.map((t) => monthOf(t.date)), ...cashflows.map((c) => monthOf(c.date))].sort();
   if (!months.length) return [];
   const last = until && until > months[months.length - 1] ? until : months[months.length - 1];
-  // 月ごとの残高の増減（全記録・入出金）と、月利に使う損益（絞り込んだ記録）
+  // 月ごとの残高の増減（全記録の損益。入出金は含めない）と、月利に使う損益（絞り込んだ記録）
   const delta = new Map<string, number>();
   for (const t of trades) delta.set(monthOf(t.date), (delta.get(monthOf(t.date)) ?? 0) + pnlOf(t));
-  for (const c of cashflows) delta.set(monthOf(c.date), (delta.get(monthOf(c.date)) ?? 0) + (c.type === 'deposit' ? c.amount : -c.amount));
   const pnl = new Map<string, { pnl: number; count: number }>();
   for (const t of pnlTrades) {
     const a = pnl.get(monthOf(t.date)) ?? { pnl: 0, count: 0 };
