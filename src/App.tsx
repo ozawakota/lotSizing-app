@@ -92,6 +92,7 @@ const caretPositionForDigitIndex = (formatted: string, digitCount: number): numb
 const App: FC = () => {
   // 表示中のページ（ロット計算 / 取引量・センチメント）とハンバーガーメニューの開閉。
   const [view, setView] = useState<AppView>(loadView); // リロードでも保持
+  const [tfInstrument, setTfInstrument] = useState<string | undefined>(); // 取引量ページの逆張り候補から TF分析へ渡すペア
   const validCurrencies: CurrencyCode[] = ['JPY', 'USD', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF', 'XAU'];
   const [currency, setCurrency] = useState<CurrencyCode>(() => {
     const saved = localStorage.getItem('currency') as CurrencyCode | null;
@@ -1089,11 +1090,16 @@ const App: FC = () => {
       />
       </>
       ) : view === 'flow' ? (
-        <OrderFlow />
+        <OrderFlow
+          onOpenTf={(instrument) => {
+            setTfInstrument(instrument);
+            setView('mtf');
+          }}
+        />
       ) : view === 'news' ? (
         <NewsSummary />
       ) : view === 'mtf' ? (
-        <TimeframeAnalysis />
+        <TimeframeAnalysis initialInstrument={tfInstrument} />
       ) : view === 'edge' ? (
         <EdgeAnalysis />
       ) : (

@@ -30,12 +30,14 @@ import {
   PairFlow,
   SpecStrength,
   applyPairOrder,
+  contrarianCandidates,
   flowContrast,
   retailSkew,
   sortFlowPairs,
   specStrength,
 } from '@/lib/flow';
 import FlowInfoModal from './FlowInfoModal';
+import ContrarianCandidates from './components/ContrarianCandidates';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 
 const REFRESH_MS = 60 * 60 * 1000; // 1時間
@@ -323,7 +325,8 @@ const SkeletonCard: FC = () => (
   </li>
 );
 
-const OrderFlow: FC = () => {
+// onOpenTf: 逆張り候補から TF分析ページへ（そのペアを選んだ状態で開く）
+const OrderFlow: FC<{ onOpenTf?: (instrument: string) => void }> = ({ onOpenTf }) => {
   const [data, setData] = useState<FlowSnapshot | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
@@ -365,6 +368,7 @@ const OrderFlow: FC = () => {
 
   const byPair = useMemo(() => new Map((data?.pairs ?? []).map((p) => [p.pair, p])), [data]);
   const visible = useMemo(() => sortFlowPairs(order, byPair, sortMode), [order, byPair, sortMode]);
+  const candidates = useMemo(() => contrarianCandidates(data?.pairs ?? []), [data]);
   const oppositeCount = useMemo(() => (data?.pairs ?? []).filter((p) => flowContrast(p) === 'opposite').length, [data]);
 
   const changeSort = (mode: FlowSortMode) => {
@@ -417,6 +421,9 @@ const OrderFlow: FC = () => {
           <span className="text-gray-400">大口のバーは中央から右＝買い越し、左＝売り越し</span>
         </p>
       </div>
+
+      {/* 逆張りのエントリー候補（個人の偏りが大きいペアの逆向き） */}
+      {data && <ContrarianCandidates items={candidates} onOpenTf={onOpenTf} />}
 
       {/* 並び替え・更新 */}
       <div className="mb-2 flex items-center gap-2">
@@ -471,7 +478,7 @@ const OrderFlow: FC = () => {
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={visible} strategy={verticalListSortingStrategy}>
-            <ul className="space-y-2" style={LIST_RESET}>
+            <ul className="space-y-2" style={LIST_RESET} aria-label="ペアの一覧">
               {visible.map((pair) => (
                 <PairCard key={pair} pair={pair} flow={byPair.get(pair)} draggable={draggable} />
               ))}

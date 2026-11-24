@@ -1012,8 +1012,11 @@ function CommentCard({ comment }: { comment: string }) {
   );
 }
 
-export default function TimeframeAnalysis() {
-  const [instrument, setInstrument] = useState('XAU_USD');
+// initialInstrument: ほかのページ（取引量の逆張り候補）から開いたときのペア。対応外なら既定のまま。
+export default function TimeframeAnalysis({ initialInstrument }: { initialInstrument?: string } = {}) {
+  const [instrument, setInstrument] = useState(() =>
+    initialInstrument && PAIRS.some((p) => p.instrument === initialInstrument) ? initialInstrument : 'XAU_USD',
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<MtfResult | null>(null);
