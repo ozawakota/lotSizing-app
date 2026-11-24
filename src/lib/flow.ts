@@ -337,6 +337,8 @@ export interface ContrarianCandidate {
   direction: 'buy' | 'sell'; // 候補の向き（個人の多い側の逆）
   grade: ContrarianGrade;
   retailPct: number; // 個人の多い側の割合 %
+  spec: Lean | null; // 大口の向き（データなしは null）
+  specAdding: boolean; // 大口が前週から候補の向きに積み増し
   reasons: string[]; // 短い理由（例「個人の売り 72%」「大口は買い越し」）
 }
 
@@ -362,8 +364,9 @@ export function contrarianCandidates(pairs: PairFlow[]): ContrarianCandidate[] {
       reasons.push(`大口も${spec === 'buy' ? '買い越し' : '売り越し'}（根拠弱め）`);
     }
     const d = p.cot?.deltaNet;
-    if (d != null && Math.abs(d) >= 0.01 && (d > 0 ? 'buy' : 'sell') === direction) reasons.push('大口が積み増し中');
-    out.push({ pair: p.pair, direction, grade, retailPct: skew.pct, reasons });
+    const specAdding = d != null && Math.abs(d) >= 0.01 && (d > 0 ? 'buy' : 'sell') === direction;
+    if (specAdding) reasons.push('大口が積み増し中');
+    out.push({ pair: p.pair, direction, grade, retailPct: skew.pct, spec: p.cot ? spec : null, specAdding, reasons });
   }
   return out.sort((a, b) => GRADE_ORDER[a.grade] - GRADE_ORDER[b.grade] || b.retailPct - a.retailPct);
 }
