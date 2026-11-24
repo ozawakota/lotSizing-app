@@ -158,9 +158,10 @@ describe('OrderFlow', () => {
     expect(section.textContent).toContain('EUR/JPY');
     expect(section.textContent).toContain('買い候補');
     expect(section.textContent).toContain('★★★');
-    expect(section.textContent).toContain('個人の売り 70%');
+    expect(section.textContent).toContain('売り70%'); // 個人の建玉バー
+    expect(section.textContent).toContain('買い越し'); // 大口の向き
     expect(section.textContent).not.toContain('USD/JPY');
-    fireEvent.click(within(section).getByRole('button', { name: 'TF分析で確認' }));
+    fireEvent.click(within(section).getByRole('button', { name: 'EUR/JPY をTF分析で確認' }));
     expect(onOpenTf).toHaveBeenCalledWith('EUR_JPY');
   });
 

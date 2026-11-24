@@ -33,6 +33,8 @@ describe('contrarianCandidates', () => {
       ['USD/JPY', 'C'],
     ]);
     expect(c[0].reasons).toContain('大口が積み増し中');
+    expect(c[0]).toMatchObject({ spec: 'buy', specAdding: true });
+    expect(c[1]).toMatchObject({ spec: null, specAdding: false }); // 大口のデータなし
     expect(c[2].reasons.some((r) => r.includes('根拠弱め'))).toBe(true);
   });
 
