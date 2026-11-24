@@ -10,10 +10,12 @@ export default function TradeCalendar({
   trades,
   selectedDate,
   onSelectDate,
+  monthRates,
 }: {
   trades: Trade[];
   selectedDate: string | null;
   onSelectDate: (date: string) => void;
+  monthRates?: Record<string, number | null>; // "YYYY-MM" → 月利 %（記録が無い月は null）
 }) {
   const now = new Date();
   const [cursor, setCursor] = useState({ y: now.getFullYear(), m: now.getMonth() + 1 });
@@ -43,6 +45,12 @@ export default function TradeCalendar({
             {monthTotal >= 0 ? '+' : ''}
             {monthTotal.toLocaleString()}
           </span>
+          {monthRates?.[prefix] != null && (
+            <span className={`ml-1.5 rounded px-1 text-[10px] font-bold ${monthRates[prefix]! >= 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>
+              月利 {monthRates[prefix]! >= 0 ? '+' : ''}
+              {monthRates[prefix]!.toFixed(1)}%
+            </span>
+          )}
         </div>
         <button type="button" aria-label="次の月" onClick={next} className="p-1 text-gray-500">
           <ChevronRight className="h-4 w-4" />

@@ -10,6 +10,7 @@ import {
   computeSummary,
   dualGrowthPoints,
   growthDetail,
+  monthlyReturns,
   pnlOf,
   simpleDetail,
   type Cashflow,
@@ -18,6 +19,7 @@ import {
   type Trade,
 } from '@/lib/fund';
 import TradeCalendar from './TradeCalendar';
+import MonthlyReturnPanel from './components/MonthlyReturnPanel';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
@@ -532,6 +534,16 @@ export default function FundManager() {
   );
   const summary = useMemo(() => computeSummary(settings, viewTrades, cashflows), [settings, viewTrades, cashflows]);
   const tagAggs = useMemo(() => aggregateByTag(trades).sort((a, b) => b.count - a.count), [trades]);
+  // 月利（その月の損益 ÷ 月初の残高）。月初の残高は全記録、損益はタグで絞り込んだ記録で求める。今月まで並べる。
+  const currentMonth = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }, []);
+  const monthly = useMemo(
+    () => monthlyReturns(settings, trades, cashflows, viewTrades, currentMonth),
+    [settings, trades, cashflows, viewTrades, currentMonth],
+  );
+  const monthRates = useMemo(() => Object.fromEntries(monthly.map((m) => [m.month, m.tradeCount > 0 ? m.ratePct : null])), [monthly]);
 
   const addTrade = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -703,6 +715,9 @@ export default function FundManager() {
               </div>
             </div>
 
+            {/* 月利（今月・平均・直近6か月） */}
+            <MonthlyReturnPanel months={monthly} currentMonth={currentMonth} />
+
             {/* タグで絞り込み */}
             {tagAggs.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1">
@@ -728,7 +743,7 @@ export default function FundManager() {
             <div className="mb-1 flex items-baseline justify-between px-1 text-xs font-bold text-gray-700">
               月間カレンダー<span className="text-[10px] font-normal text-gray-400">日付をタップして記録</span>
             </div>
-            <TradeCalendar trades={viewTrades} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
+            <TradeCalendar trades={viewTrades} selectedDate={selectedDate} onSelectDate={setSelectedDate} monthRates={monthRates} />
           </section>
 
           {/* 日付タップで開くモーダル: その日の記録を閲覧＋入力 */}
