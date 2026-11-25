@@ -290,6 +290,14 @@ const App: FC = () => {
 
       // 既存の値を保持しつつ取得したキーのみ上書き（マージ）
       setCurrencyPrices(prev => ({ ...prev, ...fetched, JPY: '1.0000' }));
+      // エッジページの推奨ロット（ドル建てのペア・ドル口座の換算）でも使えるよう、取得した USD/JPY を残す
+      if (fetched.USD) {
+        try {
+          localStorage.setItem('usdJpyRate', String(fetched.USD));
+        } catch {
+          // 保存できなくても計算ページは動く
+        }
+      }
 
       const now = new Date();
       const formattedDate = now.toLocaleDateString('ja-JP');

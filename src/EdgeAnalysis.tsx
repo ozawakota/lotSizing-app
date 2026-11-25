@@ -14,6 +14,16 @@ import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 import type { ScoreItem } from '@/lib/edgeScore';
 import { pipSize } from '@/lib/stoploss';
 import { TradeChart } from '@/components/TradeChart';
+import { smallLossPlan } from '@/lib/smallLoss';
+import { loadLotSettings, recommendedLot, type LotSettings } from '@/lib/cardLot';
+
+// 推奨ロットの計算に使う設定（計算ページの証拠金・リスク%）と USD/JPY
+interface LotContext {
+  settings: LotSettings | null;
+  usdJpy: number | null;
+}
+const money = (v: number, cur: 'JPY' | 'USD') =>
+  cur === 'JPY' ? `¥${Math.round(v).toLocaleString('ja-JP')}` : `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const RANKING_URL = import.meta.env.VITE_RANKING_URL as string | undefined;
 
@@ -91,10 +101,71 @@ function RrBar({ card, digits }: { card: RrCard; digits: number }) {
   );
 }
 
+// 小さく負けるポイント（3行）: 撤退ライン / 指値で入れば損失が小さい / 1R 進んだら建値へ（smallLossPlan）
+function SmallLossPanel({ card, digits, lotCtx }: { card: RrCard; digits: number; lotCtx: LotContext }) {
+  const plan = smallLossPlan(card, pipSize(card.instrument));
+  const s = lotCtx.settings;
+  const lot = s ? recommendedLot(card.instrument, plan.stop.pips, s, lotCtx.usdJpy) : null;
+  const limitLot = s && plan.limit ? recommendedLot(card.instrument, plan.limit.riskPips, s, lotCtx.usdJpy) : null;
+  const long = card.direction === 'long';
+  const reason = card.stopReasons?.[0] ?? (card.stopNote || null);
+  return (
+    <div className="mt-2 rounded-lg border border-sky-100 bg-sky-50/60 px-2 py-1.5 text-[10px] leading-snug" aria-label="小さく負けるポイント">
+      <p className="mb-0.5 text-[10px] font-bold text-sky-800">🛡 小さく負けるポイント</p>
+      <ul className="space-y-0.5" style={LIST_RESET}>
+        {/* 推奨ロット（計算ページの証拠金・リスク%から。損切りになっても損失が許容額に収まる量） */}
+        <li style={LIST_ITEM_RESET} className="flex gap-1">
+          <span className="w-12 shrink-0 font-semibold text-gray-700">ロット</span>
+          {lot && s ? (
+            <span className="text-gray-700">
+              推奨 <span className="rounded bg-gray-800 px-1 font-mono text-[11px] font-bold text-white">{lot.lots.toFixed(2)}</span> lot
+              <span className="text-gray-500">（損切りで −{money(lot.lossAtLots, s.balanceCurrency)}＝口座の{s.riskPct}%以内）</span>
+            </span>
+          ) : (
+            <span className="text-gray-400">
+              {!s || !(s.balance > 0) ? '計算ページで証拠金を入れると推奨ロットが出ます' : 'USD/JPY が未取得（計算ページを一度開くと出ます）'}
+            </span>
+          )}
+        </li>
+        <li style={LIST_ITEM_RESET} className="flex gap-1">
+          <span className="w-12 shrink-0 font-semibold text-red-600">撤退</span>
+          <span className="text-gray-700">
+            <span className="font-mono font-semibold">{plan.stop.price.toFixed(digits)}</span>（−{plan.stop.pips}p）を
+            {long ? '下抜け' : '上抜け'}たら即切る
+            {reason && <span className="text-gray-400">・{reason}</span>}
+          </span>
+        </li>
+        {plan.limit && (
+          <li style={LIST_ITEM_RESET} className="flex gap-1">
+            <span className="w-12 shrink-0 font-semibold text-sky-700">指値</span>
+            <span className="text-gray-700">
+              <span className="font-mono font-semibold">{plan.limit.price.toFixed(digits)}</span> まで待てば損失 −{plan.limit.riskPips}p
+              <span className="ml-0.5 rounded bg-sky-100 px-1 font-bold text-sky-800">{plan.limit.savedPct}% 小さく</span>
+              <span className="ml-0.5 text-gray-500">RR 1:{plan.limit.rr.toFixed(1)}</span>
+              {limitLot && lot && limitLot.lots > lot.lots && (
+                <span className="ml-0.5 text-gray-500">・同じ損失で {limitLot.lots.toFixed(2)} lot</span>
+              )}
+            </span>
+          </li>
+        )}
+        {plan.breakeven && (
+          <li style={LIST_ITEM_RESET} className="flex gap-1">
+            <span className="w-12 shrink-0 font-semibold text-green-700">建値へ</span>
+            <span className="text-gray-700">
+              <span className="font-mono font-semibold">{plan.breakeven.trigger.toFixed(digits)}</span>（+{plan.stop.pips}p）で損切りを{' '}
+              <span className="font-mono font-semibold">{plan.breakeven.moveTo.toFixed(digits)}</span> へ＝負けなし
+            </span>
+          </li>
+        )}
+      </ul>
+    </div>
+  );
+}
+
 // 1好機カード（ペア×TF）。
 //   要約（常に表示）: 売買・ペア・時間足・RR ／ 総合スコア → リスク:リワードの棒と価格 → 入りどき・有利/不利の数
 //   詳細（タップで開く）: ダウの状態・帯での調整内容・スコアの内訳（有利な点 / 不利な点。プライスアクションは PA の印）
-function OpportunityCard({ card }: { card: RrCard }) {
+function OpportunityCard({ card, lotCtx }: { card: RrCard; lotCtx: LotContext }) {
   const [open, setOpen] = useState(false);
   const d = digitsFor(card.instrument);
   const long = card.direction === 'long';
@@ -131,6 +202,7 @@ function OpportunityCard({ card }: { card: RrCard }) {
       </div>
 
       <RrBar card={card} digits={d} />
+      <SmallLossPanel card={card} digits={d} lotCtx={lotCtx} />
 
       {/* ひと目で分かる要約 */}
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
@@ -364,6 +436,19 @@ export default function EdgeAnalysis() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [data, setData] = useState<RrBoardSnapshot | null>(null);
+  // 推奨ロット: 計算ページの証拠金・リスク%（このページを開いたときに読む）と USD/JPY
+  //（USD/JPY のカードがあればそのエントリー価格、無ければ計算ページが保存した最新のレート）
+  const [lotSettings] = useState(() => loadLotSettings(typeof localStorage === 'undefined' ? null : localStorage));
+  const savedUsdJpy = (() => {
+    try {
+      const v = parseFloat(localStorage.getItem('usdJpyRate') ?? '');
+      return Number.isFinite(v) && v > 0 ? v : null;
+    } catch {
+      return null;
+    }
+  })();
+  const usdJpyCard = data?.cards.find((c) => c.instrument === 'USD_JPY');
+  const lotCtx: LotContext = { settings: lotSettings, usdJpy: usdJpyCard?.entry ?? savedUsdJpy };
   const [pair, setPair] = useState('all');
   const [tf, setTf] = useState<TfFilter>('all');
   const [dir, setDir] = useState<DirFilter>('all');
@@ -484,7 +569,7 @@ export default function EdgeAnalysis() {
           ) : (
             <div className="space-y-2">
               {prime.map((c) => (
-                <OpportunityCard key={`${c.instrument}:${c.tf}`} card={c} />
+                <OpportunityCard key={`${c.instrument}:${c.tf}`} card={c} lotCtx={lotCtx} />
               ))}
             </div>
           )}
@@ -510,7 +595,7 @@ export default function EdgeAnalysis() {
             ) : (
               <div className="space-y-2">
                 {near.map((c) => (
-                  <OpportunityCard key={`${c.instrument}:${c.tf}`} card={c} />
+                  <OpportunityCard key={`${c.instrument}:${c.tf}`} card={c} lotCtx={lotCtx} />
                 ))}
               </div>
             ))}
