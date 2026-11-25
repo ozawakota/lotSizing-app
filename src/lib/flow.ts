@@ -156,7 +156,8 @@ export interface PairFlow {
 // Worker が /flow で返すスナップショット。
 export interface FlowSnapshot {
   pairs: PairFlow[];
-  updatedAt: string; // ISO8601（Worker が算出した時刻）
+  updatedAt: string; // ISO8601（Worker が応答を組み立てた時刻）
+  flowUpdatedAt?: string; // ISO8601（個人の建玉を Myfxbook から取得した時刻。古い Worker では無い）
   cotReportDate?: string; // CFTC 報告日（火曜時点・ISO8601）。COT を取得できた場合のみ
   cotUpdatedAt?: string; // Worker が CFTC を取得した時刻（ISO8601）
 }
@@ -369,4 +370,41 @@ export function contrarianCandidates(pairs: PairFlow[]): ContrarianCandidate[] {
     out.push({ pair: p.pair, direction, grade, retailPct: skew.pct, spec: p.cot ? spec : null, specAdding, reasons });
   }
   return out.sort((a, b) => GRADE_ORDER[a.grade] - GRADE_ORDER[b.grade] || b.retailPct - a.retailPct);
+}
+
+// ---------------------------------------------------------------------------
+// 大口（CFTC COT）の発表スケジュール
+// CFTC は毎週火曜時点の建玉を、金曜 15:30（米東部時間）に公表する（祝日の週は月曜などにずれる）。
+// 「いま手元にあるべき最新の報告日（火曜）」を求め、キャッシュが古ければ取り直す・画面で知らせるのに使う。
+// ---------------------------------------------------------------------------
+
+const NY_PARTS = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+  weekday: 'short',
+});
+const WEEKDAY: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+/** 直近の発表（金曜 15:30 米東部）が済んだ週の報告日（火曜）を "YYYY-MM-DD" で返す。 */
+export function expectedCotReportDate(now: Date): string {
+  const parts = Object.fromEntries(NY_PARTS.formatToParts(now).map((p) => [p.type, p.value]));
+  const dow = WEEKDAY[parts.weekday];
+  const minutes = Number(parts.hour) * 60 + Number(parts.minute);
+  // 米東部の日付で、直近の「発表済みの金曜」までさかのぼる日数
+  let back = (dow - 5 + 7) % 7;
+  if (back === 0 && minutes < 15 * 60 + 30) back = 7; // 金曜の発表前は先週の金曜
+  const ny = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
+  const tuesday = new Date(ny - (back + 3) * 86_400_000); // 金曜の3日前＝火曜
+  return tuesday.toISOString().slice(0, 10);
+}
+
+/** 手元の報告日が、発表済みの最新より古いか（"YYYY-MM-DD..." を比較）。報告日が無ければ古い扱い。 */
+export function cotIsBehind(reportDate: string | undefined, now: Date): boolean {
+  if (!reportDate) return true;
+  return reportDate.slice(0, 10) < expectedCotReportDate(now);
 }

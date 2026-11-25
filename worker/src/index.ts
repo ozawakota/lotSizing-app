@@ -17,6 +17,8 @@ import {
   FLOW_PAIRS,
   computeDelta,
   COT_CONTRACT_CODES,
+  cotIsBehind,
+  expectedCotReportDate,
   normalizeNet,
   toPairCot,
   toPairFlow,
@@ -485,7 +487,8 @@ const updateFlow = async (env: Env): Promise<PairFlow[]> => {
     delta: computeDelta(prevTotals.get(b.pair), b.total),
   }));
 
-  await env.STRENGTH_KV.put(KV_FLOW, JSON.stringify(result));
+  // 取得時刻は KV のメタデータに載せる（書き込み回数を増やさない）。/flow が「◯分前に取得」と鮮度の判定に使う。
+  await env.STRENGTH_KV.put(KV_FLOW, JSON.stringify(result), { metadata: { at: Date.now() } });
   return result;
 };
 
@@ -496,7 +499,6 @@ const updateFlow = async (env: Env): Promise<PairFlow[]> => {
 // 各通貨先物＋金＋USDインデックスの非商業ネットを取得し、正規化して KV に保存。
 // 週次データ（毎週金曜に火曜時点を発表）のため、毎時 /flow cron では「6h超古い時だけ」更新する。
 const CFTC_URL = 'https://publicreporting.cftc.gov/resource/6dca-aqww.json';
-const COT_STALE_MS = 6 * 60 * 60 * 1000; // 6時間
 const COT_UA = 'Mozilla/5.0 (compatible; lotsizing-cot/1.0)';
 
 // CFTC Legacy コントラクトコードは src/lib/flow.ts の COT_CONTRACT_CODES（バックテストと共有）。
@@ -557,7 +559,7 @@ const fetchCot = async (): Promise<CotCache> => {
       // 前週 = 当週 − 週次変化（change列）。
       prevNet[cur] = normalizeNet(long - chLong, short - chShort);
     }
-    if (!reportDate && r.report_date_as_yyyy_mm_dd) reportDate = r.report_date_as_yyyy_mm_dd;
+    if (r.report_date_as_yyyy_mm_dd && r.report_date_as_yyyy_mm_dd > reportDate) reportDate = r.report_date_as_yyyy_mm_dd;
   }
   if (Object.keys(net).length === 0) throw new Error('CFTC データが取得できませんでした');
   return { reportDate, updatedAt: new Date().toISOString(), net, prevNet };
@@ -570,48 +572,60 @@ const updateCot = async (env: Env): Promise<CotCache> => {
   return cot;
 };
 
-// COT キャッシュが無い or 6h超古い時だけ再取得する（週次データを安価に鮮度維持）。失敗は非致命的。
+// 大口（CFTC）は発表スケジュール（毎週金曜 15:30 米東部に火曜時点を公表）に合わせて取り直す。
+//   - 手元の報告日が発表済みの最新（expectedCotReportDate）と同じなら何もしない（無駄な取得・書き込みをしない）
+//   - 古ければ毎時の cron で取りに行き、新しい週が取れたときだけ KV に書く（祝日で発表が遅れても、出た次の回で取れる）
+//   - 失敗、または発表から3日たっても新しい週が取れないときは、ヘッダーの「システムの通知」に出す
+const COT_LATE_MS = 3 * 24 * 60 * 60 * 1000;
 const refreshCotIfStale = async (env: Env): Promise<void> => {
-  const raw = await env.STRENGTH_KV.get(KV_COT);
-  if (raw) {
-    try {
-      const cur = JSON.parse(raw) as CotCache;
-      if (Date.now() - new Date(cur.updatedAt).getTime() < COT_STALE_MS) return;
-    } catch {
-      // 壊れていれば再取得に進む
-    }
-  }
+  const now = new Date();
+  let cur: CotCache | null = null;
   try {
-    await updateCot(env);
+    const raw = await env.STRENGTH_KV.get(KV_COT);
+    cur = raw ? (JSON.parse(raw) as CotCache) : null;
+  } catch {
+    // 壊れていれば取り直す
+  }
+  if (cur && !cotIsBehind(cur.reportDate, now)) return;
+  try {
+    const cot = await fetchCot();
+    if (!cur || cot.reportDate !== cur.reportDate) await env.STRENGTH_KV.put(KV_COT, JSON.stringify(cot));
+    const expected = expectedCotReportDate(now);
+    if (cotIsBehind(cot.reportDate, now)) {
+      // 金曜の発表から3日（＝祝日の振替も過ぎた頃）たっても前の週のままなら知らせる
+      const releasedAt = Date.parse(`${expected}T00:00:00Z`) + 3 * 86_400_000 + 20 * 3_600_000; // 金曜 20:00 UTC ごろ
+      if (now.getTime() - releasedAt > COT_LATE_MS) {
+        await reportIssue(env, 'data_fetch', `[CFTC] ${expected} 時点の発表をまだ取得できていません（手元は ${cot.reportDate.slice(0, 10)}）`);
+      }
+    } else {
+      await resolveIssues(env, ['data_fetch'], (i) => i.detail.startsWith('[CFTC]'));
+    }
   } catch (e) {
     console.error('COT 取得 失敗（前回値を保持）:', e);
+    await reportIssue(env, 'data_fetch', `[CFTC] 取得に失敗: ${String(e)}`);
   }
 };
 
-// 保存済みの建玉に平均取得価格（avgLongPrice / avgShortPrice）が1件も無いとき（＝平均取得価格に対応する前に保存されたデータ）、
-// 毎時の Cron を待たずに取り直す。Myfxbook が平均取得価格を返さない場合に毎回取り直さないよう、間隔は FLOW_AVG_RETRY_MS 以上空ける。
-const FLOW_AVG_RETRY_MS = 10 * 60 * 1000;
-let flowAvgRetryAt = 0;
-const lacksAvgPrices = (raw: string): boolean => {
-  try {
-    return !(JSON.parse(raw) as PairFlow[]).some((p) => p.avgLongPrice != null || p.avgShortPrice != null);
-  } catch {
-    return false;
-  }
-};
-
-// /flow のレスポンスを組み立てる。未取得なら初回のみ lazy 取得（平均取得価格が無い古いデータも取り直す）。投機筋(COT)も併せて返す。
+// /flow のレスポンスを組み立てる。投機筋(COT)も併せて返す。
+// 個人の建玉は、ページを見ているときだけ新しくする: 保存から FLOW_FRESH_MS を過ぎていればその場で Myfxbook から取り直す
+// （cron は毎時のまま。KV の書き込みはページが開かれたときだけ増える）。同時に何度も取りに行かないよう、isolate 内で間隔を空ける。
+const FLOW_FRESH_MS = 10 * 60 * 1000;
+let flowRefreshAt = 0;
+let cotLazyAt = 0;
 const handleFlow = async (env: Env): Promise<Response> => {
-  let pairsRaw = await env.STRENGTH_KV.get(KV_FLOW);
+  const { value, metadata } = await env.STRENGTH_KV.getWithMetadata<{ at?: number }>(KV_FLOW);
+  let pairsRaw = value;
+  let flowAt = metadata?.at ?? 0; // 0 = 取得時刻不明（メタデータ導入前のデータ）
   try {
-    if (!pairsRaw) {
+    // 10分を過ぎたら取り直す（平均取得価格が無い古いデータも、ここで新しくなる）
+    const stale = !pairsRaw || Date.now() - flowAt >= FLOW_FRESH_MS;
+    if (stale && (!pairsRaw || Date.now() - flowRefreshAt >= 60_000)) {
+      flowRefreshAt = Date.now();
       pairsRaw = JSON.stringify(await updateFlow(env));
-    } else if (lacksAvgPrices(pairsRaw) && Date.now() - flowAvgRetryAt >= FLOW_AVG_RETRY_MS) {
-      flowAvgRetryAt = Date.now();
-      pairsRaw = JSON.stringify(await updateFlow(env));
+      flowAt = Date.now();
     }
   } catch (e) {
-    console.error('/flow lazy取得 失敗:', e);
+    console.error('/flow 取り直し 失敗（保存済みを返す）:', e);
   }
 
   if (!pairsRaw) {
@@ -626,6 +640,13 @@ const handleFlow = async (env: Env): Promise<Response> => {
   try {
     const cotRaw = (await env.STRENGTH_KV.get(KV_COT)) ?? JSON.stringify(await updateCot(env));
     cot = JSON.parse(cotRaw) as CotCache;
+    // 発表済みの新しい週がまだ無ければ、cron を待たずに取りに行く（isolate ごとに1時間に1回まで）
+    if (cotIsBehind(cot.reportDate, new Date()) && Date.now() - cotLazyAt >= 60 * 60 * 1000) {
+      cotLazyAt = Date.now();
+      await refreshCotIfStale(env);
+      const again = await env.STRENGTH_KV.get(KV_COT);
+      if (again) cot = JSON.parse(again) as CotCache;
+    }
   } catch (e) {
     console.error('/flow COT 取得 失敗:', e);
   }
@@ -639,6 +660,7 @@ const handleFlow = async (env: Env): Promise<Response> => {
   }
   const snapshot: FlowSnapshot = {
     updatedAt: new Date().toISOString(),
+    ...(flowAt ? { flowUpdatedAt: new Date(flowAt).toISOString() } : {}),
     pairs,
     ...(cot ? { cotReportDate: cot.reportDate, cotUpdatedAt: cot.updatedAt } : {}),
   };
