@@ -21,6 +21,7 @@ import {
   cotIsBehind,
   expectedCotReportDate,
   mergeGoldOiDay,
+  type GoldNet,
   type GoldOi,
   type GoldOiDay,
   normalizeNet,
@@ -523,6 +524,7 @@ interface CotCache {
   updatedAt: string; // Worker が取得した時刻（ISO8601）
   net: Partial<Record<CotCurrency, number>>; // 当週の正規化ネット
   prevNet: Partial<Record<CotCurrency, number>>; // 前週の正規化ネット（change列から復元）
+  gold?: GoldNet; // 金先物の投機筋ネット（枚数）。取引量ページの XAU/USD に枚数で出す
 }
 
 // CFTC から対象コントラクトの最新行を取得し、通貨別の正規化ネットに変換する。
@@ -550,6 +552,7 @@ const fetchCot = async (): Promise<CotCache> => {
   const net: Partial<Record<CotCurrency, number>> = {};
   const prevNet: Partial<Record<CotCurrency, number>> = {};
   let reportDate = '';
+  let gold: GoldNet | undefined;
   for (const [cur, code] of Object.entries(COT_CODE) as [CotCurrency, string][]) {
     const r = latest.get(code);
     if (!r) continue;
@@ -559,14 +562,19 @@ const fetchCot = async (): Promise<CotCache> => {
     net[cur] = normalizeNet(long, short);
     const chLong = Number(r.change_in_noncomm_long_all);
     const chShort = Number(r.change_in_noncomm_short_all);
-    if (!Number.isNaN(chLong) && !Number.isNaN(chShort)) {
+    const hasChange = !Number.isNaN(chLong) && !Number.isNaN(chShort);
+    if (hasChange) {
       // 前週 = 当週 − 週次変化（change列）。
       prevNet[cur] = normalizeNet(long - chLong, short - chShort);
+    }
+    // ゴールドは枚数のまま残す（取引量ページで「買い越し ◯枚」と出す）
+    if (cur === 'XAU') {
+      gold = { reportDate: r.report_date_as_yyyy_mm_dd, long, short, net: long - short, ...(hasChange ? { change: chLong - chShort } : {}) };
     }
     if (r.report_date_as_yyyy_mm_dd && r.report_date_as_yyyy_mm_dd > reportDate) reportDate = r.report_date_as_yyyy_mm_dd;
   }
   if (Object.keys(net).length === 0) throw new Error('CFTC データが取得できませんでした');
-  return { reportDate, updatedAt: new Date().toISOString(), net, prevNet };
+  return { reportDate, updatedAt: new Date().toISOString(), net, prevNet, ...(gold ? { gold } : {}) };
 };
 
 // CFTC を取得して KV に保存する。
@@ -590,10 +598,11 @@ const refreshCotIfStale = async (env: Env): Promise<void> => {
   } catch {
     // 壊れていれば取り直す
   }
-  if (cur && !cotIsBehind(cur.reportDate, now)) return;
+  // 最新の週が取れていて、ゴールドの枚数も入っていれば何もしない（枚数が無い古い保存は1回だけ取り直す）
+  if (cur && cur.gold && !cotIsBehind(cur.reportDate, now)) return;
   try {
     const cot = await fetchCot();
-    if (!cur || cot.reportDate !== cur.reportDate) await env.STRENGTH_KV.put(KV_COT, JSON.stringify(cot));
+    if (!cur || cot.reportDate !== cur.reportDate || (!cur.gold && cot.gold)) await env.STRENGTH_KV.put(KV_COT, JSON.stringify(cot));
     const expected = expectedCotReportDate(now);
     if (cotIsBehind(cot.reportDate, now)) {
       // 金曜の発表から3日（＝祝日の振替も過ぎた頃）たっても前の週のままなら知らせる
@@ -728,7 +737,7 @@ const handleFlow = async (env: Env): Promise<Response> => {
     const cotRaw = (await env.STRENGTH_KV.get(KV_COT)) ?? JSON.stringify(await updateCot(env));
     cot = JSON.parse(cotRaw) as CotCache;
     // 発表済みの新しい週がまだ無ければ、cron を待たずに取りに行く（isolate ごとに1時間に1回まで）
-    if (cotIsBehind(cot.reportDate, new Date()) && Date.now() - cotLazyAt >= 60 * 60 * 1000) {
+    if ((cotIsBehind(cot.reportDate, new Date()) || !cot.gold) && Date.now() - cotLazyAt >= 60 * 60 * 1000) {
       cotLazyAt = Date.now();
       await refreshCotIfStale(env);
       const again = await env.STRENGTH_KV.get(KV_COT);
@@ -759,6 +768,7 @@ const handleFlow = async (env: Env): Promise<Response> => {
     pairs,
     ...(cot ? { cotReportDate: cot.reportDate, cotUpdatedAt: cot.updatedAt } : {}),
     ...(goldOi && goldOi.days.length ? { goldOi } : {}),
+    ...(cot?.gold ? { goldNet: cot.gold } : {}),
   };
   return new Response(JSON.stringify(snapshot), { headers: CORS_HEADERS });
 };

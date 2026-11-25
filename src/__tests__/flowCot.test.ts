@@ -36,7 +36,8 @@ describe('pairSpecNet', () => {
     // USD/JPY は net(USD) − net(JPY)。JPY が買い越されているほど USD/JPY は売り（符号反転が自動処理）。
     expect(pairSpecNet(net, 'USD/JPY')).toBeCloseTo(0.1 - 0.6); // -0.5 → 売り越し
     expect(pairSpecNet(net, 'EUR/USD')).toBeCloseTo(0.4 - 0.1); // +0.3 → 買い越し
-    expect(pairSpecNet(net, 'XAU/USD')).toBeCloseTo(0.8 - 0.1); // +0.7 → 買い越し
+    // ゴールドは金先物そのもののネット（ドル指数は引かない）
+    expect(pairSpecNet(net, 'XAU/USD')).toBeCloseTo(0.8); // +0.8 → 買い越し
   });
 
   it('いずれかの通貨が欠ければ undefined', () => {

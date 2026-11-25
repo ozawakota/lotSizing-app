@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyOi, goldOiLean, mergeGoldOiDay, type GoldOiDay, type OiSignal } from '../flow';
+import { classifyOi, estimateGoldNet, goldOiLean, goldSignal, mergeGoldOiDay, pairSpecNet, type GoldOiDay, type OiSignal } from '../flow';
 
 describe('classifyOi（建玉の増減 × 値動き）', () => {
   const oi = 500_000;
@@ -47,5 +47,62 @@ describe('mergeGoldOiDay', () => {
   it('最大件数を超えたら古い日から落とす', () => {
     const days = ['2026-11-18', '2026-11-19', '2026-11-20'].map((d) => day(d, 'flat'));
     expect(mergeGoldOiDay(days, day('2026-11-23', 'flat'), 3).days.map((d) => d.date)).toEqual(['2026-11-19', '2026-11-20', '2026-11-23']);
+  });
+});
+
+describe('estimateGoldNet（確定ネット＋報告日より後の日次の推定）', () => {
+  const gold = { reportDate: '2026-11-17T00:00:00.000', net: 200_000 };
+  const d = (date: string, signal: OiSignal, oiChange: number): GoldOiDay => ({ date, oi: 500_000, oiChange, priceChange: 1, signal, final: true });
+  it('新規の買い・買い戻しは足し、新規の売り・手じまいは引く（報告日当日までは確定値に含まれるので除く）', () => {
+    const days = [
+      d('2026-11-17', 'new_long', 9_999), // 報告日（火曜）当日 → 除く
+      d('2026-11-18', 'new_long', 3_000), // +3,000
+      d('2026-11-19', 'short_cover', -1_000), // 売りが減る → +1,000
+      d('2026-11-20', 'long_liq', -2_000), // 買いが減る → −2,000
+      d('2026-11-23', 'new_short', 500), // −500
+      d('2026-11-24', 'flat', 100), // 0
+    ];
+    expect(estimateGoldNet(gold, days)).toEqual({ net: 201_500, delta: 1_500, through: '2026-11-24', days: 5 });
+  });
+  it('報告日より後の日が無ければ null', () => {
+    expect(estimateGoldNet(gold, [d('2026-11-17', 'new_long', 1)])).toBeNull();
+  });
+});
+
+describe('pairSpecNet（ゴールドは金先物そのもののネット）', () => {
+  it('XAU/USD はドル指数を引かず、金のネットをそのまま使う', () => {
+    expect(pairSpecNet({ XAU: 0.4, USD: 0.3 }, 'XAU/USD')).toBe(0.4);
+    expect(pairSpecNet({ EUR: 0.2, USD: 0.3 }, 'EUR/USD')).toBeCloseTo(-0.1);
+  });
+});
+
+describe('goldSignal（大口の増減＋個人の逆張りの合計）', () => {
+  const net = { reportDate: '2026-11-17T00:00:00.000', long: 300_000, short: 90_000, net: 210_000, change: 8_000 };
+  const d = (date: string, signal: OiSignal, oiChange: number): GoldOiDay => ({ date, oi: 500_000, oiChange, priceChange: 1, signal, final: true });
+  const buyDays = { updatedAt: '', days: [d('2026-11-18', 'new_long', 5_000), d('2026-11-19', 'new_long', 4_000), d('2026-11-20', 'short_cover', -2_000)] };
+
+  it('大口が買い増し＋個人が売りに偏っていれば強い買い（★★★）', () => {
+    const s = goldSignal({ net, oi: buyDays, retail: { longPct: 28, shortPct: 72 } })!;
+    expect(s).toMatchObject({ verdict: 'buy', score: 4, stars: 3 });
+    expect(s.factors.map((f) => [f.key, f.dir])).toEqual([
+      ['weekly', 'buy'],
+      ['estimate', 'buy'],
+      ['daily', 'buy'],
+      ['retail', 'buy'],
+    ]);
+    expect(s.factors[3].label).toBe('個人 売り72%（逆張り）');
+  });
+
+  it('大口は買い増しでも、個人が買いに偏り日次が売りなら様子見', () => {
+    const sellDays = { updatedAt: '', days: [d('2026-11-18', 'new_short', 5_000), d('2026-11-19', 'long_liq', -4_000), d('2026-11-20', 'new_short', 3_000)] };
+    const s = goldSignal({ net, oi: sellDays, retail: { longPct: 75, shortPct: 25 } })!;
+    // 前週比 +1 / 推定 −12,000 → −1 / 日次 売り寄り −1 / 個人 買い75% → −1 = −2 → 売り
+    expect(s).toMatchObject({ verdict: 'sell', score: -2, stars: 1 });
+  });
+
+  it('小さな増減は材料にしない（中立）。材料が無ければ null', () => {
+    const s = goldSignal({ net: { ...net, change: 300 }, retail: { longPct: 55, shortPct: 45 } })!;
+    expect(s).toMatchObject({ verdict: 'neutral', score: 0, stars: 0 });
+    expect(goldSignal({})).toBeNull();
   });
 });
