@@ -25,6 +25,7 @@ import {
   FlowPair,
   FlowSnapshot,
   FlowSortMode,
+  GoldNet,
   GoldOi,
   Lean,
   PairCot,
@@ -40,7 +41,7 @@ import {
 } from '@/lib/flow';
 import FlowInfoModal from './FlowInfoModal';
 import ContrarianCandidates from './components/ContrarianCandidates';
-import GoldOiRow from './components/GoldOiRow';
+import GoldNetPanel from './components/GoldOiRow';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 
 // 開いている間は10分ごとに取り直す（Worker は個人の建玉が10分より古ければ Myfxbook から取り直して返す）
@@ -252,8 +253,14 @@ const Details: FC<{ flow: PairFlow }> = ({ flow }) => (
 );
 
 // 1ペア＝1カード。draggable のときだけ左端にグリップを出す。
-// goldOi: XAU/USD のときだけ渡す、日次の大口推定（CME 金先物の建玉×値動き）
-const PairCard: FC<{ pair: FlowPair; flow?: PairFlow; draggable: boolean; goldOi?: GoldOi }> = ({ pair, flow, draggable, goldOi }) => {
+// goldOi / goldNet: XAU/USD のときだけ渡す。大口のネットポジション（CFTC の枚数）と、日次の推定（CME 金先物の建玉×値動き）
+const PairCard: FC<{ pair: FlowPair; flow?: PairFlow; draggable: boolean; goldOi?: GoldOi; goldNet?: GoldNet }> = ({
+  pair,
+  flow,
+  draggable,
+  goldOi,
+  goldNet,
+}) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: pair, disabled: !draggable });
   const [open, setOpen] = useState<boolean>(false);
   const contrast = flow ? flowContrast(flow) : 'none';
@@ -310,9 +317,10 @@ const PairCard: FC<{ pair: FlowPair; flow?: PairFlow; draggable: boolean; goldOi
         <>
           {/* 行のどこをタップしても詳細が開閉する（読み上げは見出しの開閉ボタンで行う） */}
           <div onClick={() => setOpen((v) => !v)} className="cursor-pointer space-y-2">
+            {/* ゴールドは結論（売買シグナル）を先に、その下に個人・大口のバー */}
+            {(goldNet || goldOi) && <GoldNetPanel net={goldNet} oi={goldOi} retail={flow} />}
             <RetailRow flow={flow} />
             <SpecRow cot={flow.cot} />
-            {goldOi && <GoldOiRow data={goldOi} />}
           </div>
           {open && <Details flow={flow} />}
         </>
@@ -500,6 +508,7 @@ const OrderFlow: FC<{ onOpenTf?: (instrument: string) => void }> = ({ onOpenTf }
                   flow={byPair.get(pair)}
                   draggable={draggable}
                   goldOi={pair === 'XAU/USD' ? data?.goldOi : undefined}
+                  goldNet={pair === 'XAU/USD' ? data?.goldNet : undefined}
                 />
               ))}
             </ul>

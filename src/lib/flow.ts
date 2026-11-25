@@ -117,10 +117,14 @@ export function specStrength(pairNet: number): SpecStrength {
   return 'strong';
 }
 
-/** ペア X/Y の投機筋ネット = net(X) − net(Y)。どちらかの通貨が欠ければ undefined。 */
+/**
+ * ペア X/Y の投機筋ネット = net(X) − net(Y)。どちらかの通貨が欠ければ undefined。
+ * ゴールド（XAU/USD）は金先物そのもののネットを使う（金先物はドル建てなので、金の買い越し＝XAU/USD の買い越し）。
+ */
 export function pairSpecNet(net: Partial<Record<CotCurrency, number>>, pair: FlowPair): number | undefined {
   const [base, quote] = pair.split('/') as [CotCurrency, CotCurrency];
   const b = net[base];
+  if (pair === 'XAU/USD') return b;
   const q = net[quote];
   if (b === undefined || q === undefined) return undefined;
   return b - q;
@@ -161,6 +165,7 @@ export interface FlowSnapshot {
   cotReportDate?: string; // CFTC 報告日（火曜時点・ISO8601）。COT を取得できた場合のみ
   cotUpdatedAt?: string; // Worker が CFTC を取得した時刻（ISO8601）
   goldOi?: GoldOi; // ゴールドの日次の大口推定（CME 金先物の建玉増減×値動き）。取れていなければ無い
+  goldNet?: GoldNet; // ゴールドの大口ネットポジション（CFTC・枚数）。取れていなければ無い
 }
 
 // ユーザーが並び替えた表示順を保存する localStorage キー。
@@ -468,4 +473,92 @@ export function mergeGoldOiDay(days: GoldOiDay[], day: GoldOiDay, max = 15): { d
   }
   const next = [...days.filter((d) => d.date !== day.date), day].sort((a, b) => (a.date < b.date ? -1 : 1)).slice(-max);
   return { days: next, changed: true };
+}
+
+// ---------------------------------------------------------------------------
+// ゴールドの大口ネットポジション（枚数）
+//   確定: CFTC（金先物・投機筋）の買い建玉 − 売り建玉。火曜時点を金曜に公表
+//   推定: 確定値に、報告日より後の CME の日次の建玉増減を、推定した向きで足し引きしたもの
+//         （新規の買い・売りの買い戻し＝足す / 新規の売り・買いの手じまい＝引く）。
+//         建玉の増減をすべて大口によるものと仮定するので、実際より大きめに出やすい。毎週の確定値でリセットされる。
+// ---------------------------------------------------------------------------
+
+export interface GoldNet {
+  reportDate: string; // CFTC 報告日（ISO8601・火曜時点）
+  long: number; // 投機筋の買い建玉（枚）
+  short: number; // 投機筋の売り建玉（枚）
+  net: number; // 買い − 売り（枚）
+  change?: number; // 前週比（枚）
+}
+
+const OI_NET_SIGN: Record<OiSignal, number> = { new_long: 1, short_cover: 1, flat: 0, new_short: -1, long_liq: -1 };
+
+/** 確定ネットに、報告日より後の日次の推定を足し引きした「今日のネット（推定）」。足す日が無ければ null。 */
+export function estimateGoldNet(
+  gold: Pick<GoldNet, 'net' | 'reportDate'>,
+  days: GoldOiDay[],
+): { net: number; delta: number; through: string; days: number } | null {
+  const from = gold.reportDate.slice(0, 10);
+  const after = days.filter((d) => d.date > from);
+  if (!after.length) return null;
+  const delta = after.reduce((s, d) => s + OI_NET_SIGN[d.signal] * Math.abs(d.oiChange), 0);
+  return { net: gold.net + delta, delta, through: after[after.length - 1].date, days: after.length };
+}
+
+// ---------------------------------------------------------------------------
+// ゴールド（XAU/USD）の売買シグナル: 大口の動きと個人の偏りをまとめて、買い優勢/売り優勢/様子見を出す
+//   ① 大口ネットの前週比（CFTC 確定）       … 買い越しが増えた＝買い +1 / 減った＝売り −1
+//   ② 確定後〜今日の推定の増減（CME 日次）    … 同上
+//   ③ 日次の推定の直近5日の傾き（goldOiLean） … 買い寄り +1 / 売り寄り −1
+//   ④ 個人の偏り（逆張り）                     … 個人が 65% 以上 買い＝売り −1 / 売り＝買い +1
+// 合計が +2 以上で買い、−2 以下で売り、それ以外は様子見。強さは |合計|（2=★、3=★★、4=★★★）。
+// 増減が小さい（ネットの 2% 未満かつ 1,000 枚未満）ときは 0 とする。※投資助言ではない参考情報。
+// ---------------------------------------------------------------------------
+
+export type SignalDir = 'buy' | 'sell' | 'neutral';
+
+export interface GoldSignalFactor {
+  key: 'weekly' | 'estimate' | 'daily' | 'retail';
+  label: string; // 例「大口 前週比 +8,200枚」
+  dir: SignalDir;
+}
+
+export interface GoldSignal {
+  verdict: SignalDir;
+  score: number; // −4〜+4
+  stars: number; // 0〜3（様子見は 0）
+  factors: GoldSignalFactor[]; // 判定に使った材料（データが無いものは入らない）
+}
+
+const fmtSigned = (v: number) => `${v > 0 ? '+' : v < 0 ? '−' : '±'}${Math.abs(Math.round(v)).toLocaleString('ja-JP')}`;
+
+export function goldSignal(i: {
+  net?: GoldNet;
+  oi?: GoldOi;
+  retail?: Pick<PairFlow, 'longPct' | 'shortPct'>;
+}): GoldSignal | null {
+  const factors: GoldSignalFactor[] = [];
+  const base = Math.abs(i.net?.net ?? 0);
+  const meaningful = (v: number) => Math.abs(v) >= Math.min(1000, base * 0.02 || 1000);
+  const dirOf = (v: number): SignalDir => (!meaningful(v) ? 'neutral' : v > 0 ? 'buy' : 'sell');
+  if (i.net?.change != null) {
+    factors.push({ key: 'weekly', label: `大口 前週比 ${fmtSigned(i.net.change)}枚`, dir: dirOf(i.net.change) });
+  }
+  const est = i.net && i.oi ? estimateGoldNet(i.net, i.oi.days) : null;
+  if (est) factors.push({ key: 'estimate', label: `今週の推定 ${fmtSigned(est.delta)}枚`, dir: dirOf(est.delta) });
+  if (i.oi?.days.length) {
+    const l = goldOiLean(i.oi.days);
+    const word = l.lean === 'buy' ? '買い寄り' : l.lean === 'sell' ? '売り寄り' : '方向感なし';
+    factors.push({ key: 'daily', label: `日次 ${l.days}日 ${word}`, dir: l.lean });
+  }
+  if (i.retail) {
+    const s = retailSkew(i.retail);
+    const dir: SignalDir = !s.crowded || s.side === 'neutral' ? 'neutral' : s.side === 'buy' ? 'sell' : 'buy';
+    factors.push({ key: 'retail', label: `個人 ${s.side === 'sell' ? '売り' : '買い'}${Math.round(s.pct)}%${dir === 'neutral' ? '' : '（逆張り）'}`, dir });
+  }
+  if (!factors.length) return null;
+  const score = factors.reduce((s, f) => s + (f.dir === 'buy' ? 1 : f.dir === 'sell' ? -1 : 0), 0);
+  const verdict: SignalDir = score >= 2 ? 'buy' : score <= -2 ? 'sell' : 'neutral';
+  const stars = verdict === 'neutral' ? 0 : Math.min(3, Math.abs(score) - 1);
+  return { verdict, score, stars, factors };
 }
