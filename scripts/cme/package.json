@@ -1,0 +1,9 @@
+{
+  "name": "cme-gold-oi",
+  "private": true,
+  "type": "module",
+  "description": "GitHub Actions 用: CME 金先物（GC）の建玉を本物のブラウザで取得する（Worker から直接は CME のボット対策で止められるため）",
+  "dependencies": {
+    "playwright": "1.49.1"
+  }
+}

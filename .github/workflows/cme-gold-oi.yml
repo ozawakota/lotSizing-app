@@ -1,0 +1,55 @@
+name: cme-gold-oi
+
+# CME 金先物（GC）の建玉を本物のブラウザ（Playwright）で取得し、Worker（currency-strength）の KV に書く。
+# Worker から直接 CME を読むとボット対策で止められるため、ここで取って KV（gold_oi_cme）に置き、Worker は毎時それを読む。
+# - 平日の夜（米中部の取引終了後＝速報値）と翌朝（確定値）に実行。手動実行も可（Actions → cme-gold-oi → Run workflow）
+# - KV への書き込みは deploy-workers と同じ CLOUDFLARE_API_TOKEN（Workers KV の編集権限が必要）を使う
+# - 取れなかったときはスクリーンショットを Artifacts に残す（Worker 側はヘッダーの「システムの通知」に出す）
+on:
+  schedule:
+    - cron: "40 23 * * 1-5" # 米中部 17:40（冬）/ 18:40（夏）ごろ: 当日の速報値
+    - cron: "40 15 * * 2-6" # 米中部 9:40（冬）/ 10:40（夏）ごろ: 前日の確定値
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cme-gold-oi
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Playwright
+        working-directory: scripts/cme
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Fetch CME gold open interest
+        working-directory: scripts/cme
+        run: node fetch-gold-oi.mjs "$GITHUB_WORKSPACE/gold-oi.json"
+      - name: Upload screenshot on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cme-failure
+          path: scripts/cme/cme-failure.png
+          if-no-files-found: ignore
+      - name: Install wrangler
+        working-directory: worker
+        run: if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+      - name: Write to Worker KV (gold_oi_cme)
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || unset CLOUDFLARE_ACCOUNT_ID
+          npx wrangler kv key put gold_oi_cme --path "$GITHUB_WORKSPACE/gold-oi.json" --binding STRENGTH_KV --remote
