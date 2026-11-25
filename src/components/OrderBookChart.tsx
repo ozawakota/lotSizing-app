@@ -3,17 +3,24 @@
 // 価格帯ごとの横棒（中央の軸から 右=買い（緑）・左=売り（赤））を、ローソク足の背景に半透明で重ねる。
 // エントリー・損切り・目標・現在値の線を全幅に引き、厚い価格帯（平均の 1.8 倍以上）は濃く・枠つきで描く。
 // 文字を減らして一目で判断できるように:
-//   - チャート上の厚い価格帯に ⚡（逆指値の溜まり＝抜けると加速）/ 🛡（指値の壁＝止まりやすい）のアイコン
+//   - 見出しに結論（↑上に動きやすい / ↓下に動きやすい / ↔拮抗。bookLean）
+//   - 現在値のすぐ上・すぐ下の厚い価格帯（nearestWalls）を、チャートに全幅の線＋価格のタグで、
+//     下に「上の壁 / 下の壁」のカード（価格・現在値からの pips・止まりやすい / 抜けると加速）で示す
+//     🛡（青）＝指値の壁＝止まりやすい / ⚡（紫）＝逆指値の溜まり＝抜けると加速（買い・売りの緑/赤と区別）
 //   - 下に2本のゲージ（上下どちらへ走りやすいか / 支えと重しのどちらが厚いか）
 //   - RR のプランと照らした注意点は一言のチップ。くわしい説明・見方は「見方」を開いたときだけ
 import { useState } from 'react';
 import type { OhlcCandle } from '@/lib/edge';
 import {
   bookClusters,
+  bookLean,
   bookPressure,
+  CLUSTER_EFFECT,
   CLUSTER_LABEL,
+  nearestWalls,
   planNotes,
   positionSkew,
+  type BookCluster,
   type BookSide,
   type OrderBookPayload,
   type PlanLevels,
@@ -24,6 +31,11 @@ const UP = '#16a34a';
 const DOWN = '#dc2626';
 const NOW = '#f97316';
 const ENTRY = '#111827';
+const WALL = '#2563eb'; // 🛡 指値の壁（止まりやすい）
+const ACCEL = '#9333ea'; // ⚡ 逆指値の溜まり（抜けると加速）
+const isStop = (c: BookCluster) => c.kind.endsWith('stop');
+// 表示桁から 1pip（JPY=0.01、ドルストレート=0.0001、XAU=0.1）
+const pipOf = (digits: number) => (digits >= 5 ? 0.0001 : digits === 3 ? 0.01 : digits === 2 ? 0.1 : Math.pow(10, -(digits - 1)));
 
 type Mode = 'orders' | 'positions';
 
@@ -114,6 +126,14 @@ export function OrderBookChart({
   // 一目で見るゲージ（チャートに見えている範囲で集計）
   const pressure = data.orderBook ? bookPressure(data.orderBook, currentRate, Math.max(hi - currentRate, currentRate - lo)) : null;
   const skew = data.positionBook ? positionSkew(data.positionBook, currentRate) : null;
+  const lean = pressure ? bookLean(pressure) : null;
+  const walls = book && mode === 'orders' ? nearestWalls(book, currentRate) : {};
+  const wallList = [walls.above, walls.below].filter((c): c is BookCluster => !!c);
+  const pip = pipOf(digits);
+  const pipsFrom = (p: number) => {
+    const v = (p - currentRate) / pip;
+    return `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(Math.abs(v) < 10 ? 1 : 0)}p`;
+  };
   const snap = book ? new Date(book.time).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) : null;
 
   return (
@@ -140,6 +160,16 @@ export function OrderBookChart({
                 </button>
               </>
             )}
+          </span>
+        )}
+        {mode === 'orders' && lean && (
+          <span
+            className={`rounded-full px-1.5 py-px text-[10px] font-bold ${
+              lean.lean === 'up' ? 'bg-green-100 text-green-700' : lean.lean === 'down' ? 'bg-red-100 text-red-700' : 'bg-gray-200 text-gray-600'
+            }`}
+            title="上の逆指値・下の支えが多いほど上、下の逆指値・上の重しが多いほど下"
+          >
+            {lean.lean === 'up' ? '↑ 上に動きやすい' : lean.lean === 'down' ? '↓ 下に動きやすい' : '↔ 拮抗'}
           </span>
         )}
         <div className="ml-auto flex gap-1">
@@ -186,8 +216,8 @@ export function OrderBookChart({
             const sThick = thick.has(`s${p}`);
             return (
               <g key={p}>
-                <rect x={axis} y={top + 0.3} width={lw} height={barH} fill={UP} opacity={lThick ? 0.38 : 0.16} stroke={lThick ? UP : 'none'} strokeOpacity="0.6" strokeWidth="0.6" />
-                <rect x={axis - sw} y={top + 0.3} width={sw} height={barH} fill={DOWN} opacity={sThick ? 0.38 : 0.16} stroke={sThick ? DOWN : 'none'} strokeOpacity="0.6" strokeWidth="0.6" />
+                <rect x={axis} y={top + 0.3} width={lw} height={barH} fill={UP} opacity={lThick ? 0.5 : 0.2} stroke={lThick ? UP : 'none'} strokeOpacity="0.6" strokeWidth="0.6" />
+                <rect x={axis - sw} y={top + 0.3} width={sw} height={barH} fill={DOWN} opacity={sThick ? 0.5 : 0.2} stroke={sThick ? DOWN : 'none'} strokeOpacity="0.6" strokeWidth="0.6" />
               </g>
             );
           })}
@@ -217,34 +247,50 @@ export function OrderBookChart({
               </text>
             </g>
           ))}
-          {/* 厚い価格帯のアイコン（棒の先）: ⚡ = 逆指値の溜まり（抜けると加速）/ 🛡 = 指値の壁（止まりやすい） */}
-          {clusters.map((c, k) => {
-            const row = visible.find(([p]) => p === c.price);
-            if (!row) return null;
-            // 同じ側で縦に近すぎる（6px 未満）アイコンは、先に出したもの（現在値に近い）だけにする
-            const side = c.kind.startsWith('buy');
-            const near = clusters
-              .slice(0, k)
-              .some((o) => o.kind.startsWith('buy') === side && Math.abs(yRaw(o.price) - yRaw(c.price)) < 6 && visible.some(([p]) => p === o.price));
-            if (near) return null;
-            const isBuy = c.kind.startsWith('buy');
-            const len = ((isBuy ? row[1] : row[2]) / maxPct) * half;
-            const tipX = isBuy ? Math.min(axis + len + 2, W - padR - 8) : Math.max(axis - len - 2, padL + 8);
-            const cy = yRaw(c.price + width / 2);
+          {/* すぐ上・すぐ下の厚い価格帯: 全幅の線と、左端に価格のタグ（🛡 青＝止まりやすい / ⚡ 紫＝抜けると加速） */}
+          {wallList.map((c) => {
+            const cy = y(c.price + width / 2);
+            const color = isStop(c) ? ACCEL : WALL;
             return (
-              <text
-                key={`ic-${c.kind}-${c.price}`}
-                x={tipX}
-                y={cy + 2.5}
-                textAnchor={isBuy ? 'start' : 'end'}
-                className="text-[7.5px]"
-              >
-                <title>{`${CLUSTER_LABEL[c.kind]} ${fmt(c.price)}`}</title>
-                {c.kind.endsWith('stop') ? '⚡' : '🛡'}
-              </text>
+              <g key={`wall-${c.kind}-${c.price}`}>
+                <title>{`${CLUSTER_LABEL[c.kind]} ${fmt(c.price)}（平均の ${c.ratio} 倍）`}</title>
+                <line x1={padL} x2={W - padR} y1={cy} y2={cy} stroke={color} strokeWidth="1.1" strokeDasharray="5 2" opacity="0.9" />
+                <rect x={padL + 1} y={cy - 5} width="44" height="10" rx="2" fill={color} />
+                <text x={padL + 3} y={cy + 2.4} className="text-[6.5px] font-bold" fill="white">
+                  {isStop(c) ? '⚡' : '🛡'} {fmt(c.price)}
+                </text>
+              </g>
             );
           })}
         </svg>
+      )}
+
+      {/* すぐ上・すぐ下の壁（価格・現在値からの pips・効き方） */}
+      {book && mode === 'orders' && (
+        <div className="mt-1 grid grid-cols-2 gap-1">
+          {([
+            ['上', walls.above],
+            ['下', walls.below],
+          ] as const).map(([pos, c]) => (
+            <div
+              key={pos}
+              className={`rounded-md border px-1.5 py-1 ${c ? (isStop(c) ? 'border-purple-200 bg-purple-50' : 'border-blue-200 bg-blue-50') : 'border-gray-200 bg-white'}`}
+            >
+              <p className="text-[9px] text-gray-500">{pos === '上' ? '▲ 上の壁' : '▼ 下の壁'}</p>
+              {c ? (
+                <>
+                  <p className={`text-[12px] font-bold tabular-nums ${isStop(c) ? 'text-purple-700' : 'text-blue-700'}`}>
+                    {isStop(c) ? '⚡' : '🛡'} {fmt(c.price)}
+                    <span className="ml-1 text-[10px] font-semibold text-gray-500">{pipsFrom(c.price)}</span>
+                  </p>
+                  <p className={`text-[10px] font-semibold ${isStop(c) ? 'text-purple-700' : 'text-blue-700'}`}>{CLUSTER_EFFECT[c.kind]}</p>
+                </>
+              ) : (
+                <p className="text-[10px] text-gray-400">近くに厚い価格帯なし</p>
+              )}
+            </div>
+          ))}
+        </div>
       )}
 
       {/* 一目で見るゲージ（注文）/ 買い・売りの比率（ポジション） */}
@@ -295,8 +341,9 @@ export function OrderBookChart({
         <div className="mt-0.5 space-y-1 rounded-md bg-white px-2 py-1.5 text-[10px] leading-relaxed text-gray-600">
           <div>
             横棒 = 価格帯ごとの注文の量（中央から 右=買い・左=売り。濃い＝厚い）。
-            <br />⚡ = 逆指値の溜まり（そこを抜けると損切り・ブレイクの注文が出て値動きが加速しやすい）
-            <br />🛡 = 指値の壁（そこで止まりやすい・跳ね返されやすい）
+            <br />⚡（紫の線）= 逆指値の溜まり（そこを抜けると損切り・ブレイクの注文が出て値動きが加速しやすい）
+            <br />🛡（青の線）= 指値の壁（そこで止まりやすい・跳ね返されやすい）
+            <br />見出しの結論 = 上の逆指値・下の支えが多いほど「上に動きやすい」、下の逆指値・上の重しが多いほど「下に動きやすい」。
           </div>
           {notes.length > 0 && (
             <ul className="space-y-0.5" style={LIST_RESET}>
