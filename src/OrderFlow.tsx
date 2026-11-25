@@ -25,6 +25,7 @@ import {
   FlowPair,
   FlowSnapshot,
   FlowSortMode,
+  GoldOi,
   Lean,
   PairCot,
   PairFlow,
@@ -39,6 +40,7 @@ import {
 } from '@/lib/flow';
 import FlowInfoModal from './FlowInfoModal';
 import ContrarianCandidates from './components/ContrarianCandidates';
+import GoldOiRow from './components/GoldOiRow';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 
 // 開いている間は10分ごとに取り直す（Worker は個人の建玉が10分より古ければ Myfxbook から取り直して返す）
@@ -250,7 +252,8 @@ const Details: FC<{ flow: PairFlow }> = ({ flow }) => (
 );
 
 // 1ペア＝1カード。draggable のときだけ左端にグリップを出す。
-const PairCard: FC<{ pair: FlowPair; flow?: PairFlow; draggable: boolean }> = ({ pair, flow, draggable }) => {
+// goldOi: XAU/USD のときだけ渡す、日次の大口推定（CME 金先物の建玉×値動き）
+const PairCard: FC<{ pair: FlowPair; flow?: PairFlow; draggable: boolean; goldOi?: GoldOi }> = ({ pair, flow, draggable, goldOi }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: pair, disabled: !draggable });
   const [open, setOpen] = useState<boolean>(false);
   const contrast = flow ? flowContrast(flow) : 'none';
@@ -309,6 +312,7 @@ const PairCard: FC<{ pair: FlowPair; flow?: PairFlow; draggable: boolean }> = ({
           <div onClick={() => setOpen((v) => !v)} className="cursor-pointer space-y-2">
             <RetailRow flow={flow} />
             <SpecRow cot={flow.cot} />
+            {goldOi && <GoldOiRow data={goldOi} />}
           </div>
           {open && <Details flow={flow} />}
         </>
@@ -490,7 +494,13 @@ const OrderFlow: FC<{ onOpenTf?: (instrument: string) => void }> = ({ onOpenTf }
           <SortableContext items={visible} strategy={verticalListSortingStrategy}>
             <ul className="space-y-2" style={LIST_RESET} aria-label="ペアの一覧">
               {visible.map((pair) => (
-                <PairCard key={pair} pair={pair} flow={byPair.get(pair)} draggable={draggable} />
+                <PairCard
+                  key={pair}
+                  pair={pair}
+                  flow={byPair.get(pair)}
+                  draggable={draggable}
+                  goldOi={pair === 'XAU/USD' ? data?.goldOi : undefined}
+                />
               ))}
             </ul>
           </SortableContext>

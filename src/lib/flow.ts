@@ -160,6 +160,7 @@ export interface FlowSnapshot {
   flowUpdatedAt?: string; // ISO8601（個人の建玉を Myfxbook から取得した時刻。古い Worker では無い）
   cotReportDate?: string; // CFTC 報告日（火曜時点・ISO8601）。COT を取得できた場合のみ
   cotUpdatedAt?: string; // Worker が CFTC を取得した時刻（ISO8601）
+  goldOi?: GoldOi; // ゴールドの日次の大口推定（CME 金先物の建玉増減×値動き）。取れていなければ無い
 }
 
 // ユーザーが並び替えた表示順を保存する localStorage キー。
@@ -407,4 +408,64 @@ export function expectedCotReportDate(now: Date): string {
 export function cotIsBehind(reportDate: string | undefined, now: Date): boolean {
   if (!reportDate) return true;
   return reportDate.slice(0, 10) < expectedCotReportDate(now);
+}
+
+// ---------------------------------------------------------------------------
+// ゴールド（XAU/USD）の日次の大口推定: CME 金先物（GC）の建玉（取組高）の増減 × 値動き
+// CFTC は週1回（火曜時点を金曜に公表）なので、その間を日次で補う。
+//   建玉↑ × 値上がり = 新規の買い / 建玉↑ × 値下がり = 新規の売り
+//   建玉↓ × 値上がり = 売りの買い戻し / 建玉↓ × 値下がり = 買いの手じまい
+// 建玉の増減が全体の 0.1% 未満、または値動きが無い日は「様子見」。
+// ---------------------------------------------------------------------------
+
+export type OiSignal = 'new_long' | 'new_short' | 'short_cover' | 'long_liq' | 'flat';
+
+export const OI_SIGNAL_LABEL: Record<OiSignal, string> = {
+  new_long: '新規の買い',
+  new_short: '新規の売り',
+  short_cover: '売りの買い戻し',
+  long_liq: '買いの手じまい',
+  flat: '様子見',
+};
+
+// 大口の向きへの寄与（新規の買い・買い戻し＝買い寄り、新規の売り・手じまい＝売り寄り）。新規の方を重く見る。
+const OI_SIGNAL_WEIGHT: Record<OiSignal, number> = { new_long: 2, short_cover: 1, flat: 0, long_liq: -1, new_short: -2 };
+
+export interface GoldOiDay {
+  date: string; // 取引日 "YYYY-MM-DD"
+  oi: number; // 取引終了時の建玉（全限月合計）
+  oiChange: number; // 前日比の建玉の増減
+  priceChange: number; // 前日比の値動き（金先物の終値）
+  signal: OiSignal;
+  final: boolean; // CME の確定値か（false＝速報値）
+}
+
+export interface GoldOi {
+  days: GoldOiDay[]; // 古い順（最大 15 日）
+  updatedAt: string; // Worker が取得した時刻（ISO8601）
+}
+
+export function classifyOi(oiChange: number, priceChange: number, oi: number): OiSignal {
+  if (!priceChange || Math.abs(oiChange) < Math.max(1, oi * 0.001)) return 'flat';
+  if (oiChange > 0) return priceChange > 0 ? 'new_long' : 'new_short';
+  return priceChange > 0 ? 'short_cover' : 'long_liq';
+}
+
+/** 直近 n 日の推定から、大口の向き（買い寄り/売り寄り/中立）をまとめる。 */
+export function goldOiLean(days: GoldOiDay[], n = 5): { lean: Lean; score: number; days: number } {
+  const recent = days.slice(-n);
+  const score = recent.reduce((s, d) => s + OI_SIGNAL_WEIGHT[d.signal], 0);
+  // 1日の新規（±2）だけでは決めず、合計が ±2 を超えたら向きありとする
+  const lean: Lean = score > 2 ? 'buy' : score < -2 ? 'sell' : 'neutral';
+  return { lean, score, days: recent.length };
+}
+
+/** 新しい日の推定を履歴に入れる（同じ日は置き換え＝速報→確定の更新）。古い順・最大 max 日。変化があったか返す。 */
+export function mergeGoldOiDay(days: GoldOiDay[], day: GoldOiDay, max = 15): { days: GoldOiDay[]; changed: boolean } {
+  const prev = days.find((d) => d.date === day.date);
+  if (prev && prev.oi === day.oi && prev.oiChange === day.oiChange && prev.priceChange === day.priceChange && prev.final === day.final) {
+    return { days, changed: false };
+  }
+  const next = [...days.filter((d) => d.date !== day.date), day].sort((a, b) => (a.date < b.date ? -1 : 1)).slice(-max);
+  return { days: next, changed: true };
 }
