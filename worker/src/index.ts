@@ -620,84 +620,48 @@ const refreshCotIfStale = async (env: Env): Promise<void> => {
 };
 
 // ---- ゴールドの日次の大口推定（CME 金先物 GC の建玉の増減 × 値動き）----
-// CFTC（週1回）の間を日次で補う。建玉は CME の出来高・建玉ページが使う JSON、値動きは Yahoo の金先物 GC=F の日足。
-// 毎時の cron で、まだ取れていない新しい取引日（または速報値のままの日）があるときだけ取りに行き、変わったときだけ KV に書く。
-// 取れないときは「システムの通知」に [CME] として出す（CME の JSON の形が変わったら、通知の詳細を見て直す）。
+// CFTC（週1回）の間を日次で補う。CME の建玉は Worker から直接取ると CME のボット対策で止められるため、
+// GitHub Actions（.github/workflows/cme-gold-oi.yml）が本物のブラウザで取得して KV（gold_oi_cme）に置く。
+// Worker は毎時それを読み、Yahoo の金先物 GC=F の日足の値動きと合わせて推定し、変わったときだけ gold_oi に書く。
+// Actions からの値が届いていない・古い（4日超）・値動きが取れないときは「システムの通知」に [CME] として出す。
 const KV_GOLD_OI = 'gold_oi';
-const CME_GOLD_PRODUCT = 437; // COMEX Gold (GC)
-const CME_HEADERS: Record<string, string> = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
-  Accept: 'application/json, text/plain, */*',
-  Referer: 'https://www.cmegroup.com/markets/metals/precious/gold.volume.html',
-};
-const toNum = (v: unknown): number | null => {
-  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
-  if (typeof v === 'string' && v.trim()) {
-    const n = Number(v.replace(/,/g, '').replace(/^\+/, ''));
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-};
-const CT_DATE = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' });
+const KV_GOLD_OI_CME = 'gold_oi_cme'; // GitHub Actions が書く { date, oi, change, final, fetchedAt }
+const CME_STALE_MS = 4 * 24 * 60 * 60 * 1000;
 const NY_DATE = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
-// 米中部時間の直近の平日を新しい順に n 日（"YYYY-MM-DD"）
-const recentCmeDates = (now: Date, n: number): string[] => {
-  const out: string[] = [];
-  for (let k = 0; out.length < n && k < n + 7; k++) {
-    const parts = Object.fromEntries(CT_DATE.formatToParts(new Date(now.getTime() - k * 86_400_000)).map((p) => [p.type, p.value]));
-    if (parts.weekday === 'Sat' || parts.weekday === 'Sun') continue;
-    out.push(`${parts.year}-${parts.month}-${parts.day}`);
-  }
-  return out;
-};
-// その取引日の建玉（全限月合計の取引終了時）と前日比。まだ出ていなければ null。
-const fetchCmeGoldOi = async (date: string): Promise<{ oi: number; change: number; final: boolean } | null> => {
-  const ymd = date.replace(/-/g, '');
-  const url = `https://www.cmegroup.com/CmeWS/mvc/Volume/Details/F/${CME_GOLD_PRODUCT}/${ymd}/P?tradeDate=${ymd}&pageSize=50`;
-  const res = await fetch(url, { headers: CME_HEADERS });
-  if (!res.ok) throw new Error(`CME HTTP ${res.status}`);
-  const text = await res.text();
-  let body: { totals?: Record<string, unknown>; isFinal?: unknown };
-  try {
-    body = JSON.parse(text) as typeof body;
-  } catch {
-    throw new Error(`CME の応答が JSON ではありません: ${text.slice(0, 80)}`);
-  }
-  const t = body.totals ?? {};
-  const oi = toNum(t.atClose ?? t.openInterest);
-  const change = toNum(t.change ?? t.oiChange);
-  if (oi == null || change == null || oi <= 0) return null;
-  return { oi, change, final: body.isFinal === true || body.isFinal === 'true' };
-};
+interface CmeGoldOiRaw {
+  date: string; // "YYYY-MM-DD"
+  oi: number;
+  change: number;
+  final: boolean;
+  fetchedAt: string; // ISO8601
+}
 const refreshGoldOi = async (env: Env): Promise<void> => {
   try {
+    const rawCme = await env.STRENGTH_KV.get(KV_GOLD_OI_CME);
+    if (!rawCme) throw new Error('GitHub Actions（cme-gold-oi）からの建玉がまだ届いていません。Actions の実行結果を確認してください');
+    const got = JSON.parse(rawCme) as CmeGoldOiRaw;
+    if (!got.date || !(got.oi > 0) || typeof got.change !== 'number') throw new Error(`Actions からの建玉の形が想定と違います: ${rawCme.slice(0, 80)}`);
+    if (Date.now() - Date.parse(got.fetchedAt) > CME_STALE_MS) {
+      throw new Error(`Actions からの建玉が ${got.fetchedAt.slice(0, 10)} から更新されていません（cme-gold-oi の失敗の可能性）`);
+    }
     const raw = await env.STRENGTH_KV.get(KV_GOLD_OI);
     const cur: GoldOi = raw ? (JSON.parse(raw) as GoldOi) : { days: [], updatedAt: '' };
-    const dates = recentCmeDates(new Date(), 4);
-    const last = cur.days[cur.days.length - 1];
-    if (last && last.date === dates[0] && last.final) return; // 最新の取引日の確定値まで取れている
-    let got: { oi: number; change: number; final: boolean } | null = null;
-    let date = '';
-    for (const d of dates) {
-      got = await fetchCmeGoldOi(d);
-      if (got) {
-        date = d;
-        break;
-      }
+    const prev = cur.days.find((d) => d.date === got.date);
+    if (prev && prev.oi === got.oi && prev.oiChange === got.change && prev.final === got.final) {
+      await resolveIssues(env, ['data_fetch'], (i) => i.detail.startsWith('[CME]'));
+      return; // 取り込み済み
     }
-    if (!got) throw new Error(`直近${dates.length}営業日（${dates[dates.length - 1]}〜${dates[0]}）の建玉が取れませんでした`);
-    if (last && last.date === date && last.final) return; // 新しい日はまだ出ていない
     // 値動き: 金先物の日足で、その取引日の終値の前日比
     const { candles } = await fetchYahooCandles('GC=F', '1d', '1mo');
-    const idx = candles.findIndex((c) => c.t != null && NY_DATE.format(new Date(c.t * 1000)) === date);
-    if (idx < 1) throw new Error(`金先物の値動き（${date}）が取れませんでした`);
+    const idx = candles.findIndex((c) => c.t != null && NY_DATE.format(new Date(c.t * 1000)) === got.date);
+    if (idx < 1) throw new Error(`金先物の値動き（${got.date}）が取れませんでした`);
     const priceChange = Math.round((candles[idx].close - candles[idx - 1].close) * 100) / 100;
-    const day: GoldOiDay = { date, oi: got.oi, oiChange: got.change, priceChange, signal: classifyOi(got.change, priceChange, got.oi), final: got.final };
+    const day: GoldOiDay = { date: got.date, oi: got.oi, oiChange: got.change, priceChange, signal: classifyOi(got.change, priceChange, got.oi), final: got.final };
     const r = mergeGoldOiDay(cur.days, day);
     if (r.changed) await env.STRENGTH_KV.put(KV_GOLD_OI, JSON.stringify({ days: r.days, updatedAt: new Date().toISOString() } satisfies GoldOi));
     await resolveIssues(env, ['data_fetch'], (i) => i.detail.startsWith('[CME]'));
   } catch (e) {
-    console.error('CME 金先物の建玉 取得失敗（前回値を保持）:', e);
+    console.error('CME 金先物の建玉 取り込み失敗（前回値を保持）:', e);
     await reportIssue(env, 'data_fetch', `[CME] 金先物の建玉: ${String(e)}`);
   }
 };
