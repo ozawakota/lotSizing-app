@@ -31,6 +31,7 @@ import {
   SpecStrength,
   applyPairOrder,
   contrarianCandidates,
+  cotIsBehind,
   flowContrast,
   retailSkew,
   sortFlowPairs,
@@ -40,7 +41,8 @@ import FlowInfoModal from './FlowInfoModal';
 import ContrarianCandidates from './components/ContrarianCandidates';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
 
-const REFRESH_MS = 60 * 60 * 1000; // 1時間
+// 開いている間は10分ごとに取り直す（Worker は個人の建玉が10分より古ければ Myfxbook から取り直して返す）
+const REFRESH_MS = 10 * 60 * 1000;
 
 const fetchFlow = async (): Promise<FlowSnapshot> => {
   const url = import.meta.env.VITE_FLOW_URL as string | undefined;
@@ -407,10 +409,17 @@ const OrderFlow: FC<{ onOpenTf?: (instrument: string) => void }> = ({ onOpenTf }
           </button>
         </div>
         <p>
-          <span className="font-semibold text-gray-700">個人</span>＝個人投資家（Myfxbook・毎時）、
+          <span className="font-semibold text-gray-700">個人</span>＝個人投資家（Myfxbook・10分ごと
+          {data?.flowUpdatedAt ? `・${formatAgo(data.flowUpdatedAt, now)}に取得` : ''}）、
           <span className="font-semibold text-gray-700">大口</span>＝投機筋（CFTC・週次
           {data?.cotReportDate ? `・${formatReportDate(data.cotReportDate)}時点` : ''}）。
         </p>
+        {/* 大口は毎週金曜（米東部）に火曜時点を公表。発表済みの週がまだ取れていなければ知らせる */}
+        {data && data.cotReportDate && cotIsBehind(data.cotReportDate, new Date(now)) && (
+          <p className="mt-1 rounded bg-amber-50 px-2 py-1 text-[10px] text-amber-700">
+            大口の最新週の発表をまだ取り込めていません（取り込みを再試行中）。表示は {formatReportDate(data.cotReportDate)} 時点です。
+          </p>
+        )}
         <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5">
           <span className="flex items-center gap-1 whitespace-nowrap">
             <span className="inline-block h-2 w-2 rounded-full bg-green-500" />買い
@@ -452,7 +461,8 @@ const OrderFlow: FC<{ onOpenTf?: (instrument: string) => void }> = ({ onOpenTf }
           className="flex shrink-0 items-center gap-1 rounded-lg border border-gray-200 bg-white px-2 py-1 text-[11px] text-gray-500 disabled:opacity-50"
         >
           <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
-          {loading ? '取得中' : data?.updatedAt ? formatAgo(data.updatedAt, now) : '更新'}
+          {/* 応答を受け取った時刻ではなく、個人の建玉を取得した時刻（古い Worker では応答時刻） */}
+          {loading ? '取得中' : (data?.flowUpdatedAt ?? data?.updatedAt) ? formatAgo((data?.flowUpdatedAt ?? data?.updatedAt)!, now) : '更新'}
         </button>
       </div>
 
