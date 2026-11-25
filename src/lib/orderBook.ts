@@ -214,3 +214,34 @@ export function planNotes(
   }
   return notes;
 }
+
+// ---------------------------------------------------------------------------
+// 一目で判断するための要約（TF分析の板のUI）
+// ---------------------------------------------------------------------------
+
+/** 現在値のすぐ上・すぐ下の厚い価格帯（壁＝指値、または逆指値の溜まり）。無ければ undefined。 */
+export function nearestWalls(book: BookSide, price: number): { above?: BookCluster; below?: BookCluster } {
+  const cs = bookClusters(book, price, 3);
+  const pick = (kinds: ClusterKind[]) =>
+    cs.filter((c) => kinds.includes(c.kind)).sort((a, b) => Math.abs(a.price - price) - Math.abs(b.price - price))[0];
+  return { above: pick(['sell_limit', 'buy_stop']), below: pick(['buy_limit', 'sell_stop']) };
+}
+
+export type BookLean = 'up' | 'down' | 'even';
+
+/**
+ * 板の傾き: 上に動きやすいか。上の逆指値（上抜けで加速）と下の買い指値（支え）が多いほど上、
+ * 下の逆指値と上の売り指値（重し）が多いほど下。score = (加速↑ − 50) + (支え − 50)、±15 を超えたら向きあり。
+ */
+export function bookLean(p: BookPressure): { lean: BookLean; score: number } {
+  const score = p.accelUpPct - 50 + (p.supportPct - 50);
+  return { lean: score > 15 ? 'up' : score < -15 ? 'down' : 'even', score };
+}
+
+/** 壁の種類ごとの短い言葉（止まりやすい / 抜けると加速）。 */
+export const CLUSTER_EFFECT: Record<ClusterKind, string> = {
+  buy_limit: '止まりやすい',
+  sell_limit: '止まりやすい',
+  buy_stop: '抜けると加速',
+  sell_stop: '割れると加速',
+};
