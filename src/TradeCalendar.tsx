@@ -11,14 +11,24 @@ export default function TradeCalendar({
   selectedDate,
   onSelectDate,
   monthRates,
+  month,
+  onMonthChange,
 }: {
   trades: Trade[];
   selectedDate: string | null;
   onSelectDate: (date: string) => void;
   monthRates?: Record<string, number | null>; // "YYYY-MM" → 月利 %（記録が無い月は null）
+  month?: string; // 表示する月 "YYYY-MM"（指定すると親が月を持つ。月利パネルと同じ月を表示するため）
+  onMonthChange?: (month: string) => void;
 }) {
   const now = new Date();
-  const [cursor, setCursor] = useState({ y: now.getFullYear(), m: now.getMonth() + 1 });
+  const [ownCursor, setOwnCursor] = useState({ y: now.getFullYear(), m: now.getMonth() + 1 });
+  const cursor = month ? { y: Number(month.slice(0, 4)), m: Number(month.slice(5, 7)) } : ownCursor;
+  const setCursor = (f: (c: { y: number; m: number }) => { y: number; m: number }) => {
+    const n = f(cursor);
+    if (onMonthChange) onMonthChange(monthPrefix(n.y, n.m));
+    if (!month) setOwnCursor(n);
+  };
   // 今日（ローカル日付 "YYYY-MM-DD"）。カレンダーのセルと比較してアクティブ表示する。
   const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
