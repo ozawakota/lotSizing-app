@@ -38,11 +38,20 @@ const recentDates = (n) => {
   return out;
 };
 
-const browser = await chromium.launch();
+// CME（Akamai）のボット対策はヘッドレスを HTTP/2 の段階で切ることがある（ERR_HTTP2_PROTOCOL_ERROR）。
+// 画面ありの Chromium（Actions では xvfb-run の仮想ディスプレイ上）・HTTP/1.1・自動操作の目印を消す、で開く。
+// HEADLESS=1 で従来のヘッドレスに戻せる。ユーザーエージェントは偽らない（OS と食い違うと逆に弾かれやすい）。
+const browser = await chromium.launch({
+  headless: process.env.HEADLESS === '1',
+  args: ['--disable-http2', '--disable-blink-features=AutomationControlled'],
+});
 const context = await browser.newContext({
-  userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
   locale: 'en-US',
+  timezoneId: 'America/Chicago',
   viewport: { width: 1366, height: 900 },
+});
+await context.addInitScript(() => {
+  Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 });
 const page = await context.newPage();
 const captured = new Map(); // "YYYYMMDD" -> 応答
@@ -58,7 +67,18 @@ page.on('response', async (r) => {
 
 let result = null;
 try {
-  const res = await page.goto(PAGE, { waitUntil: 'domcontentloaded', timeout: 90_000 });
+  // 一時的に切られることもあるので、間を空けて最大3回試す
+  let res = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      res = await page.goto(PAGE, { waitUntil: 'domcontentloaded', timeout: 90_000 });
+      break;
+    } catch (e) {
+      console.log(`page.goto 失敗（${attempt}/3）:`, String(e).split('\n')[0]);
+      if (attempt === 3) throw e;
+      await page.waitForTimeout(5_000 * attempt);
+    }
+  }
   console.log('page status:', res?.status(), 'title:', await page.title());
   await page.waitForTimeout(8_000); // ページの JS が建玉の JSON を読み込むのを待つ
   // ページが読み込んだ日 → 足りなければページの中から（同じ cookie で）新しい順に取りに行く
