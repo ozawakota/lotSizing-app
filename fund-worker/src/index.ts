@@ -4,6 +4,7 @@
 // 認証: フロントの Google IDトークンを Authorization: Bearer で受け、Google JWKS で
 //       RS256 署名検証 → ../src/lib/googleAuth の validateGoogleClaims でクレーム検証。
 // DB: Turso(libSQL) を @libsql/client/web 経由で操作。全行を user_id(=sub) で分離。
+//     口座（?account=real）ごとにも分ける: デモ口座 = sub（これまでの記録）、リアル口座 = `${sub}#real`（../src/lib/fundAccount）。
 // 集計: /summary は ../src/lib/fund の computeSummary を共有。
 import { createClient, type Client } from '@libsql/client/web';
 
@@ -11,6 +12,7 @@ import { computeSummary, type Cashflow, type FundSettings, type Trade } from '..
 import { validateGoogleClaims } from '../../src/lib/googleAuth';
 import { verifyGoogleIdToken } from '../../src/lib/googleVerify';
 import { isSessionToken, randomSecret, signSession, verifySession } from '../../src/lib/fundSession';
+import { parseFundAccount, scopedUserId } from '../../src/lib/fundAccount';
 
 interface Env {
   GOOGLE_CLIENT_ID: string;
@@ -219,16 +221,17 @@ export default {
       return json(500, { error: '認証の処理に失敗しました' });
     }
     if (auth instanceof Response) return auth;
-    const { userId } = auth;
 
     const url = new URL(req.url);
     const path = url.pathname;
+    // 記録の読み書きは口座ごとの user_id で行う（セッション券の発行は Google の sub のまま）
+    const userId = scopedUserId(auth.userId, parseFundAccount(url.searchParams.get('account')));
 
     try {
       // Google ログイン直後に6時間のセッション券を出す（券で券を出し直して期限を延ばすことはできない）
       if (req.method === 'POST' && path === '/session') {
         if (auth.via !== 'google') return json(403, { error: 'セッションの発行には Google ログインが必要です' });
-        return json(200, await signSession(await sessionKey(env, db), { sub: userId, email: auth.email }));
+        return json(200, await signSession(await sessionKey(env, db), { sub: auth.userId, email: auth.email }));
       }
 
       if (req.method === 'GET' && path === '/summary') return await handleSummary(db, userId);
