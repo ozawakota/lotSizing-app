@@ -342,14 +342,17 @@ export function dualGrowthPoints(params: GrowthParams, riskPercent: number): Dua
 }
 
 // ── 月利（記録タブ） ─────────────────────────────────────────────
-// 月利 = その月の損益 ÷ 月初の残高。月初の残高 = 初期残高 ＋ その月より前の損益（入出金は含めない）。
-// 入金・出金で月利が変わらないよう、トレードの成績だけで測る。月初の残高が 0 以下なら計算できない（null）。
-// タグで絞り込むときは、損益は絞り込んだ記録、月初の残高は全記録で求める（pnlTrades）。
+// 修正ディーツ法: 月利 = その月の損益 ÷（月初の残高 ＋ その月の入出金 × 入れていた日数の割合）
+//   - 分子はトレードの損益だけ（入金は利益に数えない）
+//   - 月初の残高 = 初期残高 ＋ 先月までの損益 ＋ 先月までの入出金（入金で資金を入れていても元手になる）
+//   - その月の入出金は、入れた日から月末までの日数で日割りして元手に足す（1日なら全額・月末ならほぼ0）
+// 元手が 0 以下なら計算できない（null）。タグで絞り込むときは、損益は絞り込んだ記録、元手は全記録で求める（pnlTrades）。
 
 export interface MonthlyReturn {
   month: string; // "YYYY-MM"
   pnl: number; // その月の損益
-  startBalance: number; // 月初の残高（初期残高＋それまでの損益。入出金は含めない）
+  startBalance: number; // 月初の残高（初期残高＋先月までの損益と入出金）
+  capital: number; // 月利の分母（月初の残高＋その月の入出金の日割り）
   ratePct: number | null; // 月利 %（計算できなければ null）
   tradeCount: number; // その月の記録の件数
 }
@@ -371,9 +374,19 @@ export function monthlyReturns(
   const months = [...trades.map((t) => monthOf(t.date)), ...cashflows.map((c) => monthOf(c.date))].sort();
   if (!months.length) return [];
   const last = until && until > months[months.length - 1] ? until : months[months.length - 1];
-  // 月ごとの残高の増減（全記録の損益。入出金は含めない）と、月利に使う損益（絞り込んだ記録）
+  // 月ごとの残高の増減（全記録の損益＋入出金）、その月の入出金の日割り、月利に使う損益（絞り込んだ記録）
   const delta = new Map<string, number>();
+  const weightedFlow = new Map<string, number>();
   for (const t of trades) delta.set(monthOf(t.date), (delta.get(monthOf(t.date)) ?? 0) + pnlOf(t));
+  for (const c of cashflows) {
+    const ym = monthOf(c.date);
+    const amt = c.type === 'deposit' ? c.amount : -c.amount;
+    delta.set(ym, (delta.get(ym) ?? 0) + amt);
+    const [y, m] = ym.split('-').map(Number);
+    const days = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const day = Math.min(days, Math.max(1, Number(c.date.slice(8, 10)) || 1));
+    weightedFlow.set(ym, (weightedFlow.get(ym) ?? 0) + (amt * (days - day + 1)) / days); // 入れた日から月末までの割合
+  }
   const pnl = new Map<string, { pnl: number; count: number }>();
   for (const t of pnlTrades) {
     const a = pnl.get(monthOf(t.date)) ?? { pnl: 0, count: 0 };
@@ -385,7 +398,15 @@ export function monthlyReturns(
   let balance = settings.startingBalance;
   for (let ym = months[0]; ym <= last; ym = nextMonth(ym)) {
     const p = pnl.get(ym) ?? { pnl: 0, count: 0 };
-    out.push({ month: ym, pnl: p.pnl, startBalance: balance, ratePct: balance > 0 ? (p.pnl / balance) * 100 : null, tradeCount: p.count });
+    const capital = balance + (weightedFlow.get(ym) ?? 0);
+    out.push({
+      month: ym,
+      pnl: p.pnl,
+      startBalance: balance,
+      capital,
+      ratePct: capital > 0 ? (p.pnl / capital) * 100 : null,
+      tradeCount: p.count,
+    });
     balance += delta.get(ym) ?? 0;
   }
   return out;
