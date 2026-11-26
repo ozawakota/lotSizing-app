@@ -32,9 +32,11 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npx playwright install --with-deps chromium
+          sudo apt-get install -y xvfb
       - name: Fetch CME gold open interest
         working-directory: scripts/cme
-        run: node fetch-gold-oi.mjs "$GITHUB_WORKSPACE/gold-oi.json"
+        # 画面ありの Chromium を仮想ディスプレイ（xvfb）で動かす（ヘッドレスは CME のボット対策に切られるため）
+        run: xvfb-run -a node fetch-gold-oi.mjs "$GITHUB_WORKSPACE/gold-oi.json"
       - name: Upload screenshot on failure
         if: failure()
         uses: actions/upload-artifact@v4
