@@ -1,5 +1,5 @@
 // 資金管理・記録タブの「月利」。今月の月利と平均月利（幾何平均）を大きく、直近6か月を棒グラフで並べる。
-// 月利 = その月の損益 ÷ 月初の残高（入出金は除く。monthlyReturns・src/lib/fund.ts）。
+// 月利 = その月の損益 ÷ 元手（修正ディーツ法: 月初の残高＋その月の入出金の日割り。入金は利益に数えない。monthlyReturns・src/lib/fund.ts）。
 import type { FC } from 'react';
 import { averageMonthlyRate, type MonthlyReturn } from '@/lib/fund';
 
@@ -50,7 +50,9 @@ const MonthlyReturnPanel: FC<{ months: MonthlyReturn[]; currentMonth: string }> 
           );
         })}
       </div>
-      <p className="mt-1 text-[9px] text-gray-400">月利＝その月の損益 ÷ 月初の残高（初期残高＋それまでの損益。入出金は除く）。平均は記録がある月の複利平均。</p>
+      <p className="mt-1 text-[9px] text-gray-400">
+        月利＝その月の損益 ÷ 元手（月初の残高＋その月の入出金を入れた日から日割り）。入金は利益に数えません。平均は記録がある月の複利平均。
+      </p>
     </div>
   );
 };

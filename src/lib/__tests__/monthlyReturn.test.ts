@@ -20,15 +20,26 @@ describe('monthlyReturns', () => {
     expect(m[1].ratePct).toBeCloseTo(-5);
   });
 
-  it('入金・出金は月利に影響しない（月初の残高にも含めない）', () => {
+  it('入金は利益に数えず、元手には入れた日から月末までの日数で日割りして足す（修正ディーツ法）', () => {
     const cf: Cashflow[] = [
-      { id: 'c', date: '2026-09-20', type: 'deposit', amount: 100_000 },
-      { id: 'd', date: '2026-10-01', type: 'withdrawal', amount: 50_000 },
+      { id: 'c', date: '2026-09-20', type: 'deposit', amount: 100_000 }, // 9月（30日）の20日 → 11/30 を元手に
+      { id: 'd', date: '2026-10-01', type: 'withdrawal', amount: 50_000 }, // 10月1日 → 全額を元手から引く
     ];
     const m = monthlyReturns(settings, [t('a', '2026-09-03', 2_000), t('b', '2026-10-05', 4_080)], cf);
-    expect(m[0].ratePct).toBeCloseTo(2); // 9月: 2,000 ÷ 100,000
-    expect(m[1].startBalance).toBe(102_000); // 10月の月初は初期残高＋9月の損益だけ
-    expect(m[1].ratePct).toBeCloseTo(4); // 4,080 ÷ 102,000
+    expect(m[0].capital).toBeCloseTo(100_000 + (100_000 * 11) / 30);
+    expect(m[0].ratePct).toBeCloseTo((2_000 / (100_000 + (100_000 * 11) / 30)) * 100); // 約 1.46%（入金は利益にしない）
+    expect(m[1].startBalance).toBe(202_000); // 10月の月初は 初期残高＋9月の損益＋9月の入金
+    expect(m[1].capital).toBe(152_000);
+    expect(m[1].ratePct).toBeCloseTo((4_080 / 152_000) * 100);
+  });
+
+  it('初期残高 0 で資金を入金で入れていても月利が出る（「—」や極端な値にならない）', () => {
+    const cf: Cashflow[] = [{ id: 'c', date: '2026-11-01', type: 'deposit', amount: 1_000_000 }];
+    const m = monthlyReturns({ startingBalance: 0, currency: 'JPY' }, [t('a', '2026-11-10', 20_000), t('b', '2026-12-03', -10_200)], cf);
+    expect(m[0]).toMatchObject({ startBalance: 0, capital: 1_000_000 });
+    expect(m[0].ratePct).toBeCloseTo(2); // 20,000 ÷ 1,000,000
+    expect(m[1].startBalance).toBe(1_020_000);
+    expect(m[1].ratePct).toBeCloseTo(-1); // −10,200 ÷ 1,020,000
   });
 
   it('記録の無い月も until まで 0 で並べ、タグで絞った損益で月利を出す', () => {
