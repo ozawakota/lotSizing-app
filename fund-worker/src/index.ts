@@ -10,12 +10,14 @@ import { createClient, type Client } from '@libsql/client/web';
 import { computeSummary, type Cashflow, type FundSettings, type Trade } from '../../src/lib/fund';
 import { validateGoogleClaims } from '../../src/lib/googleAuth';
 import { verifyGoogleIdToken } from '../../src/lib/googleVerify';
+import { isSessionToken, randomSecret, signSession, verifySession } from '../../src/lib/fundSession';
 
 interface Env {
   GOOGLE_CLIENT_ID: string;
   ALLOWED_EMAILS: string;
   TURSO_DATABASE_URL: string;
   TURSO_AUTH_TOKEN: string;
+  SESSION_SECRET?: string; // セッション券の署名鍵（任意）。無ければ Turso に自動で作った鍵を使う
 }
 
 const CORS: Record<string, string> = {
@@ -34,13 +36,47 @@ const json = (status: number, body: unknown): Response =>
 interface AuthOk {
   userId: string;
   email: string;
+  via: 'google' | 'session'; // どちらで認証したか（セッション券の発行は Google ログイン直後だけ）
 }
 
-// Bearer トークンを検証し userId を返す。失敗時は Response（呼び出し側がそのまま返す）。
-const authenticate = async (req: Request, env: Env): Promise<AuthOk | Response> => {
+// ---------------------------------------------------------------------------
+// ログインセッション（6時間）。Google の IDトークンは1時間で切れるので、Google ログインを確かめたら
+// /session で自前の券（../../src/lib/fundSession）を出し、以降はそれで認証する。
+// 署名鍵は SESSION_SECRET があればそれ、無ければ初回に Turso の app_secrets に乱数の鍵を作って使う。
+// ---------------------------------------------------------------------------
+let sessionKeyCache: string | null = null;
+const sessionKey = async (env: Env, db: Client): Promise<string> => {
+  if (env.SESSION_SECRET) return env.SESSION_SECRET;
+  if (sessionKeyCache) return sessionKeyCache;
+  await db.execute('CREATE TABLE IF NOT EXISTS app_secrets (name TEXT PRIMARY KEY, value TEXT NOT NULL)');
+  // 同時に初回が来ても鍵が1つに決まるよう、INSERT OR IGNORE してから読む
+  await db.execute({ sql: 'INSERT OR IGNORE INTO app_secrets (name, value) VALUES (?, ?)', args: ['session_key', randomSecret()] });
+  const res = await db.execute({ sql: 'SELECT value FROM app_secrets WHERE name = ?', args: ['session_key'] });
+  const v = (res.rows[0] as Row | undefined)?.value;
+  if (typeof v !== 'string' || !v) throw new Error('セッションの鍵を用意できませんでした');
+  sessionKeyCache = v;
+  return v;
+};
+
+const isAllowedEmail = (env: Env, email: string): boolean =>
+  (env.ALLOWED_EMAILS ?? '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean)
+    .includes(email.toLowerCase());
+
+// Bearer トークン（Google の IDトークン、または6時間のセッション券）を検証し userId を返す。失敗時は Response。
+const authenticate = async (req: Request, env: Env, db: Client): Promise<AuthOk | Response> => {
   const header = req.headers.get('Authorization') ?? '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
   if (!token) return json(401, { error: '未認証' });
+
+  if (isSessionToken(token)) {
+    const s = await verifySession(await sessionKey(env, db), token);
+    if (!s) return json(401, { error: 'ログインの有効期限が切れました。もう一度ログインしてください' });
+    if (!isAllowedEmail(env, s.email)) return json(403, { error: '許可されていないアカウントです' });
+    return { userId: s.sub, email: s.email, via: 'session' };
+  }
 
   const claims = await verifyGoogleIdToken(token);
   if (!claims) return json(401, { error: 'トークン検証に失敗しました' });
@@ -50,7 +86,7 @@ const authenticate = async (req: Request, env: Env): Promise<AuthOk | Response> 
     allowedEmails: (env.ALLOWED_EMAILS ?? '').split(','),
   });
   if (!result.ok) return json(403, { error: result.reason });
-  return { userId: result.userId, email: result.email };
+  return { userId: result.userId, email: result.email, via: 'google' };
 };
 
 // ---------------------------------------------------------------------------
@@ -174,15 +210,27 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
 
-    const auth = await authenticate(req, env);
+    const db = dbClient(env);
+    let auth: AuthOk | Response;
+    try {
+      auth = await authenticate(req, env, db);
+    } catch (e) {
+      console.error('fund-worker 認証エラー:', e);
+      return json(500, { error: '認証の処理に失敗しました' });
+    }
     if (auth instanceof Response) return auth;
     const { userId } = auth;
 
     const url = new URL(req.url);
     const path = url.pathname;
-    const db = dbClient(env);
 
     try {
+      // Google ログイン直後に6時間のセッション券を出す（券で券を出し直して期限を延ばすことはできない）
+      if (req.method === 'POST' && path === '/session') {
+        if (auth.via !== 'google') return json(403, { error: 'セッションの発行には Google ログインが必要です' });
+        return json(200, await signSession(await sessionKey(env, db), { sub: userId, email: auth.email }));
+      }
+
       if (req.method === 'GET' && path === '/summary') return await handleSummary(db, userId);
       if (req.method === 'GET' && path === '/settings') return json(200, await loadSettings(db, userId));
       if (req.method === 'PUT' && path === '/settings') return await handlePutSettings(db, userId, await req.json());
