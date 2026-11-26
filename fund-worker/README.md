@@ -55,5 +55,11 @@ VITE_GOOGLE_CLIENT_ID=<クライアントID>.apps.googleusercontent.com
 ```
 両方セットすると「資金管理」ページで Google ログインが有効になる。
 
+### ログインセッション（6時間）
+Google の IDトークンは1時間で切れるため、ログイン直後に `POST /session` で fund-worker 独自のセッション券（6時間）に引き換え、以降はそれで認証する（`src/lib/fundSession.ts`）。
+- 券は HMAC-SHA256 で署名。鍵は `SESSION_SECRET` があればそれを使い、無ければ初回に Turso の `app_secrets` テーブルへ乱数の鍵を自動で作る（追加の設定は不要）。
+- 鍵を自分で決めたい場合は、`worker` 側と同様に wrangler のシークレットとして `SESSION_SECRET` を登録する（値はリポジトリに書かない）。
+- 券は Google ログインのときだけ発行する（券で券を出し直して期限を延ばすことはできない）。許可メール（`ALLOWED_EMAILS`）は券の検証時にも確認する。
+
 > 備考: `@libsql/client/web` は fetch ベースで Workers で動作する想定。初回デプロイで
 > 動作を確認すること（不可なら Turso の HTTP API 直叩きに切替）。

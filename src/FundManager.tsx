@@ -54,6 +54,18 @@ const tokenValid = (idToken: string): boolean => {
   const exp = decodePayload(idToken).exp;
   return typeof exp === 'number' && exp * 1000 > Date.now();
 };
+// Google の IDトークンを fund-worker の6時間のセッション券（src/lib/fundSession.ts）に引き換える。失敗したら IDトークンを返す。
+// 券は IDトークンと同じく2番目の部分に {email, exp} が入るので、decodeEmail / tokenValid はそのまま使える。
+const exchangeForSession = async (credential: string): Promise<string> => {
+  try {
+    const res = await fetch(`${FUND_URL}/session`, { method: 'POST', headers: { Authorization: `Bearer ${credential}` } });
+    if (!res.ok) return credential;
+    const body = (await res.json()) as { token?: unknown };
+    return typeof body.token === 'string' && tokenValid(body.token) ? body.token : credential;
+  } catch {
+    return credential;
+  }
+};
 const storedToken = (): string => {
   const t = localStorage.getItem(STORAGE_KEY);
   return t && tokenValid(t) ? t : '';
@@ -500,9 +512,13 @@ export default function FundManager() {
         client_id: CLIENT_ID as string,
         auto_select: true, // 前回同意済みなら再読み込み時にクリック不要で自動サインイン
         callback: (r) => {
-          localStorage.setItem(STORAGE_KEY, r.credential);
-          setIdToken(r.credential);
-          setEmail(decodeEmail(r.credential));
+          // Google の IDトークン（1時間）を、fund-worker の6時間のセッション券に引き換える。
+          // 古い Worker などで引き換えられなければ、これまでどおり IDトークンのまま使う。
+          void exchangeForSession(r.credential).then((token) => {
+            localStorage.setItem(STORAGE_KEY, token);
+            setIdToken(token);
+            setEmail(decodeEmail(token));
+          });
         },
       });
       window.google.accounts.id.renderButton(btnRef.current, { theme: 'outline', size: 'large' });
