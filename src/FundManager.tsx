@@ -587,6 +587,8 @@ export default function FundManager() {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   }, []);
+  // 月利パネルと月間カレンダーで表示する月（‹ › や棒のタップで変える。どちらで変えても同じ月になる）
+  const [viewMonth, setViewMonth] = useState(currentMonth);
   const monthly = useMemo(
     () => monthlyReturns(settings, trades, cashflows, viewTrades, currentMonth),
     [settings, trades, cashflows, viewTrades, currentMonth],
@@ -789,8 +791,8 @@ export default function FundManager() {
               </div>
             </div>
 
-            {/* 月利（今月・平均・直近6か月） */}
-            <MonthlyReturnPanel months={monthly} currentMonth={currentMonth} />
+            {/* 月利（選んだ月・平均・その月までの6か月） */}
+            <MonthlyReturnPanel months={monthly} currentMonth={currentMonth} selectedMonth={viewMonth} onSelectMonth={setViewMonth} />
 
             {/* タグで絞り込み */}
             {tagAggs.length > 0 && (
@@ -817,7 +819,14 @@ export default function FundManager() {
             <div className="mb-1 flex items-baseline justify-between px-1 text-xs font-bold text-gray-700">
               月間カレンダー<span className="text-[10px] font-normal text-gray-400">日付をタップして記録</span>
             </div>
-            <TradeCalendar trades={viewTrades} selectedDate={selectedDate} onSelectDate={setSelectedDate} monthRates={monthRates} />
+            <TradeCalendar
+              trades={viewTrades}
+              selectedDate={selectedDate}
+              onSelectDate={setSelectedDate}
+              monthRates={monthRates}
+              month={viewMonth}
+              onMonthChange={setViewMonth}
+            />
           </section>
 
           {/* 日付タップで開くモーダル: その日の記録を閲覧＋入力 */}
