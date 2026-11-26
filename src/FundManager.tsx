@@ -1,4 +1,5 @@
 // 資金管理（MAXBET 型・収支記録）ページ。Google サインイン → fund-worker(Turso) と連携。
+// 口座はデモ／リアルの2つ（一番上で切り替え。記録・初期残高・入出金は口座ごとに別々。src/lib/fundAccount.ts）。
 // 1件 = 日付 + 投資 + 回収 + タグ。損益=回収−投資、回収率=回収÷投資。
 // 記録タブ: 残高と成績（エクイティ曲線・累計損益・勝率・PF・タグ絞り込み）→ 月間カレンダー → 口座の設定・入出金（折りたたみ）。
 // ボタンの余白は内側の span に付ける（ボタン要素の余白は外部の CSS に打ち消されることがある）。
@@ -21,6 +22,7 @@ import {
 import TradeCalendar from './TradeCalendar';
 import MonthlyReturnPanel from './components/MonthlyReturnPanel';
 import { LIST_ITEM_RESET, LIST_RESET } from '@/lib/listReset';
+import { FUND_ACCOUNTS, FUND_ACCOUNT_LABELS, parseFundAccount, withAccount, type FundAccount } from '@/lib/fundAccount';
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 const FUND_URL = import.meta.env.VITE_FUND_URL as string | undefined;
@@ -40,6 +42,15 @@ declare global {
 }
 
 const STORAGE_KEY = 'fund_id_token';
+// 表示中の口座（デモ／リアル）。再読み込みしても同じ口座を開く。
+const ACCOUNT_KEY = 'fund_account';
+const loadAccount = (): FundAccount => {
+  try {
+    return parseFundAccount(localStorage.getItem(ACCOUNT_KEY));
+  } catch {
+    return 'demo';
+  }
+};
 
 const decodePayload = (idToken: string): { email?: string; exp?: number } => {
   try {
@@ -452,6 +463,8 @@ export default function FundManager() {
   const [tradeResult, setTradeResult] = useState<'win' | 'loss'>('win'); // 追加フォームの勝ち/負け
   const [error, setError] = useState('');
   const [tab, setTab] = useState<'record' | 'sim'>('record'); // 記録 / シミュレーション
+  const [account, setAccount] = useState<FundAccount>(loadAccount); // デモ口座 / リアル口座（記録は別々）
+  const loadSeq = useRef(0); // 口座を切り替えた直後に、前の口座の読み込み結果で上書きしないための番号
   const [simInputs, setSimInputs] = useState<SimInputs>(loadSimInputs); // ページ移動・再読み込みでも保持（localStorage）
   const [selectedRisk, setSelectedRisk] = useState<number>(loadSimRisk); // 詳細表示するリスク%（localStorage 保持）
   const [toast, setToast] = useState(''); // 保存完了などの一時トースト
@@ -463,6 +476,22 @@ export default function FundManager() {
     const id = setTimeout(() => setToast(''), 2000);
     return () => clearTimeout(id);
   }, [toast]);
+
+  // 口座を切り替えたら、前の口座の表示を消してから読み直す（reload は account が変わると作り直される）。
+  const switchAccount = (a: FundAccount) => {
+    if (a === account) return;
+    try {
+      localStorage.setItem(ACCOUNT_KEY, a);
+    } catch {
+      // 保存できなくても切り替えはする
+    }
+    setAccount(a);
+    setSettings({ startingBalance: 0, currency: 'JPY' });
+    setTrades([]);
+    setCashflows([]);
+    setSelectedTag(null);
+    setSelectedDate(null);
+  };
 
   // シミュレーション入力・選択リスク%を localStorage に保存（ページ移動後も復元）。
   useEffect(() => {
@@ -476,7 +505,7 @@ export default function FundManager() {
 
   const api = useCallback(
     async (path: string, init?: RequestInit) => {
-      const res = await fetch(`${FUND_URL}${path}`, {
+      const res = await fetch(`${FUND_URL}${withAccount(path, account)}`, {
         ...init,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}`, ...(init?.headers ?? {}) },
       });
@@ -489,17 +518,20 @@ export default function FundManager() {
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
       return res.json();
     },
-    [idToken],
+    [idToken, account],
   );
 
   const reload = useCallback(async () => {
     setError('');
+    const seq = ++loadSeq.current;
     try {
       const [s, t, c] = await Promise.all([api('/settings'), api('/trades'), api('/cashflows')]);
+      if (seq !== loadSeq.current) return; // 読み込み中に口座が切り替わった
       setSettings(s);
       setTrades(t);
       setCashflows(c);
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       setError(e instanceof Error ? e.message : '取得に失敗しました');
     }
   }, [api]);
@@ -651,6 +683,32 @@ export default function FundManager() {
         </div>
       ) : (
         <div key="app" className="mx-auto my-2 max-w-md space-y-3 px-3">
+          {/* 口座の切り替え（デモ／リアル）。記録・初期残高・入出金は口座ごとに別々 */}
+          <div className="flex items-center gap-2">
+            <div role="tablist" aria-label="口座の切り替え" className="flex flex-1 gap-1">
+              {FUND_ACCOUNTS.map((a) => {
+                const on = account === a;
+                const onCls = a === 'real' ? 'border-rose-500 bg-rose-50 text-rose-700' : 'border-sky-500 bg-sky-50 text-sky-700';
+                return (
+                  <button
+                    key={a}
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    onClick={() => switchAccount(a)}
+                    className={`flex-1 rounded-lg border-2 text-sm font-bold ${on ? onCls : 'border-gray-200 bg-white text-gray-400'}`}
+                  >
+                    <span className="block py-1.5">{FUND_ACCOUNT_LABELS[a]}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {account === 'real' && (
+            <p className="-mt-1 rounded-md bg-rose-600 px-2 py-1 text-center text-[11px] font-semibold text-white">
+              リアル口座の記録を表示中（デモ口座とは別の記録です）
+            </p>
+          )}
           {/* タブ（記録 / シミュレーション）とログイン中のアカウント */}
           <div className="flex items-center gap-2">
             <div role="tablist" aria-label="表示の切り替え" className="flex flex-1 rounded-lg bg-gray-100 p-0.5">
@@ -833,7 +891,7 @@ export default function FundManager() {
             </summary>
             <div className="space-y-3 border-t border-gray-100 p-3">
               {/* 設定: 非制御入力(defaultValue)はマウント時のみ値を読むため、settings が非同期ロードされたら key でフォームを再マウントして反映する。 */}
-              <form key={`${settings.startingBalance}-${settings.currency}`} onSubmit={saveSettings}>
+              <form key={`${account}-${settings.startingBalance}-${settings.currency}`} onSubmit={saveSettings}>
                 <p className="mb-1 text-xs font-semibold text-gray-600">初期設定</p>
                 <div className="grid grid-cols-[1fr_5rem_4rem] items-end gap-2">
                   <label className="text-[11px] text-gray-500">
